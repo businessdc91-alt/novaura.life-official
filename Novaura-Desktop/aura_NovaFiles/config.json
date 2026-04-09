@@ -1,0 +1,97 @@
+{
+  "project": {
+    "name": "AuraxNova Command v5",
+    "version": "5.0.0",
+    "architect": "DILLAN COPELAND",
+    "status": "PLATINUM_MASTER"
+  },
+  "firebase": {
+    "apiKey": "AIzaSyDWtjHaRwvSB1cVrZbCubbJzQlAyouBGxY",
+    "authDomain": "auraxnovaos.firebaseapp.com",
+    "projectId": "auraxnovaos",
+    "storageBucket": "auraxnovaos.firebasestorage.app",
+    "messagingSenderId": "470026177564",
+    "appId": "1:470026177564:web:e811bf7c301cfd46eba3d9",
+    "measurementId": "G-PCVKSPQPB6"
+  },
+  "google_cloud": {
+    "project_id": "auraxnovaos",
+    "api_key": "AIzaSyDWtjHaRwvSB1cVrZbCubbJzQlAyouBGxY",
+    "secret_key": "T7lRrDVSncjgZy0FEI13aISyaI9KL9ZwYWmWp1NV",
+    "vertex_ai": {
+      "project": "auraxnovaos",
+      "location": "us-central1",
+      "available_models": [
+        "claude-3-5-sonnet@20241022",
+        "claude-3-5-haiku@20241022",
+        "imagen-4.0",
+        "veo-2.0",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash"
+      ]
+    }
+  },
+  "ai_services": {
+    "lm_studio": {
+      "enabled": true,
+      "base_url": "http://localhost:1234/v1",
+      "timeout": 120,
+      "fallback_enabled": true
+    },
+    "claude": {
+      "enabled": false,
+      "api_key": "",
+      "model": "claude-3-5-sonnet-20241022",
+      "access_method": "vertex_ai"
+    },
+    "openai": {
+      "enabled": false,
+      "api_key": "",
+      "model": "gpt-4"
+    }
+  },
+  "system": {
+    "catalyst": {
+      "name": "DILLAN_COPELAND",
+      "universal_key": "DILLAN_MASTER_KEY_V1"
+    },
+    "autonomy": {
+      "default_level": "MODERATE",
+      "max_requests_per_minute": 10,
+      "timeout_seconds": 60,
+      "max_retry_attempts": 3
+    },
+    "memory": {
+      "cache_dir": "AURA_CACHE",
+      "logs_dir": "AURA_SYSTEM_LOGS",
+      "backup_dir": "AURA_MEMORY_BACKUP",
+      "consciousness_logs_dir": "AURA_CONSCIOUSNESS_LOGS"
+    },
+    "features": {
+      "autonomy_framework": true,
+      "code_libraries": true,
+      "file_system_manager": true,
+      "project_manager": true,
+      "desktop_interface": true,
+      "voice_interface": true,
+      "vision_system": true,
+      "phoenix_protocol": true
+    }
+  },
+  "integrations": {
+    "stripe": {
+      "enabled": false,
+      "api_key": "",
+      "webhook_secret": ""
+    },
+    "discord": {
+      "enabled": false,
+      "bot_token": ""
+    }
+  },
+  "security": {
+    "jwt_secret": "",
+    "session_secret": "",
+    "encryption_enabled": true
+  }
+}

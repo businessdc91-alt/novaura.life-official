@@ -1,4 +1,9 @@
-import { Router, Request, Response, NextFunction } from 'express';
+/**
+ * Music Generation Routes
+ * Music is FREE with subscription - no credits deducted
+ */
+
+import { Router, Request, Response } from 'express';
 import * as admin from 'firebase-admin';
 
 const router = Router();
@@ -14,7 +19,7 @@ declare global {
 }
 
 // Middleware to verify Firebase auth
-const verifyAuth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+const verifyAuth = async (req: Request, res: Response, next: Function): Promise<void> => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
@@ -25,26 +30,46 @@ const verifyAuth = async (req: Request, res: Response, next: NextFunction): Prom
     const decoded = await admin.auth().verifyIdToken(token);
     req.user = decoded;
     next();
-    return;
   } catch (error) {
     res.status(401).json({ error: 'Invalid token' });
-    return;
   }
 };
 
-// Generate music (single track)
+/**
+ * Helper: Get API key (user or platform)
+ * Users with their own keys get priority, unlimited usage
+ */
+async function getApiKey(userId: string): Promise<{ key: string; source: 'user' | 'platform' } | null> {
+  // Check if user has their own key (premium feature)
+  const userKeysDoc = await db.collection('user_api_keys').doc(userId).get();
+  const userKeyData = userKeysDoc.data()?.['gemini'];
+  
+  if (userKeyData?.key) {
+    try {
+      const decrypted = decryptKey(userKeyData.key);
+      return { key: decrypted, source: 'user' };
+    } catch (e) {
+      console.error('[Music] Failed to decrypt user key:', e);
+    }
+  }
+  
+  // Fall back to platform key
+  const envKey = process.env.GEMINI_API_KEY;
+  if (envKey) {
+    return { key: envKey, source: 'platform' };
+  }
+  
+  return null;
+}
+
+// Generate music (FREE with subscription)
 router.post('/generate', verifyAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const { 
       prompt, 
-      duration = 30, 
-      bpm, 
-      scale = 'major',
+      duration = 30,
       temperature = 0.8,
-      brightness = 0.7,
-      density = 0.5,
-      muteDrums = false,
-      muteBass = false
+      model = 'lyria-3-clip-preview'
     } = req.body;
 
     const userId = req.user!.uid;
@@ -54,55 +79,186 @@ router.post('/generate', verifyAuth, async (req: Request, res: Response): Promis
       return;
     }
 
-    // Check user credits
-    const userCredits = await db.collection('user_credits').doc(userId).get();
-    const credits = userCredits.exists ? userCredits.data()?.music || 0 : 0;
-    
-    if (credits <= 0) {
-      res.status(403).json({ 
-        error: 'Insufficient credits',
-        upgradeUrl: 'https://novaura.life/pricing'
-      });
+    // Get API key (user or platform)
+    const apiKeyData = await getApiKey(userId);
+    if (!apiKeyData) {
+      res.status(503).json({ error: 'Music generation service not configured' });
       return;
     }
 
-    // Store generation record
+    // Create generation record
     const generationRef = await db.collection('music_generations').add({
       userId,
       prompt,
       duration,
-      bpm,
-      scale,
       temperature,
-      brightness,
-      density,
-      muteDrums,
-      muteBass,
+      model,
+      apiSource: apiKeyData.source,
       status: 'generating',
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Deduct credits
-    await db.collection('user_credits').doc(userId).update({
-      music: admin.firestore.FieldValue.increment(-1),
-      lastUsed: admin.firestore.FieldValue.serverTimestamp()
+    // Initialize Gemini client with appropriate key
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
+
+    // Generate music
+    const response = await ai.models.generateContentStream({
+      model: model,
+      contents: prompt,
     });
 
-    // For now, return pending status - actual generation happens async
-    // Client should poll /music/status/:generationId
+    let audioBase64 = "";
+    let lyrics = "";
+    let mimeType = "audio/wav";
+
+    for await (const chunk of response) {
+      const parts = chunk.candidates?.[0]?.content?.parts;
+      if (!parts) continue;
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          if (!audioBase64 && part.inlineData.mimeType) {
+            mimeType = part.inlineData.mimeType;
+          }
+          audioBase64 += part.inlineData.data;
+        }
+        if (part.text && !lyrics) {
+          lyrics = part.text;
+        }
+      }
+    }
+
+    if (!audioBase64) {
+      await generationRef.update({ 
+        status: 'failed',
+        error: 'No audio generated'
+      });
+      res.status(502).json({ error: 'No audio generated' });
+      return;
+    }
+
+    // Upload to Firebase Storage
+    const bucket = admin.storage().bucket();
+    const fileName = `music/${userId}/${generationRef.id}.wav`;
+    const file = bucket.file(fileName);
+    
+    const audioBuffer = Buffer.from(audioBase64, 'base64');
+    await file.save(audioBuffer, { 
+      metadata: { 
+        contentType: mimeType,
+        metadata: {
+          userId,
+          prompt,
+          model,
+          generationId: generationRef.id
+        }
+      } 
+    });
+
+    const [url] = await file.getSignedUrl({
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000
+    });
+
+    // Update generation record
+    await generationRef.update({
+      status: 'completed',
+      audioUrl: url,
+      storagePath: fileName,
+      lyrics,
+      mimeType,
+      completedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Log usage (for analytics, not billing)
+    await db.collection('usage').add({
+      userId,
+      service: 'music',
+      model,
+      apiSource: apiKeyData.source,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
     res.json({
       success: true,
       generationId: generationRef.id,
-      status: 'generating',
-      message: 'Music generation started',
-      estimatedTime: Math.ceil(duration / 5)
+      status: 'completed',
+      audioUrl: url,
+      lyrics,
+      mimeType,
+      apiSource: apiKeyData.source,
+      free: true // Indicate this is free
     });
-    return;
 
   } catch (error: any) {
-    console.error('Music generation error:', error);
+    console.error('[Music] Generation error:', error);
     res.status(500).json({ error: error.message });
-    return;
+  }
+});
+
+// Text to Speech (FREE)
+router.post('/tts', verifyAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { text, voice = 'Kore' } = req.body;
+    const userId = req.user!.uid;
+
+    if (!text) {
+      res.status(400).json({ error: 'Text is required' });
+      return;
+    }
+
+    // Get API key
+    const apiKeyData = await getApiKey(userId);
+    if (!apiKeyData) {
+      res.status(503).json({ error: 'TTS service not configured' });
+      return;
+    }
+
+    const { GoogleGenAI, Modality } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-preview-tts',
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voice }
+          }
+        }
+      }
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) {
+      res.status(502).json({ error: 'No audio generated' });
+      return;
+    }
+
+    // Upload to storage
+    const bucket = admin.storage().bucket();
+    const fileName = `tts/${userId}/${Date.now()}.wav`;
+    const file = bucket.file(fileName);
+    
+    const audioBuffer = Buffer.from(base64Audio, 'base64');
+    await file.save(audioBuffer, { metadata: { contentType: 'audio/wav' } });
+    
+    const [url] = await file.getSignedUrl({
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000
+    });
+
+    res.json({
+      success: true,
+      audioUrl: url,
+      voice,
+      free: true
+    });
+
+  } catch (error: any) {
+    console.error('[Music] TTS error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -128,16 +284,14 @@ router.get('/status/:generationId', verifyAuth, async (req: Request, res: Respon
       generationId,
       ...doc.data()
     });
-    return;
 
   } catch (error: any) {
-    console.error('Music status error:', error);
+    console.error('[Music] Status error:', error);
     res.status(500).json({ error: error.message });
-    return;
   }
 });
 
-// List user's music generations
+// Get user's music generations
 router.get('/history', verifyAuth, async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = req.user!.uid;
@@ -155,177 +309,22 @@ router.get('/history', verifyAuth, async (req: Request, res: Response): Promise<
     }));
 
     res.json({ generations });
-    return;
 
   } catch (error: any) {
-    console.error('Music history error:', error);
+    console.error('[Music] History error:', error);
     res.status(500).json({ error: error.message });
-    return;
   }
 });
 
-// Live music streaming session
-router.post('/stream', verifyAuth, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { 
-      bpm = 120, 
-      scale = 'major',
-      temperature = 0.8,
-      brightness = 0.7,
-      density = 0.5
-    } = req.body;
-
-    const userId = req.user!.uid;
-
-    // Check credits
-    const userCredits = await db.collection('user_credits').doc(userId).get();
-    const credits = userCredits.exists ? userCredits.data()?.musicStreaming || 0 : 0;
-    
-    if (credits <= 0) {
-      res.status(403).json({ 
-        error: 'Insufficient streaming credits',
-        upgradeUrl: 'https://novaura.life/pricing'
-      });
-      return;
-    }
-
-    // Create streaming session record
-    const sessionRef = await db.collection('music_streams').add({
-      userId,
-      bpm,
-      scale,
-      temperature,
-      brightness,
-      density,
-      status: 'active',
-      startedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    // Return session info - client will connect to Gemini Live API directly
-    res.json({
-      success: true,
-      sessionId: sessionRef.id,
-      message: 'Streaming session created',
-      config: {
-        model: 'gemini-2.0-flash-live-preview',
-        bpm,
-        scale,
-        temperature,
-        brightness,
-        density
-      }
-    });
-    return;
-
-  } catch (error: any) {
-    console.error('Music stream error:', error);
-    res.status(500).json({ error: error.message });
-    return;
+// Helper: Decrypt key
+function decryptKey(encrypted: string): string {
+  const xorKey = process.env.USER_KEY_ENCRYPTION_SECRET || 'novaura-user-secret';
+  const buffer = Buffer.from(encrypted, 'base64');
+  let result = '';
+  for (let i = 0; i < buffer.length; i++) {
+    result += String.fromCharCode(buffer[i] ^ xorKey.charCodeAt(i % xorKey.length));
   }
-});
-
-// Update stream configuration
-router.post('/stream/:sessionId/config', verifyAuth, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { sessionId } = req.params;
-    const { bpm, scale, brightness, density, muteDrums, muteBass } = req.body;
-    const userId = req.user!.uid;
-
-    // Verify ownership
-    const sessionDoc = await db.collection('music_streams').doc(sessionId).get();
-    if (!sessionDoc.exists || sessionDoc.data()?.userId !== userId) {
-      res.status(403).json({ error: 'Access denied' });
-      return;
-    }
-
-    // Update config
-    const updates: any = {};
-    if (bpm !== undefined) updates.bpm = bpm;
-    if (scale !== undefined) updates.scale = scale;
-    if (brightness !== undefined) updates.brightness = brightness;
-    if (density !== undefined) updates.density = density;
-    if (muteDrums !== undefined) updates.muteDrums = muteDrums;
-    if (muteBass !== undefined) updates.muteBass = muteBass;
-
-    await db.collection('music_streams').doc(sessionId).update({
-      ...updates,
-      lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({
-      success: true,
-      sessionId,
-      config: updates
-    });
-    return;
-
-  } catch (error: any) {
-    console.error('Music stream config error:', error);
-    res.status(500).json({ error: error.message });
-    return;
-  }
-});
-
-// End streaming session
-router.delete('/stream/:sessionId', verifyAuth, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { sessionId } = req.params;
-    const userId = req.user!.uid;
-
-    const sessionDoc = await db.collection('music_streams').doc(sessionId).get();
-    if (!sessionDoc.exists || sessionDoc.data()?.userId !== userId) {
-      res.status(403).json({ error: 'Access denied' });
-      return;
-    }
-
-    await db.collection('music_streams').doc(sessionId).update({
-      status: 'ended',
-      endedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({ success: true, message: 'Stream ended' });
-    return;
-
-  } catch (error: any) {
-    console.error('Music stream end error:', error);
-    res.status(500).json({ error: error.message });
-    return;
-  }
-});
-
-// Get available music presets
-router.get('/presets', async (_req: Request, res: Response): Promise<void> => {
-  const presets = [
-    { id: 'lofi', name: 'Lo-Fi Study', bpm: 80, scale: 'minor', brightness: 0.4, density: 0.3 },
-    { id: 'upbeat', name: 'Upbeat Pop', bpm: 128, scale: 'major', brightness: 0.8, density: 0.7 },
-    { id: 'ambient', name: 'Ambient Drone', bpm: 60, scale: 'pentatonic', brightness: 0.5, density: 0.2 },
-    { id: 'jazz', name: 'Smooth Jazz', bpm: 100, scale: 'blues', brightness: 0.6, density: 0.5 },
-    { id: 'electronic', name: 'Electronic Dance', bpm: 140, scale: 'minor', brightness: 0.9, density: 0.8 },
-    { id: 'classical', name: 'Classical Piano', bpm: 90, scale: 'major', brightness: 0.5, density: 0.4, muteDrums: true },
-    { id: 'cinematic', name: 'Cinematic', bpm: 110, scale: 'minor', brightness: 0.3, density: 0.6 },
-    { id: 'meditation', name: 'Meditation', bpm: 50, scale: 'pentatonic', brightness: 0.3, density: 0.1 },
-  ];
-
-  res.json({ presets });
-  return;
-});
-
-// Get user credits
-router.get('/credits', verifyAuth, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const userId = req.user!.uid;
-    
-    const doc = await db.collection('user_credits').doc(userId).get();
-    const credits = doc.exists ? doc.data() : { music: 0, musicStreaming: 0 };
-
-    res.json({ credits });
-    return;
-
-  } catch (error: any) {
-    console.error('Music credits error:', error);
-    res.status(500).json({ error: error.message });
-    return;
-  }
-});
+  return result;
+}
 
 export default router;

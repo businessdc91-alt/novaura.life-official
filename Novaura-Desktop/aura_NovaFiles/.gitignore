@@ -1,0 +1,247 @@
+# AuraxNova Command v5 - Git Ignore File
+
+# ============================================================================
+# SENSITIVE FILES - NEVER COMMIT THESE
+# ============================================================================
+
+# Environment and Configuration
+.env
+.env.local
+.env.production
+.env.development
+secrets.txt
+google secret.txt
+
+# API Keys and Credentials
+**/client_secret*.json
+**/*secret*.txt
+**/*credentials*.json
+**/*api_key*.txt
+
+# ============================================================================
+# PYTHON
+# ============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ============================================================================
+# AURA SYSTEM FILES
+# ============================================================================
+
+# Memory and Cache
+AURA_CACHE/
+AURA_MEMORY_BACKUP/
+AURA_CONSCIOUSNESS_LOGS/
+AURA_SYSTEM_LOGS/
+TEST_MEMORY/
+
+# Binary files
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+model.pt
+
+# Large data files
+*.zip
+*.tar.gz
+*.rar
+
+# Logs
+*.log
+boot.log
+boot_err.log
+test_run.log
+
+# ============================================================================
+# IDE / EDITOR
+# ============================================================================
+
+# VSCode
+.vscode/
+*.code-workspace
+!aura_NovaFiles.code-workspace  # Keep the main workspace file
+
+# PyCharm
+.idea/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ============================================================================
+# OPERATING SYSTEM
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ============================================================================
+# C++ BUILD FILES (AuraKernel_CPP)
+# ============================================================================
+
+# Compiled Object files
+*.o
+*.obj
+*.ko
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Build directories
+build/
+Build/
+bin/
+Bin/
+
+# ============================================================================
+# NODE MODULES (if using any JS tools)
+# ============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================================================
+# TEMPORARY FILES
+# ============================================================================
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# New folder placeholders
+New folder/
+
+# ============================================================================
+# DOCUMENTATION OUTPUTS
+# ============================================================================
+
+# Keep markdown documentation but ignore generated outputs
+*.pdf
+!README.pdf  # If you want to keep specific PDFs
+
+# ============================================================================
+# KEEP THESE FILES (EXCEPTIONS)
+# ============================================================================
+
+# Configuration templates (these are safe to commit)
+!.env.example
+!config.json.example
+
+# Documentation
+!README.md
+!*.md
+
+# Core Python files
+!*_Aura_Nova.py
+!Aura_*.py

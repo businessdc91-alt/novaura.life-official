@@ -14,7 +14,10 @@ import {
   Cpu,
   Cloud,
   Waves,
-  Flame
+  Flame,
+  Smartphone,
+  Monitor as MonitorIcon,
+  RefreshCw
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
@@ -301,13 +304,17 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1">
-        <TabsList className="grid w-full grid-cols-3 mb-6">
+        <TabsList className="grid w-full grid-cols-4 mb-6">
           <TabsTrigger value="themes" className="gap-2">
             <Palette className="w-4 h-4" />
             Themes
           </TabsTrigger>
-          <TabsTrigger value="taskbar" className="gap-2">
+          <TabsTrigger value="interface" className="gap-2">
             <Layout className="w-4 h-4" />
+            Interface
+          </TabsTrigger>
+          <TabsTrigger value="taskbar" className="gap-2">
+            <Grid className="w-4 h-4" />
             Taskbar
           </TabsTrigger>
           <TabsTrigger value="ai" className="gap-2">
@@ -392,6 +399,129 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
             </h3>
             <p className="text-sm text-muted-foreground">
               Your theme changes are previewed in real-time. Click "Save Changes" to persist them.
+            </p>
+          </Card>
+        </TabsContent>
+
+        {/* Interface Tab */}
+        <TabsContent value="interface" className="space-y-6">
+          <div>
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <Layout className="w-5 h-5 text-primary" />
+              Layout Mode
+            </h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Mobile Mode */}
+              <Card
+                className={`p-4 cursor-pointer transition-all duration-300 ${
+                  kernelStorage.getItem('novaura_layout_mode') === 'mobile'
+                    ? 'ring-2 ring-primary shadow-lg shadow-primary/20' 
+                    : 'hover:shadow-md hover:border-primary/50'
+                }`}
+                onClick={() => {
+                  kernelStorage.setItem('novaura_layout_mode', 'mobile');
+                  toast.success('Switched to Mobile Mode', {
+                    description: 'Refresh the page to apply changes.',
+                  });
+                  setHasChanges(true);
+                }}
+              >
+                <div className="h-24 rounded-lg mb-4 bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
+                  <Smartphone className="w-12 h-12 text-primary/60" />
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-muted rounded-lg">
+                    <Smartphone className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold">Mobile Mode</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Full-screen apps with bottom navigation. Best for phones and tablets.
+                    </p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Desktop Mode */}
+              <Card
+                className={`p-4 cursor-pointer transition-all duration-300 ${
+                  kernelStorage.getItem('novaura_layout_mode') === 'desktop'
+                    ? 'ring-2 ring-primary shadow-lg shadow-primary/20' 
+                    : 'hover:shadow-md hover:border-primary/50'
+                }`}
+                onClick={() => {
+                  kernelStorage.setItem('novaura_layout_mode', 'desktop');
+                  toast.success('Switched to Desktop Mode', {
+                    description: 'Refresh the page to apply changes.',
+                  });
+                  setHasChanges(true);
+                }}
+              >
+                <div className="h-24 rounded-lg mb-4 bg-gradient-to-br from-slate-800 to-slate-700 flex items-center justify-center">
+                  <MonitorIcon className="w-12 h-12 text-primary/60" />
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-muted rounded-lg">
+                    <MonitorIcon className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold">Desktop Mode</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Floating windows with sidebars. Best for large screens.
+                    </p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Auto Mode */}
+              <Card
+                className={`p-4 cursor-pointer transition-all duration-300 ${
+                  !kernelStorage.getItem('novaura_layout_mode')
+                    ? 'ring-2 ring-primary shadow-lg shadow-primary/20' 
+                    : 'hover:shadow-md hover:border-primary/50'
+                }`}
+                onClick={() => {
+                  kernelStorage.removeItem('novaura_layout_mode');
+                  toast.success('Switched to Auto Mode', {
+                    description: 'Layout will be detected automatically. Refresh to apply.',
+                  });
+                  setHasChanges(true);
+                }}
+              >
+                <div className="h-24 rounded-lg mb-4 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 flex items-center justify-center">
+                  <RefreshCw className="w-12 h-12 text-primary/60" />
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-muted rounded-lg">
+                    <RefreshCw className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold">Auto Detect</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Automatically switch based on screen size.
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+
+          <Card className="p-4 bg-muted/50">
+            <h3 className="font-semibold mb-2 flex items-center gap-2">
+              <Layout className="w-4 h-4 text-primary" />
+              Current Mode
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              {!kernelStorage.getItem('novaura_layout_mode') 
+                ? 'Auto Detect - Layout is determined by screen size'
+                : kernelStorage.getItem('novaura_layout_mode') === 'mobile'
+                ? 'Mobile Mode - Full-screen apps with bottom navigation'
+                : 'Desktop Mode - Floating windows with sidebars'
+              }
+            </p>
+            <p className="text-xs text-muted-foreground mt-2">
+              Changes will take effect after refreshing the page. You can also toggle modes from the layout button in the top bar.
             </p>
           </Card>
         </TabsContent>

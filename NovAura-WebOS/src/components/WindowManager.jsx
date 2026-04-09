@@ -6,7 +6,7 @@ import KernelErrorBoundary from '../kernel/KernelErrorBoundary.jsx';
 const IDEWindow = lazy(() => import('./windows/IDEWindow'));
 const BrowserWindow = lazy(() => import('./windows/BrowserWindow'));
 const MediaWindow = lazy(() => import('./windows/MediaWindow'));
-const ChatWindow = lazy(() => import('./windows/ChatWindow'));
+// ChatWindow removed — Nova is now persistent floating companion in App.jsx
 const TerminalWindow = lazy(() => import('./windows/TerminalWindow'));
 const AIAssistantWindow = lazy(() => import('./windows/AIAssistantWindow'));
 const VoiceChatWindow = lazy(() => import('./windows/VoiceChatWindow'));
@@ -69,6 +69,14 @@ const VoiceStudioWindow = lazy(() => import('./windows/VoiceStudioWindow'));
 const MusicStudioWindow = lazy(() => import('./windows/MusicStudioWindow'));
 const PracticeToolsWindow = lazy(() => import('./windows/PracticeToolsWindow'));
 const GLBGameWindow = lazy(() => import('./windows/GLBGameWindow'));
+const AdminKeyHubWindow = lazy(() => import('./windows/AdminKeyHubWindow'));
+const UserKeyHubWindow = lazy(() => import('./windows/UserKeyHubWindow'));
+const NovaChatWindow = lazy(() => import('./windows/NovaChatWindow'));
+const SecurityMonitorWindow = lazy(() => import('./windows/SecurityMonitorWindow'));
+const SystemDiagnosticsWindow = lazy(() => import('./windows/SystemDiagnosticsWindow'));
+const CardDeckCreatorWindow = lazy(() => import('./windows/CardDeckCreatorWindow'));
+const DeployWindow = lazy(() => import('./windows/DeployWindow'));
+const MusicToolsWindow = lazy(() => import('./windows/MusicToolsWindow'));
 
 const windowComponents = {
   ide: IDEWindow,
@@ -76,7 +84,7 @@ const windowComponents = {
   browser: BrowserWindow,
   media: MediaWindow,
   'media-library': MediaLibraryWindow,
-  chat: ChatWindow,
+  // 'chat' removed — Nova is the persistent floating companion
   voice: VoiceChatWindow,
   terminal: TerminalWindow,
   'ai-assistant': AIAssistantWindow,
@@ -137,6 +145,14 @@ const windowComponents = {
   'music-studio': MusicStudioWindow,
   'practice-tools': PracticeToolsWindow,
   'glb-game': GLBGameWindow,
+  'admin-key-hub': AdminKeyHubWindow,
+  'user-key-hub': UserKeyHubWindow,
+  'nova-chat': NovaChatWindow,
+  'security-monitor': SecurityMonitorWindow,
+  'system-diagnostics': SystemDiagnosticsWindow,
+  'card-deck-creator': CardDeckCreatorWindow,
+  'deploy': DeployWindow,
+  'music-tools': MusicToolsWindow,
 };
 
 const defaultSizes = {
@@ -145,7 +161,7 @@ const defaultSizes = {
   browser: { width: 780, height: 520 },
   media: { width: 600, height: 420 },
   'media-library': { width: 700, height: 480 },
-  chat: { width: 460, height: 520 },
+  // 'chat' removed — Nova is persistent
   voice: { width: 500, height: 520 },
   terminal: { width: 700, height: 380 },
   'ai-assistant': { width: 420, height: 500 },
@@ -179,7 +195,6 @@ const defaultSizes = {
   'psychometrics': { width: 560, height: 560 },
   'ai-companion': { width: 720, height: 560 },
   'notifications': { width: 500, height: 480 },
-  // 'model-personalities' removed
   'avatar-gallery': { width: 650, height: 520 },
   'outfit-manager': { width: 600, height: 520 },
   'inventory': { width: 860, height: 600 },
@@ -205,6 +220,15 @@ const defaultSizes = {
   'calculator': { width: 360, height: 520 },
   'gilded-cage': { width: 720, height: 580 },
   'glb-game': { width: 900, height: 700 },
+  'nova-chat': { width: 500, height: 600 },
+  'security-monitor': { width: 800, height: 600 },
+  'system-diagnostics': { width: 700, height: 560 },
+  'card-deck-creator': { width: 800, height: 600 },
+  'avatar-creator': { width: 700, height: 560 },
+  'deploy': { width: 700, height: 520 },
+  'music-tools': { width: 600, height: 500 },
+  'admin-key-hub': { width: 700, height: 520 },
+  'user-key-hub': { width: 700, height: 520 },
 };
 
 // Get responsive size based on screen width

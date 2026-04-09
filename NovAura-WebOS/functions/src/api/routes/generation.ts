@@ -1,64 +1,45 @@
 /**
  * Image & Video Generation Routes
- * Multi-provider: PixAI, Vertex AI (Imagen), etc.
- * 
- * SECURITY: All routes require authentication
- * Rate limiting applied per user
+ * Images = FREE with subscription
+ * Video = Costs credits (expensive)
  */
 
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import * as admin from 'firebase-admin';
 
 const router = Router();
+const db = admin.firestore();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// RATE LIMITING (In-memory - use Redis in production)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-interface RateLimitEntry {
-  count: number;
-  resetTime: number;
-}
-
-const rateLimits = new Map<string, RateLimitEntry>();
-
-// Rate limits per tier (generous limits - 10K/hour available)
-const RATE_LIMITS = {
-  free: { requests: 100, window: 3600000 },      // 100/hour
-  basic: { requests: 500, window: 3600000 },     // 500/hour
-  pro: { requests: 2000, window: 3600000 },      // 2000/hour
-  unlimited: { requests: 10000, window: 3600000 } // 10K/hour (full capacity)
+// Credit costs
+const CREDIT_COSTS: Record<string, number> = {
+  'veo-3': 20,        // Video generation
+  'gemini-image': 0.1, // Gemini/Imagen images (0.1 credit each)
 };
 
-function checkRateLimit(userId: string, tier: keyof typeof RATE_LIMITS = 'free'): { allowed: boolean; remaining: number; resetIn: number } {
-  const now = Date.now();
-  const limit = RATE_LIMITS[tier] || RATE_LIMITS.free;
-  const key = `${userId}:${tier}`;
-  
-  const entry = rateLimits.get(key);
-  
-  if (!entry || now > entry.resetTime) {
-    // Reset window
-    rateLimits.set(key, {
-      count: 1,
-      resetTime: now + limit.window
-    });
-    return { allowed: true, remaining: limit.requests - 1, resetIn: limit.window };
+// PixAI Models - FREE for all users
+const PIXAI_MODELS = {
+  TSUBAKI_2: {
+    id: '1983308862240288769',
+    name: 'Tsubaki.2',
+    description: 'Strong prompt understanding & execution, seamless anatomy'
+  },
+  HARUKA_V2: {
+    id: '1861558740588989558',
+    name: 'Haruka v2',
+    description: 'Stable quality, refined details, accurate hands'
+  },
+  HOSHINO_V2: {
+    id: '1954632828118619567',
+    name: 'Hoshino v2',
+    description: 'Highly popular style in Japan'
   }
-  
-  if (entry.count >= limit.requests) {
-    return { allowed: false, remaining: 0, resetIn: entry.resetTime - now };
-  }
-  
-  entry.count++;
-  return { allowed: true, remaining: limit.requests - entry.count, resetIn: entry.resetTime - now };
-}
+};
 
 // Authentication middleware
 async function requireAuth(req: any, res: any, next: any) {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader?.startsWith('Bearer ')) {
       res.status(401).json({ error: 'Unauthorized - No token provided' });
       return;
     }
@@ -72,100 +53,251 @@ async function requireAuth(req: any, res: any, next: any) {
   }
 }
 
-// Apply auth to all routes
-router.use(requireAuth);
+// Rate limiting (generous for images, strict for video)
+const rateLimits = new Map<string, { count: number; resetTime: number }>();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// PIXAI CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const PIXAI_API_V2 = 'https://api.pixai.art/v2';
-const PIXAI_API_V1 = 'https://api.pixai.art/v1';
-
-// PixAI Models - Anime/Character focused
-export const PIXAI_MODELS = {
-  // Tsubaki.2 - Strong prompt understanding, seamless anatomy
-  TSUBAKI_2: {
-    id: '1983308862240288769',
-    name: 'Tsubaki.2',
-    type: 'DIT',
-    description: 'Strong prompt understanding & execution, seamless anatomy',
-    defaultSize: '768x1280'
-  },
-  // Haruka v2 - Stable quality, refined details, accurate hands
-  HARUKA_V2: {
-    id: '1861558740588989558',
-    name: 'Haruka v2', 
-    type: 'SDXL',
-    description: 'Stable quality, refined details, accurate hands',
-    defaultSize: '768x1280'
-  },
-  // Hoshino v2 - Popular Japanese style
-  HOSHINO_V2: {
-    id: '1954632828118619567',
-    name: 'Hoshino v2',
-    type: 'SDXL',
-    description: 'Highly popular style in Japan',
-    defaultSize: '768x1280'
-  },
-  // Mio - Beta anime model
-  MIO: {
-    id: '1983308862240288769', // Using Tsubaki as base for now
-    name: 'Mio',
-    type: 'DIT',
-    description: 'Beta anime character model',
-    defaultSize: '768x1280'
-  }
+const RATE_LIMITS = {
+  image: { requests: 100, window: 3600000 },      // 100 images/hour
+  video: { requests: 10, window: 3600000 }        // 10 videos/hour (paid)
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// IMAGE GENERATION - PixAI
-// ═══════════════════════════════════════════════════════════════════════════════
+function checkRateLimit(userId: string, type: 'image' | 'video'): { allowed: boolean; remaining: number; resetIn: number } {
+  const now = Date.now();
+  const limit = RATE_LIMITS[type];
+  const key = `${userId}:${type}`;
+  
+  const entry = rateLimits.get(key);
+  
+  if (!entry || now > entry.resetTime) {
+    rateLimits.set(key, { count: 1, resetTime: now + limit.window });
+    return { allowed: true, remaining: limit.requests - 1, resetIn: limit.window };
+  }
+  
+  if (entry.count >= limit.requests) {
+    return { allowed: false, remaining: 0, resetIn: entry.resetTime - now };
+  }
+  
+  entry.count++;
+  return { allowed: true, remaining: limit.requests - entry.count, resetIn: entry.resetTime - now };
+}
 
-// Submit image generation task
-router.post('/image', async (req, res) => {
+/**
+ * Helper: Get API key (user or platform)
+ */
+async function getApiKey(userId: string): Promise<{ key: string; source: 'user' | 'platform' } | null> {
+  // Check user keys first
+  const userKeysDoc = await db.collection('user_api_keys').doc(userId).get();
+  const userKeyData = userKeysDoc.data()?.['gemini'];
+  
+  if (userKeyData?.key) {
+    try {
+      const decrypted = decryptKey(userKeyData.key);
+      return { key: decrypted, source: 'user' };
+    } catch (e) {
+      console.error('[Generation] Failed to decrypt user key:', e);
+    }
+  }
+  
+  // Fall back to platform key
+  const envKey = process.env.GEMINI_API_KEY;
+  if (envKey) {
+    return { key: envKey, source: 'platform' };
+  }
+  
+  return null;
+}
+
+/**
+ * POST /generation/image - Generate images with Gemini (0.1 credit each)
+ */
+router.post('/image', requireAuth, async (req: Request, res: Response) => {
   try {
     const { 
       prompt, 
-      modelId = PIXAI_MODELS.TSUBAKI_2.id,
-      aspectRatio = '9:16',
-      negativePrompt = '',
-      mode = 'standard'
+      aspectRatio = '1:1',
+      negativePrompt,
+      model = 'gemini-flash-image'
     } = req.body;
 
-    // Get user info from auth
     const userId = req.user?.uid;
-    const userTier = req.user?.tier || 'free';
 
     if (!prompt) {
       res.status(400).json({ error: 'Prompt required' });
       return;
     }
 
-    // Check rate limit
-    const rateLimit = checkRateLimit(userId, userTier);
-    if (!rateLimit.allowed) {
-      res.status(429).json({ 
-        error: 'Rate limit exceeded',
-        resetIn: Math.ceil(rateLimit.resetIn / 1000),
-        tier: userTier,
-        limit: RATE_LIMITS[userTier as keyof typeof RATE_LIMITS]?.requests
+    // Check credits - Gemini images cost 0.1 credit
+    const creditCost = CREDIT_COSTS['gemini-image'];
+    const userCredits = await db.collection('user_credits').doc(userId).get();
+    const imageCredits = userCredits.exists ? userCredits.data()?.image || 0 : 0;
+    
+    if (imageCredits < creditCost) {
+      res.status(403).json({ 
+        error: 'Insufficient credits',
+        required: creditCost,
+        available: imageCredits,
+        message: 'Images cost 0.1 credits each. Use PixAI for free anime images!'
       });
       return;
     }
 
-    const apiKey = process.env.PIXAI_API_KEY;
-    if (!apiKey) {
-      res.status(503).json({ error: 'PixAI not configured' });
+    // Rate limiting
+    const rateLimit = checkRateLimit(userId, 'image');
+    if (!rateLimit.allowed) {
+      res.status(429).json({ 
+        error: 'Rate limit exceeded - try again later',
+        resetIn: Math.ceil(rateLimit.resetIn / 1000)
+      });
       return;
     }
 
-    // Build enhanced prompt with negative
+    // Get API key
+    const apiKeyData = await getApiKey(userId);
+    if (!apiKeyData) {
+      res.status(503).json({ error: 'Image generation service not configured' });
+      return;
+    }
+
+    // Initialize client
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
+
+    // Generate image
+    const modelName = model === 'gemini-flash-image' 
+      ? 'gemini-3.1-flash-image-preview'
+      : 'imagen-3.0-generate-002';
+
     const fullPrompt = negativePrompt 
-      ? `${prompt} ### ${negativePrompt}`
+      ? `${prompt} (avoid: ${negativePrompt})`
       : prompt;
 
-    const response = await fetch(`${PIXAI_API_V2}/image/create`, {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: fullPrompt,
+      config: {
+        responseModalities: ['IMAGE'],
+        imageConfig: {
+          aspectRatio: aspectRatio
+        }
+      }
+    });
+
+    const imageData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!imageData) {
+      res.status(502).json({ error: 'No image generated' });
+      return;
+    }
+
+    // Upload to storage
+    const bucket = admin.storage().bucket();
+    const fileName = `images/${userId}/${Date.now()}.png`;
+    const file = bucket.file(fileName);
+    
+    const imageBuffer = Buffer.from(imageData, 'base64');
+    await file.save(imageBuffer, { 
+      metadata: { 
+        contentType: 'image/png',
+        metadata: { userId, prompt, model }
+      } 
+    });
+
+    const [url] = await file.getSignedUrl({
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000
+    });
+
+    // Deduct credits if using platform key
+    if (apiKeyData.source === 'platform') {
+      await db.collection('user_credits').doc(userId).update({
+        image: admin.firestore.FieldValue.increment(-creditCost)
+      });
+    }
+
+    // Log usage
+    await db.collection('usage').add({
+      userId,
+      service: 'image',
+      model,
+      creditCost: apiKeyData.source === 'platform' ? creditCost : 0,
+      apiSource: apiKeyData.source,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      imageUrl: url,
+      model,
+      creditCost: apiKeyData.source === 'platform' ? creditCost : 0,
+      apiSource: apiKeyData.source,
+      rateLimit: {
+        remaining: rateLimit.remaining,
+        resetIn: Math.ceil(rateLimit.resetIn / 1000)
+      }
+    });
+
+  } catch (err: any) {
+    console.error('[Generation] Image error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /generation/image/pixai - Generate anime images with PixAI (ALWAYS FREE)
+ */
+router.post('/image/pixai', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { 
+      prompt, 
+      modelId = PIXAI_MODELS.TSUBAKI_2.id,
+      aspectRatio = '9:16',
+      negativePrompt = ''
+    } = req.body;
+
+    const userId = req.user?.uid;
+
+    if (!prompt) {
+      res.status(400).json({ error: 'Prompt required' });
+      return;
+    }
+
+    // Rate limiting - generous for PixAI since it's free
+    const rateLimit = checkRateLimit(userId, 'image');
+    if (!rateLimit.allowed) {
+      res.status(429).json({ 
+        error: 'Rate limit exceeded - try again later',
+        resetIn: Math.ceil(rateLimit.resetIn / 1000)
+      });
+      return;
+    }
+
+    // Get PixAI API key (user key preferred, then platform)
+    let apiKey: string | null = null;
+    let apiSource: 'user' | 'platform' = 'platform';
+    
+    // Check user keys first
+    const userKeysDoc = await db.collection('user_api_keys').doc(userId).get();
+    const userKeyData = userKeysDoc.data()?.['pixai'];
+    if (userKeyData?.key) {
+      try {
+        apiKey = decryptKey(userKeyData.key);
+        apiSource = 'user';
+      } catch (e) {
+        console.error('[PixAI] Failed to decrypt user key');
+      }
+    }
+    
+    // Fall back to platform key
+    if (!apiKey) {
+      apiKey = process.env.PIXAI_API_KEY || null;
+    }
+    
+    if (!apiKey) {
+      res.status(503).json({ error: 'PixAI service not configured' });
+      return;
+    }
+
+    // Call PixAI API
+    const pixaiResponse = await fetch('https://api.pixai.art/v2/image/create', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -173,262 +305,430 @@ router.post('/image', async (req, res) => {
       },
       body: JSON.stringify({
         modelId,
-        prompt: fullPrompt,
+        prompt: negativePrompt ? `${prompt} ### ${negativePrompt}` : prompt,
         aspectRatio,
-        mode
+        mode: 'standard'
       })
     });
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
+    if (!pixaiResponse.ok) {
+      const errorData = await pixaiResponse.json().catch(() => ({}));
       res.status(502).json({ 
-        error: 'PixAI error', 
-        status: response.status,
-        detail: err.message 
+        error: 'PixAI API error', 
+        status: pixaiResponse.status,
+        detail: errorData.message || 'Unknown error'
       });
       return;
     }
 
-    const data = await response.json();
+    const data = await pixaiResponse.json();
     
-    // Add rate limit headers
-    res.setHeader('X-RateLimit-Limit', RATE_LIMITS[userTier as keyof typeof RATE_LIMITS]?.requests || 10);
-    res.setHeader('X-RateLimit-Remaining', rateLimit.remaining);
-    res.setHeader('X-RateLimit-Reset', Math.ceil(rateLimit.resetIn / 1000));
-    
+    // Store generation record
+    const generationRef = await db.collection('image_generations').add({
+      userId,
+      prompt,
+      model: 'pixai',
+      modelId,
+      taskId: data.id,
+      apiSource,
+      status: 'generating',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
     res.json({
       success: true,
+      generationId: generationRef.id,
       taskId: data.id,
-      status: data.status,
-      createdAt: data.createdAt,
-      message: 'Image generation started. Poll /generation/status/:taskId for results.',
+      status: 'generating',
+      message: 'Image generation started. Poll /generation/image/pixai/status/:generationId',
+      free: true,
       rateLimit: {
         remaining: rateLimit.remaining,
-        resetIn: Math.ceil(rateLimit.resetIn / 1000),
-        tier: userTier
+        resetIn: Math.ceil(rateLimit.resetIn / 1000)
       }
     });
+
   } catch (err: any) {
-    console.error('Image generation error:', err);
-    res.status(500).json({ error: 'Generation failed', detail: err.message });
+    console.error('[PixAI] Generation error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Check generation status
-router.get('/status/:taskId', async (req, res) => {
+/**
+ * GET /generation/image/pixai/status/:generationId
+ * Check PixAI generation status
+ */
+router.get('/image/pixai/status/:generationId', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { taskId } = req.params;
-    const apiKey = process.env.PIXAI_API_KEY;
+    const { generationId } = req.params;
+    const userId = req.user?.uid;
+
+    const doc = await db.collection('image_generations').doc(generationId).get();
     
-    if (!apiKey) {
-      res.status(503).json({ error: 'PixAI not configured' });
+    if (!doc.exists) {
+      res.status(404).json({ error: 'Generation not found' });
       return;
     }
 
-    const response = await fetch(`${PIXAI_API_V1}/task/${taskId}`, {
+    const data = doc.data();
+    if (!data || data.userId !== userId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    // If completed or failed, return current status
+    if (data.status === 'completed' || data.status === 'failed') {
+      res.json({
+        generationId,
+        ...data
+      });
+      return;
+    }
+
+    // Check with PixAI
+    const apiKey = process.env.PIXAI_API_KEY;
+    if (!apiKey) {
+      res.status(503).json({ error: 'PixAI service not configured' });
+      return;
+    }
+
+    const pixaiResponse = await fetch(`https://api.pixai.art/v1/task/${data.taskId}`, {
       headers: { 'Authorization': `Bearer ${apiKey}` }
     });
 
-    if (!response.ok) {
+    if (!pixaiResponse.ok) {
       res.status(502).json({ error: 'Failed to check status' });
       return;
     }
 
-    const data = await response.json();
+    const taskData = await pixaiResponse.json();
     
-    res.json({
-      taskId: data.id,
-      status: data.status, // waiting, running, completed, failed, cancelled
-      createdAt: data.createdAt,
-      updatedAt: data.updatedAt,
-      startedAt: data.startedAt,
-      completedAt: data.endAt,
-      imageUrl: data.outputs?.mediaUrls?.[0] || null,
-      mediaUrls: data.outputs?.mediaUrls || [],
-      mediaIds: data.outputs?.mediaIds || []
-    });
-  } catch (err: any) {
-    console.error('Status check error:', err);
-    res.status(500).json({ error: 'Check failed', detail: err.message });
-  }
-});
-
-// Poll until complete (convenience endpoint)
-router.post('/poll', async (req, res) => {
-  try {
-    const { taskId, maxAttempts = 60 } = req.body;
-    const apiKey = process.env.PIXAI_API_KEY;
-    
-    if (!apiKey) {
-      res.status(503).json({ error: 'PixAI not configured' });
-      return;
-    }
-
-    let attempts = 0;
-    const pollInterval = 2000; // 2 seconds
-    
-    while (attempts < maxAttempts) {
-      const response = await fetch(`${PIXAI_API_V1}/task/${taskId}`, {
-        headers: { 'Authorization': `Bearer ${apiKey}` }
-      });
+    if (taskData.status === 'completed') {
+      const imageUrl = taskData.outputs?.mediaUrls?.[0];
       
-      if (!response.ok) {
-        res.status(502).json({ error: 'Poll failed' });
-        return;
-      }
-      
-      const data = await response.json();
-      
-      if (data.status === 'completed') {
-        res.json({
-          success: true,
-          taskId: data.id,
+      if (imageUrl) {
+        await doc.ref.update({
           status: 'completed',
-          imageUrl: data.outputs?.mediaUrls?.[0],
-          mediaUrls: data.outputs?.mediaUrls || [],
-          attempts: attempts + 1
+          imageUrl,
+          completedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        res.json({
+          generationId,
+          status: 'completed',
+          imageUrl,
+          free: true
         });
         return;
       }
+    }
+    
+    if (taskData.status === 'failed' || taskData.status === 'cancelled') {
+      await doc.ref.update({ 
+        status: 'failed',
+        error: 'Generation failed'
+      });
       
-      if (data.status === 'failed' || data.status === 'cancelled') {
-        res.status(400).json({
-          success: false,
-          taskId: data.id,
-          status: data.status,
-          error: 'Generation failed or was cancelled'
-        });
-        return;
-      }
-      
-      attempts++;
-      await new Promise(r => setTimeout(r, pollInterval));
-    }
-    
-    res.status(408).json({ 
-      error: 'Timeout waiting for generation',
-      taskId,
-      attempts 
-    });
-  } catch (err: any) {
-    console.error('Poll error:', err);
-    res.status(500).json({ error: 'Poll failed', detail: err.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// VERTEX AI / IMAGEN (Google)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.post('/image/vertex', async (req, res) => {
-  try {
-    const { prompt, aspectRatio = '1:1', apiKey } = req.body;
-    
-    if (!prompt) {
-      res.status(400).json({ error: 'Prompt required' });
-      return;
-    }
-
-    const vertexKey = apiKey || process.env.VERTEX_AI_KEY;
-    const projectId = process.env.VERTEX_PROJECT_ID;
-    
-    if (!vertexKey || !projectId) {
-      res.status(503).json({ error: 'Vertex AI not configured' });
-      return;
-    }
-
-    // Vertex Imagen 3
-    const response = await fetch(
-      `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/imagen-3.0-generate-002:predict`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${vertexKey}`
-        },
-        body: JSON.stringify({
-          instances: [{ prompt }],
-          parameters: {
-            sampleCount: 1,
-            aspectRatio: aspectRatio || '1:1'
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      res.status(502).json({ 
-        error: 'Vertex AI error', 
-        detail: err.error?.message || `HTTP ${response.status}` 
+      res.json({
+        generationId,
+        status: 'failed',
+        error: 'Generation failed'
       });
       return;
     }
 
-    const data = await response.json();
-    const b64 = data.predictions?.[0]?.bytesBase64Encoded;
-    
-    if (!b64) {
-      res.status(502).json({ error: 'No image generated' });
+    // Still processing
+    res.json({
+      generationId,
+      status: 'processing',
+      pixaiStatus: taskData.status
+    });
+
+  } catch (err: any) {
+    console.error('[PixAI] Status error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /generation/video - Generate videos (COSTS CREDITS)
+ */
+router.post('/video', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { 
+      prompt, 
+      imageBase64,
+      aspectRatio = '16:9'
+    } = req.body;
+
+    const userId = req.user?.uid;
+    const userTier = req.user?.tier || 'free';
+
+    if (!prompt && !imageBase64) {
+      res.status(400).json({ error: 'Prompt or image required' });
       return;
+    }
+
+    // Video generation requires paid tier
+    if (userTier === 'free') {
+      res.status(403).json({ 
+        error: 'Video generation requires paid subscription',
+        upgradeUrl: '/pricing'
+      });
+      return;
+    }
+
+    // Check rate limit
+    const rateLimit = checkRateLimit(userId, 'video');
+    if (!rateLimit.allowed) {
+      res.status(429).json({ 
+        error: 'Video rate limit exceeded',
+        resetIn: Math.ceil(rateLimit.resetIn / 1000)
+      });
+      return;
+    }
+
+    // Check credits - ONLY VIDEO COSTS CREDITS
+    const creditCost = CREDIT_COSTS['veo-3'];
+    const userCredits = await db.collection('user_credits').doc(userId).get();
+    const videoCredits = userCredits.exists ? userCredits.data()?.video || 0 : 0;
+    
+    if (videoCredits < creditCost) {
+      res.status(403).json({ 
+        error: 'Insufficient video credits',
+        required: creditCost,
+        available: videoCredits,
+        message: 'Video generation requires credits. Purchase more or upgrade your plan.'
+      });
+      return;
+    }
+
+    // Get API key
+    const apiKeyData = await getApiKey(userId);
+    if (!apiKeyData) {
+      res.status(503).json({ error: 'Video generation service not configured' });
+      return;
+    }
+
+    // Initialize client
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
+
+    // Start generation
+    let operation = await ai.models.generateVideos({
+      model: 'veo-3.1-fast-generate-preview',
+      prompt: prompt || undefined,
+      image: imageBase64 ? {
+        imageBytes: imageBase64,
+        mimeType: 'image/jpeg'
+      } : undefined,
+      config: {
+        numberOfVideos: 1,
+        aspectRatio: aspectRatio
+      }
+    });
+
+    // Create generation record
+    const generationRef = await db.collection('video_generations').add({
+      userId,
+      prompt,
+      aspectRatio,
+      creditCost, // Track cost
+      apiSource: apiKeyData.source,
+      operationId: operation.name,
+      status: 'processing',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Deduct credits immediately for video
+    if (apiKeyData.source === 'platform') {
+      await db.collection('user_credits').doc(userId).update({
+        video: admin.firestore.FieldValue.increment(-creditCost)
+      });
     }
 
     res.json({
       success: true,
-      imageUrl: `data:image/png;base64,${b64}`,
-      provider: 'vertex'
+      generationId: generationRef.id,
+      operationId: operation.name,
+      status: 'processing',
+      creditCost, // Tell user how much was charged
+      message: 'Video generation started. Poll /generation/video/status/:generationId',
+      estimatedTime: '2-3 minutes'
     });
+
   } catch (err: any) {
-    console.error('Vertex image error:', err);
-    res.status(500).json({ error: 'Generation failed', detail: err.message });
+    console.error('[Generation] Video error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// VIDEO GENERATION
-// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * GET /generation/video/status/:generationId
+ * Check video generation status
+ */
+router.get('/video/status/:generationId', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { generationId } = req.params;
+    const userId = req.user?.uid;
 
-// Placeholder for video generation (Veo, etc.)
-router.post('/video', async (req, res) => {
-  res.status(501).json({ 
-    error: 'Video generation coming soon',
-    providers: ['Veo (Google)', 'Runway', 'Pika'],
-    status: 'planned'
-  });
-});
+    const doc = await db.collection('video_generations').doc(generationId).get();
+    
+    if (!doc.exists) {
+      res.status(404).json({ error: 'Generation not found' });
+      return;
+    }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MODEL LISTINGS
-// ═══════════════════════════════════════════════════════════════════════════════
+    const data = doc.data();
+    if (!data || data.userId !== userId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
 
-router.get('/models', (req, res) => {
-  res.json({
-    image: {
-      pixai: PIXAI_MODELS,
-      vertex: {
-        IMAGEN_3: {
-          id: 'imagen-3.0-generate-002',
-          name: 'Imagen 3',
-          description: 'Google\'s highest quality text-to-image model',
-          provider: 'Google Vertex AI'
+    // If completed or failed, return current status
+    if (data.status === 'completed' || data.status === 'failed') {
+      res.json({
+        generationId,
+        ...data
+      });
+      return;
+    }
+
+    // Check with API
+    const apiKeyData = await getApiKey(userId);
+    if (!apiKeyData) {
+      res.status(503).json({ error: 'Service not available' });
+      return;
+    }
+
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
+
+    const operation = await ai.operations.getVideosOperation({ 
+      operation: { name: data?.operationId, _fromAPIResponse: () => ({}) } as any
+    });
+
+    if (operation.done) {
+      const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+      
+      if (videoUri) {
+        // Download and store video
+        const response = await fetch(videoUri, {
+          headers: { 'x-goog-api-key': apiKeyData.key }
+        });
+        
+        if (response.ok) {
+          const blob = await response.blob();
+          const arrayBuffer = await blob.arrayBuffer();
+          
+          // Upload to storage
+          const bucket = admin.storage().bucket();
+          const fileName = `videos/${userId}/${generationId}.mp4`;
+          const file = bucket.file(fileName);
+          
+          await file.save(Buffer.from(arrayBuffer), { 
+            metadata: { contentType: 'video/mp4' } 
+          });
+          
+          const [url] = await file.getSignedUrl({
+            action: 'read',
+            expires: Date.now() + 7 * 24 * 60 * 60 * 1000
+          });
+
+          await doc.ref.update({
+            status: 'completed',
+            videoUrl: url,
+            completedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+          res.json({
+            generationId,
+            status: 'completed',
+            videoUrl: url,
+            creditCost: data.creditCost
+          });
+          return;
         }
       }
-    },
-    video: {
-      upcoming: ['Veo (Google)', 'Runway Gen-3', 'Pika 1.5']
+      
+      // Failed - refund credits if using platform key
+      if (data.apiSource === 'platform') {
+        await db.collection('user_credits').doc(userId).update({
+          video: admin.firestore.FieldValue.increment(data.creditCost)
+        });
+      }
+      
+      await doc.ref.update({ status: 'failed', error: 'Generation failed' });
+      
+      res.json({ 
+        generationId, 
+        status: 'failed',
+        refund: data.apiSource === 'platform' ? data.creditCost : 0
+      });
+      return;
     }
+
+    // Still processing
+    res.json({
+      generationId,
+      status: 'processing',
+      progress: 0 // Veo doesn't provide progress
+    });
+
+  } catch (err: any) {
+    console.error('[Generation] Video status error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /generation/models
+ * List available models
+ */
+router.get('/models', (req, res) => {
+  res.json({
+    image: [
+      { 
+        id: 'gemini-flash-image', 
+        name: 'Gemini Flash Image', 
+        description: 'Fast, high-quality image generation',
+        cost: 'FREE'
+      },
+      { 
+        id: 'imagen-3', 
+        name: 'Imagen 3', 
+        description: 'Highest quality photorealistic images',
+        cost: 'FREE'
+      },
+      { 
+        id: 'pixai-tsubaki', 
+        name: 'PixAI Tsubaki', 
+        description: 'Anime/character generation - FREE',
+        cost: 'FREE',
+        provider: 'PixAI'
+      }
+    ],
+    video: [
+      { 
+        id: 'veo-3', 
+        name: 'Veo 3.1', 
+        description: 'High-quality video generation',
+        cost: '20 credits per video',
+        minTier: 'catalyst'
+      }
+    ]
   });
 });
 
-// Provider status
-router.get('/status', (req, res) => {
-  res.json({
-    providers: {
-      pixai: !!process.env.PIXAI_API_KEY,
-      vertex: !!(process.env.VERTEX_AI_KEY && process.env.VERTEX_PROJECT_ID)
-    },
-    models: Object.keys(PIXAI_MODELS).length
-  });
-});
+// Helper: Decrypt key
+function decryptKey(encrypted: string): string {
+  const xorKey = process.env.USER_KEY_ENCRYPTION_SECRET || 'novaura-user-secret';
+  const buffer = Buffer.from(encrypted, 'base64');
+  let result = '';
+  for (let i = 0; i < buffer.length; i++) {
+    result += String.fromCharCode(buffer[i] ^ xorKey.charCodeAt(i % xorKey.length));
+  }
+  return result;
+}
 
 export default router;

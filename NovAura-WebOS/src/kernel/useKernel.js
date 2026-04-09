@@ -238,6 +238,30 @@ export function useCrash() {
 }
 
 /**
+ * Local model (WebGPU) hook — status, activate/deactivate, chat.
+ * @returns {{ status: object, activate: Function, deactivate: Function, chat: Function, isReady: boolean }}
+ */
+export function useLocalModel() {
+  const kernel = useKernel();
+  const [status, setStatus] = useState(() => kernel.localModel?.checkSupport() || {});
+
+  useEffect(() => {
+    const unsub1 = kernel.ipc.on('localmodel:status', setStatus);
+    const unsub2 = kernel.ipc.on('localmodel:ready', () => setStatus(kernel.localModel?.checkSupport() || {}));
+    const unsub3 = kernel.ipc.on('localmodel:progress', (p) =>
+      setStatus(prev => ({ ...prev, progress: p.progress, downloadText: p.text }))
+    );
+    return () => { unsub1(); unsub2(); unsub3(); };
+  }, [kernel]);
+
+  const activate = useCallback(() => kernel.localModel?.activate(), [kernel]);
+  const deactivate = useCallback(() => kernel.localModel?.deactivate(), [kernel]);
+  const chat = useCallback((prompt, opts) => kernel.localModel?.chat(prompt, opts), [kernel]);
+
+  return { status, activate, deactivate, chat, isReady: !!kernel.localModel?.isReady };
+}
+
+/**
  * Persistent window memory — drop-in replacement for useState that automatically
  * saves to kernelStorage (→ MemoryMap → Firestore) and restores on mount.
  *
@@ -315,80 +339,5 @@ export function clearWindowMemory(windowType, keys) {
   });
 }
 
-/**
- * Persistent window memory — drop-in replacement for useState that automatically
- * saves to kernelStorage (→ MemoryMap → Firestore) and restores on mount.
- *
- * Works for authenticated users (Firestore-backed) and guests (localStorage fallback).
- * Writes are debounced 600ms so keystrokes don't hammer the database.
- *
- * Usage:
- *   const [draft, setDraft] = useWindowMemory('art-studio', 'lastPrompt', '');
- *   const [settings, setSettings] = useWindowMemory('music-composer', 'config', defaultConfig);
- *
- * @param {string} windowType   The window's type id (e.g. 'art-studio', 'ide')
- * @param {string} key          Sub-key within that window's namespace
- * @param {any}    initialValue Fallback when no saved value exists
- * @returns {[any, Function]}   [value, setter] — same interface as useState
- */
-export function useWindowMemory(windowType, key, initialValue = null) {
-  const storageKey = `win_mem:${windowType}:${key}`;
 
-  const [state, setStateRaw] = useState(() => {
-    try {
-      const saved = kernelStorage.getItem(storageKey);
-      if (saved === null || saved === undefined) return initialValue;
-      try { return JSON.parse(saved); } catch { return saved; }
-    } catch {
-      return initialValue;
-    }
-  });
 
-  const debounceRef = useRef(null);
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  const setState = useCallback((valueOrUpdater) => {
-    setStateRaw(prev => {
-      const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(prev) : valueOrUpdater;
-      // Debounce the write so rapid updates (typing) don't spam the DB
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        try {
-          kernelStorage.setItem(storageKey, typeof next === 'string' ? next : JSON.stringify(next));
-        } catch { /* non-critical */ }
-      }, 600);
-      return next;
-    });
-  }, [storageKey]);
-
-  // Flush immediately on unmount so no data is lost when the window closes
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-        try {
-          kernelStorage.setItem(
-            storageKey,
-            typeof stateRef.current === 'string' ? stateRef.current : JSON.stringify(stateRef.current)
-          );
-        } catch { /* non-critical */ }
-      }
-    };
-  }, [storageKey]);
-
-  return [state, setState];
-}
-
-/**
- * Clears all persisted memory for a specific window type.
- * Useful for "reset" buttons in windows.
- *
- * @param {string} windowType
- * @param {string[]} keys   Array of keys that were saved via useWindowMemory
- */
-export function clearWindowMemory(windowType, keys) {
-  keys.forEach(key => {
-    try { kernelStorage.removeItem(`win_mem:${windowType}:${key}`); } catch { /* non-critical */ }
-  });
-}

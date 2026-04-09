@@ -425,11 +425,105 @@ router.get('/live-key', async (req, res) => {
   }
 });
 
-router.get('/health', (req, res) => {
+router.get('/health', async (req, res) => {
+  // Properly await each key check so we report real status
+  const available: string[] = [];
+  for (const p of Object.keys(PROVIDERS)) {
+    const key = await getApiKey(p);
+    if (key) available.push(p);
+  }
   res.json({ 
-    status: 'ok', 
-    ai: 'ready',
-    providers: Object.keys(PROVIDERS).filter(p => getApiKey(p))
+    status: available.length > 0 ? 'ok' : 'no_providers', 
+    ai: available.length > 0 ? 'ready' : 'degraded',
+    providers: available,
+    totalConfigured: available.length,
+    totalKnown: Object.keys(PROVIDERS).length
+  });
+});
+
+/**
+ * Deep health-check: actually ping each configured provider with a tiny prompt
+ * Returns per-provider status, latency, errors, and key validity
+ */
+router.get('/health-check', async (req, res) => {
+  const TEST_PROMPT = 'Reply with the single word OK.';
+  const TIMEOUT_MS = 12000;
+  const CORE_PROVIDERS = ['gemini', 'claude', 'openai', 'kimi', 'alibaba', 'aiml', 'novita', 'scaleway', 'hyperbolic', 'fireworks', 'azure'];
+
+  const results: Record<string, any> = {};
+
+  await Promise.all(
+    CORE_PROVIDERS.map(async (name) => {
+      const config = PROVIDERS[name];
+      if (!config) {
+        results[name] = { status: 'unsupported', configured: false };
+        return;
+      }
+
+      const apiKey = await getApiKey(name);
+      if (!apiKey) {
+        results[name] = { status: 'no_key', configured: false, error: 'API key not set' };
+        return;
+      }
+
+      const start = Date.now();
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+        const url = typeof config.url === 'function' ? config.url(apiKey) : config.url;
+        const headers = typeof config.headers === 'function' ? config.headers(apiKey) : config.headers;
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(config.formatBody(TEST_PROMPT, 10, 0.1)),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        const latencyMs = Date.now() - start;
+
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}));
+          results[name] = {
+            status: 'error',
+            configured: true,
+            httpStatus: response.status,
+            latencyMs,
+            error: errBody.error?.message || errBody.message || errBody.detail || `HTTP ${response.status}`,
+          };
+          return;
+        }
+
+        const data = await response.json();
+        const content = config.parseResponse(data);
+
+        results[name] = {
+          status: content ? 'ok' : 'empty_response',
+          configured: true,
+          latencyMs,
+          response: content ? content.slice(0, 100) : null,
+        };
+      } catch (err: any) {
+        results[name] = {
+          status: err.name === 'AbortError' ? 'timeout' : 'error',
+          configured: true,
+          latencyMs: Date.now() - start,
+          error: err.name === 'AbortError' ? `Timeout after ${TIMEOUT_MS}ms` : err.message,
+        };
+      }
+    })
+  );
+
+  const okCount = Object.values(results).filter((r: any) => r.status === 'ok').length;
+  const total = CORE_PROVIDERS.length;
+
+  res.json({
+    status: okCount > 0 ? 'operational' : 'degraded',
+    summary: `${okCount}/${total} providers healthy`,
+    timestamp: new Date().toISOString(),
+    providers: results,
   });
 });
 

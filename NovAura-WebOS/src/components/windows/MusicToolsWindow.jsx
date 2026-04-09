@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -44,7 +44,7 @@ import { toast } from 'sonner';
 // CONSTANTS
 // =============================================================================
 
-const NOTE_FREQUENCIES: Record<string, number> = {
+const NOTE_FREQUENCIES = {
   'C0': 16.35, 'C#0': 17.32, 'D0': 18.35, 'D#0': 19.45, 'E0': 20.60, 'F0': 21.83, 'F#0': 23.12, 'G0': 24.50, 'G#0': 25.96, 'A0': 27.50, 'A#0': 29.14, 'B0': 30.87,
   'C1': 32.70, 'C#1': 34.65, 'D1': 36.71, 'D#1': 38.89, 'E1': 41.20, 'F1': 43.65, 'F#1': 46.25, 'G1': 49.00, 'G#1': 51.91, 'A1': 55.00, 'A#1': 58.27, 'B1': 61.74,
   'C2': 65.41, 'C#2': 69.30, 'D2': 73.42, 'D#2': 77.78, 'E2': 82.41, 'F2': 87.31, 'F#2': 92.50, 'G2': 98.00, 'G#2': 103.83, 'A2': 110.00, 'A#2': 116.54, 'B2': 123.47,
@@ -82,7 +82,9 @@ const METRONOME_SOUNDS = {
 // =============================================================================
 
 class AudioContextManager {
-  ctx: AudioContext | null = null;
+  constructor() {
+    this.ctx = null;
+  }
   
   init() {
     if (!this.ctx) {
@@ -108,20 +110,20 @@ const audioManager = new AudioContextManager();
 function TunerPanel() {
   const [isListening, setIsListening] = useState(false);
   const [detectedFreq, setDetectedFreq] = useState(0);
-  const [detectedNote, setDetectedNote] = useState<string>('');
+  const [detectedNote, setDetectedNote] = useState('');
   const [cents, setCents] = useState(0);
   const [volume, setVolume] = useState(0);
-  const [selectedInstrument, setSelectedInstrument] = useState<'voice' | 'guitar' | 'piano' | 'bass'>('voice');
+  const [selectedInstrument, setSelectedInstrument] = useState('voice');
   const [referencePitch, setReferencePitch] = useState(440);
-  const [highlightScale, setHighlightScale] = useState<string>('Chromatic');
+  const [highlightScale, setHighlightScale] = useState('Chromatic');
   
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const analyserRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const rafRef = useRef(null);
+  const canvasRef = useRef(null);
 
   // Auto-correlation pitch detection
-  const autoCorrelate = useCallback((buf: Float32Array, sampleRate: number) => {
+  const autoCorrelate = useCallback((buf, sampleRate) => {
     let SIZE = buf.length;
     let rms = 0;
 
@@ -170,7 +172,7 @@ function TunerPanel() {
     return sampleRate / T0;
   }, []);
 
-  const getNoteFromFrequency = useCallback((freq: number) => {
+  const getNoteFromFrequency = useCallback((freq) => {
     const noteNum = 12 * (Math.log(freq / referencePitch) / Math.log(2));
     const noteIndex = Math.round(noteNum) + 69;
     const octave = Math.floor(noteIndex / 12) - 1;
@@ -244,8 +246,9 @@ function TunerPanel() {
     if (!ctx) return;
 
     const draw = () => {
-      const w = canvasRef.current!.width;
-      const h = canvasRef.current!.height;
+      if (!canvasRef.current) return;
+      const w = canvasRef.current.width;
+      const h = canvasRef.current.height;
       
       ctx.fillStyle = '#0a0a0f';
       ctx.fillRect(0, 0, w, h);
@@ -297,7 +300,7 @@ function TunerPanel() {
     draw();
   }, [isListening, cents, detectedNote]);
 
-  const playReferenceTone = (note: string) => {
+  const playReferenceTone = (note) => {
     const ctx = audioManager.init();
     const freq = NOTE_FREQUENCIES[note];
     if (!freq) return;
@@ -318,9 +321,9 @@ function TunerPanel() {
     osc.stop(ctx.currentTime + 2);
   };
 
-  const isInScale = (noteIndex: number) => {
+  const isInScale = (noteIndex) => {
     const rootNote = 69; // A4
-    const scaleIntervals = SCALES[highlightScale as keyof typeof SCALES] || SCALES.Chromatic;
+    const scaleIntervals = SCALES[highlightScale] || SCALES.Chromatic;
     const relativeIndex = ((noteIndex - rootNote) % 12 + 12) % 12;
     return scaleIntervals.includes(relativeIndex);
   };
@@ -329,7 +332,7 @@ function TunerPanel() {
     <div className="space-y-6">
       {/* Instrument Selection */}
       <div className="flex justify-center gap-2">
-        {(['voice', 'guitar', 'piano', 'bass'] as const).map(inst => (
+        {['voice', 'guitar', 'piano', 'bass'].map(inst => (
           <Button
             key={inst}
             variant={selectedInstrument === inst ? 'default' : 'outline'}
@@ -523,21 +526,21 @@ function MetronomePanel() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [beatsPerMeasure, setBeatsPerMeasure] = useState(4);
   const [currentBeat, setCurrentBeat] = useState(0);
-  const [soundType, setSoundType] = useState<keyof typeof METRONOME_SOUNDS>('Click');
+  const [soundType, setSoundType] = useState('Click');
   const [volume, setVolume] = useState(80);
-  const [tapTimes, setTapTimes] = useState<number[]>([]);
+  const [tapTimes, setTapTimes] = useState([]);
   const [isCountingIn, setIsCountingIn] = useState(false);
   const [countInBeats, setCountInBeats] = useState(4);
   
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countInRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intervalRef = useRef(null);
+  const countInRef = useRef(null);
 
-  const playClick = (isAccent: boolean) => {
+  const playClick = (isAccent) => {
     const ctx = audioManager.init();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     
-    osc.type = METRONOME_SOUNDS[soundType] as OscillatorType;
+    osc.type = METRONOME_SOUNDS[soundType];
     osc.frequency.value = isAccent ? 1000 : 800;
     
     gain.gain.setValueAtTime(volume / 100 * 0.5, ctx.currentTime);
@@ -612,7 +615,7 @@ function MetronomePanel() {
     setTapTimes(newTimes);
     
     if (newTimes.length >= 2) {
-      const intervals: number[] = [];
+      const intervals = [];
       for (let i = 1; i < newTimes.length; i++) {
         intervals.push(newTimes[i] - newTimes[i - 1]);
       }
@@ -759,7 +762,7 @@ function MetronomePanel() {
                 key={sound}
                 variant={soundType === sound ? 'default' : 'outline'}
                 size="sm"
-                onClick={() => setSoundType(sound as keyof typeof METRONOME_SOUNDS)}
+                onClick={() => setSoundType(sound)}
                 className={soundType === sound ? 'bg-neon-cyan text-void' : ''}
               >
                 {sound}
@@ -848,7 +851,7 @@ function MetronomePanel() {
               <li>• Start slow (60-80 BPM) when learning new pieces</li>
               <li>• Use Tap Tempo to match the feel of a song</li>
               <li>• Enable Count In for recording sessions</li>
-              <li>• Gradually increase speed as you improve</li>
+              <li>• Gradually increase speed improve</li>
             </ul>
           </div>
         </div>

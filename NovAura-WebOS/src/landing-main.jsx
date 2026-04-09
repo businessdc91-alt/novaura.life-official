@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Landing Page Entry Point
  * Standalone search engine for novaura.life
  */
@@ -16,8 +16,8 @@ function LandingApp() {
     <BrowserRouter>
       <LandingPage 
         onLaunchOS={() => {
-          // Redirect to OS
-          window.location.href = '/system';
+          // Redirect to OS subdomain
+          window.location.href = 'https://os.novaura.life';
         }}
         isAuthenticated={false}
       />

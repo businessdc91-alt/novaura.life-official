@@ -9,3 +9,6 @@ dist/
 .wrangler/
 .DS_Store
 Thumbs.db
+
+*.zip
+Kimi_Agent_Deployment_v14.zip

@@ -1,12 +1,13 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, Suspense, lazy } from 'react';
 import { useLocation } from 'react-router-dom';
 import ParticleBackground from './components/ParticleBackground';
 import ChatBar from './components/ChatBar';
 import Toolbar from './components/Toolbar';
 import WindowManager from './components/WindowManager';
+import MobileLayout from './components/MobileLayout';
+import { LayoutToggle } from './components/LayoutToggle';
 import SetupPage from './pages/SetupPage';
 import AuthPage from './pages/AuthPage';
-import LandingPage from './pages/LandingPage';
 import CinematicIntro from './components/CinematicIntro';
 import ParticleTextAnimation from './components/ParticleTextAnimation';
 import { Toaster } from './components/ui/sonner';
@@ -17,15 +18,93 @@ import TipsWidget from './components/TipsWidget';
 import CommandPalette from './components/CommandPalette';
 import AuraChatHistory from './components/AuraChatHistory';
 import { useCommandPalette } from './hooks/useCommandPalette';
+import { useLayoutMode } from './hooks/useLayoutMode';
 import { toast } from 'sonner';
-import { MessageSquare, Shield } from 'lucide-react';
+import { MessageSquare, Shield, Smartphone } from 'lucide-react';
 import { AIOrchestrator } from './utils/AIOrchestrator';
 import { smartChat } from './services/aiService';
 import { auth, isFirebaseConfigured } from './config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { loadUserPrefs, saveUserPref, recordSession } from './services/userService';
-import FloatingChatWidget from './components/FloatingChatWidget';
+// Nova — persistent AI companion (always visible, kernel-connected)
+const NovaChatFloating = lazy(() => import('./components/windows/NovaChatWindow'));
 import { kernelStorage } from './kernel/kernelStorage.js';
+
+// Lazy load window components for mobile layout
+const windowComponents = {
+  ide: lazy(() => import('./components/windows/IDEWindow')),
+  'website-builder': lazy(() => import('./components/windows/WebsiteBuilderWindow')),
+  browser: lazy(() => import('./components/windows/BrowserWindow')),
+  media: lazy(() => import('./components/windows/MediaWindow')),
+  'media-library': lazy(() => import('./components/windows/MediaLibraryWindow')),
+  voice: lazy(() => import('./components/windows/VoiceChatWindow')),
+  terminal: lazy(() => import('./components/windows/TerminalWindow')),
+  'ai-assistant': lazy(() => import('./components/windows/AIAssistantWindow')),
+  'vertex': lazy(() => import('./components/windows/VertexAIWindow')),
+  'bg-remover': lazy(() => import('./components/windows/BackgroundRemoverWindow')),
+  'appstore': lazy(() => import('./components/windows/AppStoreWindow')),
+  'profile': lazy(() => import('./components/windows/ProfileWindow')),
+  'game': lazy(() => import('./components/windows/GameWindow')),
+  'literature-ide': lazy(() => import('./components/windows/LiteratureIDEWindow')),
+  'games-arena': lazy(() => import('./components/windows/GamesArenaWindow')),
+  'music-composer': lazy(() => import('./components/windows/MusicComposerWindow')),
+  'poems': lazy(() => import('./components/windows/PoemsCreatorWindow')),
+  'aetherium-tcg': lazy(() => import('./components/windows/AetheriumTCGWindow')),
+  'comic-creator': lazy(() => import('./components/windows/ComicCreatorWindow')),
+  'art-studio': lazy(() => import('./components/windows/ArtStudioWindow')),
+  'art-gallery': lazy(() => import('./components/windows/ArtGalleryWindow')),
+  'clothing-creator': lazy(() => import('./components/windows/ClothingCreatorWindow')),
+  'outfit-generator': lazy(() => import('./components/windows/OutfitGeneratorWindow')),
+  'collab-writing': lazy(() => import('./components/windows/CollaborativeWritingWindow')),
+  'writing-library': lazy(() => import('./components/windows/WritingLibraryWindow')),
+  'script-fusion': lazy(() => import('./components/windows/ScriptFusionWindow')),
+  'constructor': lazy(() => import('./components/windows/ConstructorWindow')),
+  'creator-studio': lazy(() => import('./components/windows/CreatorStudioWindow')),
+  'vibe-coding': lazy(() => import('./components/windows/VibeCodingWindow')),
+  'workspace': lazy(() => import('./components/windows/WorkspaceWindow')),
+  'avatar-builder': lazy(() => import('./components/windows/AvatarBuilderWindow')),
+  'live-broadcast': lazy(() => import('./components/windows/LiveBroadcastWindow')),
+  'dojo': lazy(() => import('./components/windows/DojoWindow')),
+  'challenges': lazy(() => import('./components/windows/ChallengesWindow')),
+  'psychometrics': lazy(() => import('./components/windows/PsychometricsWindow')),
+  'ai-companion': lazy(() => import('./components/windows/AICompanionWindow')),
+  'notifications': lazy(() => import('./components/windows/NotificationsWindow')),
+  'avatar-gallery': lazy(() => import('./components/windows/AvatarGalleryWindow')),
+  'outfit-manager': lazy(() => import('./components/windows/OutfitManagerWindow')),
+  'inventory': lazy(() => import('./components/windows/InventoryWindow')),
+  'tax-filing': lazy(() => import('./components/windows/TaxFilingWindow')),
+  'admin-panel': lazy(() => import('./components/windows/AdminPanelWindow')),
+  'personalization': lazy(() => import('./components/windows/PersonalizationWindow')),
+  'secrets': lazy(() => import('./components/windows/SecretsWindow')),
+  'social': lazy(() => import('./components/windows/SocialNetworkWindow')),
+  'git': lazy(() => import('./components/windows/GitWindow')),
+  'billing': lazy(() => import('./components/windows/BillingWindow')),
+  'files': lazy(() => import('./components/windows/FilesWindow')),
+  'pixai': lazy(() => import('./components/windows/PixAIWindow')),
+  'business-operator': lazy(() => import('./components/windows/BusinessOperatorWindow')),
+  'nova-concierge': lazy(() => import('./components/windows/NovaConciergeWindow')),
+  'graphics-settings': lazy(() => import('./components/windows/GraphicsSettingsWindow')),
+  'imagen': lazy(() => import('./components/windows/ImagenWindow')),
+  'live-ai': lazy(() => import('./components/windows/LiveAIWindow')),
+  'weather': lazy(() => import('./components/windows/WeatherWindow')),
+  'crypto': lazy(() => import('./components/windows/CryptoWindow')),
+  'calculator': lazy(() => import('./components/windows/CalculatorWindow')),
+  'gilded-cage': lazy(() => import('./components/games/GildedCageGame')),
+  'voice-studio': lazy(() => import('./components/windows/VoiceStudioWindow')),
+  'music-studio': lazy(() => import('./components/windows/MusicStudioWindow')),
+  'practice-tools': lazy(() => import('./components/windows/PracticeToolsWindow')),
+  'glb-game': lazy(() => import('./components/windows/GLBGameWindow')),
+  'system-diagnostics': lazy(() => import('./components/windows/SystemDiagnosticsWindow')),
+  'nova-chat': lazy(() => import('./components/windows/NovaChatWindow')),
+  'security-monitor': lazy(() => import('./components/windows/SecurityMonitorWindow')),
+  'card-deck-creator': lazy(() => import('./components/windows/CardDeckCreatorWindow')),
+  'avatar-creator': lazy(() => import('./components/windows/LivingAvatarCreator')),
+  'business-card': lazy(() => import('./components/windows/BusinessCardWindow')),
+  'deploy': lazy(() => import('./components/windows/DeployWindow')),
+  'music-tools': lazy(() => import('./components/windows/MusicToolsWindow')),
+  'admin-key-hub': lazy(() => import('./components/windows/AdminKeyHubWindow')),
+  'user-key-hub': lazy(() => import('./components/windows/UserKeyHubWindow')),
+};
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -53,6 +132,18 @@ export default function App() {
   const [userTier, setUserTier] = useState('free');
   const orchestratorRef = useRef(null);
   const { isOpen: isCommandPaletteOpen, close: closeCommandPalette } = useCommandPalette();
+  
+  // Layout mode for mobile/desktop toggle
+  const { 
+    layoutMode, 
+    isMobile, 
+    isDesktop,
+    isHeadless,
+    isAutoMode,
+    setMode, 
+    setAuto, 
+    toggleMode 
+  } = useLayoutMode();
 
   useEffect(() => {
     // Load saved theme
@@ -147,19 +238,12 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // URL deep-link support — all nav routes handled here
+  // URL deep-link support — WebOS lives at /os, always show OS
   const location = useLocation();
   useEffect(() => {
-    const path = location.pathname;
-    if (path === '/os' || path === '/system') {
-      setShowOS(true);
-    } else if (path === '/login' || path === '/register') {
-      setShowOS(true); // auth wall handles it
-    } else if (path === '/platform' || path.startsWith('/platform/')) {
-      setShowOS(true);
-      setPendingWindow('social');
-    }
-  }, [location.pathname]);
+    // WebOS is always the OS — the Platform landing page handles /
+    setShowOS(true);
+  }, []);
   
   // Persist Aura history
   useEffect(() => {
@@ -355,7 +439,8 @@ export default function App() {
           openWindow('tax-filing', 'Tax Filing', {});
           break;
         case 'open_chat':
-          openWindow('chat', 'Nova AI', { initialMessage: args.message });
+          // Nova is always visible as the floating companion — no window needed
+          toast.info('Nova is always available in the bottom-right corner.');
           break;
         case 'voice_call':
           openWindow('voice', 'Voice Chat', {});
@@ -443,6 +528,21 @@ export default function App() {
       'weather': 'Weather',
       'crypto': 'Crypto Markets',
       'calculator': 'Calculator',
+      'system-diagnostics': 'System Diagnostics',
+      'nova-chat': 'Nova',
+      'security-monitor': 'Sentinel Shield',
+      'avatar-creator': 'Living Avatar',
+      'live-ai': 'Nova Live',
+      'graphics-settings': 'Graphics Settings',
+      'gilded-cage': 'The Gilded Cage',
+      'voice-studio': 'Voice Studio',
+      'music-studio': 'Music Studio',
+      'practice-tools': 'Practice Tools',
+      'glb-game': 'GLB Game',
+      'admin-key-hub': 'Admin Key Hub',
+      'user-key-hub': 'User Key Hub',
+      'deploy': 'Deploy',
+      'music-tools': 'Music Tools',
     };
     return titles[type] || 'Window';
   };
@@ -498,19 +598,6 @@ export default function App() {
     );
   }
 
-  // Landing page (search engine) - entry point for all users
-  if (!showOS) {
-    return (
-      <>
-        <LandingPage 
-          onLaunchOS={handleLaunchOS}
-          isAuthenticated={isAuthenticated}
-        />
-        <Toaster position="top-right" />
-      </>
-    );
-  }
-
   // Auth screen (when launching OS but not authenticated)
   if (!isAuthenticated) {
     return (
@@ -547,6 +634,92 @@ export default function App() {
     );
   }
 
+  // Headless Mode (Tauri mobile / embedded) — kernel runs, no desktop chrome
+  if (isHeadless) {
+    return (
+      <div className="w-screen h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-center space-y-2">
+          <p className="text-xs text-white/30 font-mono">NovAura Kernel — headless mode</p>
+          <p className="text-[10px] text-white/20">Kernel ready. Use IPC or API to interact.</p>
+        </div>
+        <Toaster position="top-right" />
+      </div>
+    );
+  }
+
+  // Mobile Layout Render
+  if (isMobile) {
+    return (
+      <div className="relative w-screen h-screen overflow-hidden bg-background">
+        {/* Particle Background - simplified for mobile */}
+        <ParticleBackground config="idle" theme={theme} />
+        
+        {/* Mobile Layout */}
+        <MobileLayout
+          windows={windows}
+          onOpenWindow={openWindow}
+          onCloseWindow={closeWindow}
+          onFocusWindow={focusWindow}
+          onToggleLayout={toggleMode}
+          windowComponents={windowComponents}
+        />
+        
+        <Toaster position="top-center" />
+        
+        {/* Command Palette - Global Cmd+K */}
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          onClose={closeCommandPalette}
+          onSelect={(commandId) => {
+            const windowMap = {
+              'ide': () => openWindow('ide', 'Cybeni IDE'),
+              'terminal': () => openWindow('terminal', 'Terminal'),
+              'browser': () => openWindow('browser', 'AI Browser'),
+              'git': () => openWindow('git', 'Git'),
+              'files': () => openWindow('files', 'Files'),
+              'pixai': () => openWindow('pixai', 'PixAI Art Studio'),
+              'secrets': () => openWindow('secrets', 'Secrets Manager'),
+              'settings': () => openWindow('personalization', 'Settings'),
+              'diagnostics': () => openWindow('system-diagnostics', 'System Diagnostics'),
+              'nova': () => openWindow('nova-chat', 'Nova'),
+              'security': () => openWindow('security-monitor', 'Sentinel Shield'),
+              'profile': () => openWindow('profile', 'Profile'),
+              'billing': () => openWindow('billing', 'Billing'),
+            };
+            
+            if (windowMap[commandId]) {
+              windowMap[commandId]();
+              toast.success(`Opened ${commandId}`);
+            } else if (commandId === 'dark-mode') {
+              const newTheme = theme === 'cosmic' ? 'blue-night' : 'cosmic';
+              setTheme(newTheme);
+              kernelStorage.setItem('novaura-theme', newTheme);
+              document.documentElement.setAttribute('data-theme', newTheme);
+              toast.success(`Theme: ${newTheme}`);
+            } else if (commandId === 'logout') {
+              handleLogout();
+            }
+          }}
+        />
+        
+        {/* Onboarding Wizard - shows on first launch */}
+        <OnboardingWizard 
+          onComplete={() => {
+            toast.success('You\'re all set! 🎉', {
+              description: 'Start by opening an app from the bottom menu.',
+            });
+          }}
+          onSkip={() => {
+            toast.info('Skipped onboarding', {
+              description: 'You can restart it from Settings > Help.',
+            });
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Desktop Layout Render
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-background">
       {/* Particle Background */}
@@ -582,10 +755,10 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      {/* Avatar Chat Button — bottom right */}
+      {/* Avatar Chat Button — opens Nova chat window for deep conversation */}
       <div className="fixed bottom-28 right-6 z-[850] pointer-events-auto">
         <AvatarButton
-          onClick={() => openWindow('chat', 'Nova AI')}
+          onClick={() => openWindow('nova-chat', 'Nova')}
           mood="idle"
         />
       </div>
@@ -612,6 +785,18 @@ export default function App() {
             <ChatBar onSubmit={handleChatSubmit} llmConfig={llmConfig} />
           </div>
         </div>
+      </div>
+      
+      {/* Layout Mode Toggle - Desktop */}
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[1000]">
+        <LayoutToggle 
+          layoutMode={layoutMode}
+          isAutoMode={isAutoMode}
+          onSetMode={setMode}
+          onSetAuto={setAuto}
+          onToggle={toggleMode}
+          variant="compact"
+        />
       </div>
 
       <Toaster position="top-right" />
@@ -685,6 +870,9 @@ export default function App() {
             'pixai': () => openWindow('pixai', 'PixAI Art Studio'),
             'secrets': () => openWindow('secrets', 'Secrets Manager'),
             'settings': () => openWindow('personalization', 'Settings'),
+            'diagnostics': () => openWindow('system-diagnostics', 'System Diagnostics'),
+            'nova': () => openWindow('nova-chat', 'Nova'),
+            'security': () => openWindow('security-monitor', 'Sentinel Shield'),
             'profile': () => openWindow('profile', 'Profile'),
             'billing': () => openWindow('billing', 'Billing'),
           };
@@ -721,8 +909,10 @@ export default function App() {
       {/* Help Button - always visible */}
       <HelpButton />
       
-      {/* Floating Nova Chat — persistent bottom-right messenger */}
-      <FloatingChatWidget />
+      {/* Nova — persistent AI companion, always visible, kernel-connected */}
+      <Suspense fallback={null}>
+        <NovaChatFloating isPopout={true} />
+      </Suspense>
 
       {/* Tips Widget - rotating helpful hints */}
       <TipsWidget />

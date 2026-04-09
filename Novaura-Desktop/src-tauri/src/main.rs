@@ -2,10 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // Terminal module
 mod terminal;
+
+// Aura Nova sidecar bridge
+mod aura_sidecar;
 
 // Commands module
 mod commands {
@@ -110,6 +113,8 @@ mod commands {
 pub struct AppState;
 
 fn main() {
+    // Tier: FULL for dev, CONSUMER for production bundles
+    let aura_tier = std::env::var("AURA_TIER").unwrap_or_else(|_| "CONSUMER".to_string());
     let quit = CustomMenuItem::new("quit", "Quit");
     let hide = CustomMenuItem::new("hide", "Hide");
     let tray_menu = SystemTrayMenu::new().add_item(quit).add_item(hide);
@@ -118,6 +123,19 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState)
         .system_tray(system_tray)
+        .setup(move |app| {
+            match aura_sidecar::AuraSidecar::spawn(app.handle(), &aura_tier) {
+                Ok(sidecar) => {
+                    app.manage(Arc::new(sidecar));
+                    println!("[AURA] Sidecar spawned (tier: {})", aura_tier);
+                }
+                Err(e) => {
+                    // Sidecar is optional — desktop still works without it
+                    eprintln!("[AURA] Sidecar not started: {e}");
+                }
+            }
+            Ok(())
+        })
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
                 let window = app.get_window("main").unwrap();
@@ -158,6 +176,13 @@ fn main() {
             terminal::project_install_deps,
             terminal::project_info,
             terminal::project_list_files,
+            // Aura Nova sidecar commands
+            aura_sidecar::aura_chat,
+            aura_sidecar::aura_stream,
+            aura_sidecar::aura_recall,
+            aura_sidecar::aura_store_engram,
+            aura_sidecar::aura_fact_check,
+            aura_sidecar::aura_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

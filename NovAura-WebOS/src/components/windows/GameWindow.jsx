@@ -83,7 +83,7 @@ export default function GameWindow({ gameId, title, url, description }) {
 // Game registry
 function getGameUrl(id) {
   const games = {
-    'gilded-cage': 'http://localhost:3100', // Will be the Gilded Cage dev server
+    'gilded-cage': 'https://the-gilded-cage--lostitonce420.replit.app',
     'aetherium': 'http://localhost:3101',
     'galactica': 'http://localhost:3102',
   };

@@ -196,10 +196,10 @@ router.post('/checkout', async (req: Request, res: Response) => {
         recurring: { interval: 'month' },
         product_data: {
           name: productName,
-          description: productDescription,
           metadata: { 
             planId: planId,
-            type: 'membership'
+            type: 'membership',
+            description: productDescription
           }
         },
       });
@@ -442,6 +442,203 @@ router.post('/webhook', async (req: Request, res: Response) => {
   }
 
   return res.status(200).json({ received: true });
+});
+
+/**
+ * Cancel a subscription — legally required.
+ * POST /stripe/cancel-subscription
+ * Body: { userId }
+ */
+router.post('/cancel-subscription', async (req: Request, res: Response) => {
+  try {
+    if (!checkStripe(res)) return;
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+    const db = admin.firestore();
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+
+    const userData = userDoc.data();
+    const subscriptionId = userData?.stripeSubscriptionId;
+    if (!subscriptionId) {
+      return res.status(400).json({ error: 'No active subscription found' });
+    }
+
+    // Cancel at period end (user keeps access until billing cycle ends)
+    const subscription = await stripe!.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
+
+    await userRef.update({
+      subscriptionStatus: 'canceling',
+      cancelAt: subscription.cancel_at
+        ? new Date(subscription.cancel_at * 1000)
+        : null,
+    });
+
+    console.log(`[Stripe] Subscription ${subscriptionId} set to cancel for user ${userId}`);
+
+    return res.json({
+      success: true,
+      message: 'Subscription will cancel at end of billing period',
+      cancelAt: subscription.cancel_at,
+      currentPeriodEnd: (subscription as any).current_period_end,
+    });
+  } catch (error: any) {
+    console.error('Cancel subscription error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Immediately cancel (no grace period) — for disputes or admin action.
+ * POST /stripe/cancel-subscription-now
+ * Body: { userId }
+ */
+router.post('/cancel-subscription-now', async (req: Request, res: Response) => {
+  try {
+    if (!checkStripe(res)) return;
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+    const db = admin.firestore();
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+
+    const subscriptionId = userDoc.data()?.stripeSubscriptionId;
+    if (!subscriptionId) {
+      return res.status(400).json({ error: 'No active subscription found' });
+    }
+
+    await stripe!.subscriptions.cancel(subscriptionId);
+
+    await userRef.update({
+      subscriptionStatus: 'canceled',
+      membershipTier: 'free',
+      canceledAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log(`[Stripe] Subscription ${subscriptionId} immediately canceled for user ${userId}`);
+
+    return res.json({ success: true, message: 'Subscription canceled immediately' });
+  } catch (error: any) {
+    console.error('Immediate cancel error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Update subscription — change plan/tier mid-cycle.
+ * POST /stripe/update-subscription
+ * Body: { userId, newPlanId, newPrice }
+ *   newPrice in cents (e.g., 2999 for $29.99)
+ */
+router.post('/update-subscription', async (req: Request, res: Response) => {
+  try {
+    if (!checkStripe(res)) return;
+    const { userId, newPlanId, newPrice } = req.body;
+    if (!userId || !newPlanId || !newPrice) {
+      return res.status(400).json({ error: 'Missing userId, newPlanId, or newPrice' });
+    }
+
+    const db = admin.firestore();
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+
+    const subscriptionId = userDoc.data()?.stripeSubscriptionId;
+    if (!subscriptionId) {
+      return res.status(400).json({ error: 'No active subscription to update' });
+    }
+
+    // Get current subscription to find the item ID
+    const subscription = await stripe!.subscriptions.retrieve(subscriptionId);
+    const currentItem = subscription.items.data[0];
+    if (!currentItem) {
+      return res.status(400).json({ error: 'Subscription has no items' });
+    }
+
+    // Create new price for the target tier
+    const newStripePrice = await stripe!.prices.create({
+      unit_amount: newPrice,
+      currency: 'usd',
+      recurring: { interval: 'month' },
+      product_data: {
+        name: `NovAura ${newPlanId.charAt(0).toUpperCase() + newPlanId.slice(1)} Membership`,
+        metadata: { planId: newPlanId, type: 'membership' },
+      },
+    });
+
+    // Update subscription with proration
+    const updatedSubscription = await stripe!.subscriptions.update(subscriptionId, {
+      items: [{
+        id: currentItem.id,
+        price: newStripePrice.id,
+      }],
+      proration_behavior: 'create_prorations',
+      cancel_at_period_end: false,  // Undo any pending cancellation
+    });
+
+    await userRef.update({
+      membershipTier: newPlanId,
+      subscriptionStatus: 'active',
+      cancelAt: null,  // Clear any pending cancel
+    });
+
+    console.log(`[Stripe] Subscription updated for user ${userId}: ${newPlanId}`);
+
+    return res.json({
+      success: true,
+      newTier: newPlanId,
+      subscriptionId: updatedSubscription.id,
+      currentPeriodEnd: (updatedSubscription as any).current_period_end,
+    });
+  } catch (error: any) {
+    console.error('Update subscription error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get subscription status — lets the frontend show billing info.
+ * GET /stripe/subscription-status/:userId
+ */
+router.get('/subscription-status/:userId', async (req: Request, res: Response) => {
+  try {
+    if (!checkStripe(res)) return;
+    const { userId } = req.params;
+
+    const db = admin.firestore();
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+
+    const userData = userDoc.data();
+    const subscriptionId = userData?.stripeSubscriptionId;
+
+    if (!subscriptionId) {
+      return res.json({
+        tier: userData?.membershipTier || 'free',
+        status: 'none',
+        subscription: null,
+      });
+    }
+
+    const subscription = await stripe!.subscriptions.retrieve(subscriptionId);
+
+    return res.json({
+      tier: userData?.membershipTier || 'free',
+      status: subscription.status,
+      cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      currentPeriodEnd: (subscription as any).current_period_end,
+      cancelAt: subscription.cancel_at,
+    });
+  } catch (error: any) {
+    console.error('Subscription status error:', error);
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 export default router;

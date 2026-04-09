@@ -58,10 +58,57 @@ class ProcessManager {
 
   suspend(pid) {
     this._setStatus(pid, 'suspended');
+    const proc = this._processes.get(pid);
+    if (proc) {
+      proc.suspendedAt = Date.now();
+      this._kernel.ipc.emit('process:suspended', { pid, name: proc.name, windowId: proc.windowId });
+    }
   }
 
   resume(pid) {
     this._setStatus(pid, 'running');
+    const proc = this._processes.get(pid);
+    if (proc) {
+      const sleepDuration = proc.suspendedAt ? Date.now() - proc.suspendedAt : 0;
+      proc.suspendedAt = null;
+      this._kernel.ipc.emit('process:resumed', { pid, name: proc.name, windowId: proc.windowId, sleepDuration });
+    }
+  }
+
+  /**
+   * Sleep a window process — serializes state, marks as sleeping.
+   * The WindowManager unmounts the React tree but keeps the window entry.
+   * @param {string} windowId
+   * @param {object} savedState  Serializable state snapshot from the window
+   */
+  sleepWindow(windowId, savedState = null) {
+    const proc = this.getByWindow(windowId);
+    if (!proc) return;
+    if (savedState !== null) {
+      proc.savedState = savedState;
+    }
+    this.suspend(proc.pid);
+  }
+
+  /**
+   * Wake a sleeping window — restores state, marks as running.
+   * @param {string} windowId
+   * @returns {object|null} The saved state snapshot, or null
+   */
+  wakeWindow(windowId) {
+    const proc = this.getByWindow(windowId);
+    if (!proc || proc.status !== 'suspended') return null;
+    const state = proc.savedState || null;
+    proc.savedState = null;
+    this.resume(proc.pid);
+    return state;
+  }
+
+  /**
+   * Get all sleeping window processes.
+   */
+  getSleeping() {
+    return [...this._processes.values()].filter(p => p.status === 'suspended' && p.type === 'window');
   }
 
   getRunning() {

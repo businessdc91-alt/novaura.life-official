@@ -11,6 +11,9 @@ import MemoryMap from './subsystems/MemoryMap.js';
 import PluginRegistry from './subsystems/PluginRegistry.js';
 import Scheduler from './subsystems/Scheduler.js';
 import CrashHandler from './subsystems/CrashHandler.js';
+import LocalModelSubsystem from './subsystems/LocalModelSubsystem.js';
+import NovaAgent from './subsystems/NovaAgent.js';
+import SentinelShield from './subsystems/SentinelShield.js';
 import { getSemanticsEngine } from './SemanticsEngine.js';
 
 /**
@@ -63,7 +66,10 @@ class NovaKernel {
     this.plugins       = null;
     this.scheduler     = null;
     this.crash         = null;
+    this.localModel    = null;
     this.semantics     = null;
+    this.nova          = null;   // NovaAgent — persistent AI agent
+    this.sentinel      = null;   // SentinelShield — platform security
 
     this.bootPhase = 'idle';
     this.bootLog   = [];
@@ -91,11 +97,16 @@ class NovaKernel {
         this.plugins       = new PluginRegistry();
         this.scheduler     = new Scheduler();
         this.crash         = new CrashHandler();
+        this.localModel    = new LocalModelSubsystem();
+        this.nova          = new NovaAgent();
+        this.sentinel      = new SentinelShield();
       });
 
-      // Phase 1 — IPC ready
-      await this._phase(1, () => {
-        this._log(1, 'IPC bus online. ' + this.ipc._bus.size + ' registered channels.');
+      // Phase 1 — IPC ready + Sentinel Shield (must intercept before any data flows)
+      await this._phase(1, async () => {
+        this.sentinel.init(this);
+        await this.sentinel.boot();
+        this._log(1, 'IPC bus online. Sentinel Shield active. ' + this.ipc._bus.size + ' registered channels.');
       });
 
       // Phase 2 — Firebase check
@@ -147,11 +158,16 @@ class NovaKernel {
         this._log(6, 'AI engine online. Hash cache loaded. Provider probe dispatched.');
       });
 
-      // Phase 7 — Semantics Engine (makes OS AI-controllable)
+      // Phase 7 — Semantics Engine + Local Model
       await this._phase(7, () => {
         this.semantics = getSemanticsEngine();
         this.semantics.init(this);
-        this._log(7, `Semantics engine online. ${this.semantics.getAvailableApps().length} apps registered.`);
+
+        // Initialize local model subsystem (WebGPU/WebLLM)
+        this.localModel.init(this);
+        this.localModel.boot();
+        const gpuSupport = this.localModel.isAvailable ? 'WebGPU available' : 'WebGPU not supported';
+        this._log(7, `Semantics engine online. ${this.semantics.getAvailableApps().length} apps registered. ${gpuSupport}.`);
       });
 
       // Phase 8 — Plugin registry
@@ -179,13 +195,23 @@ class NovaKernel {
         this._log(10, 'Crash guard installed. Auto-repair via Gemini active.');
       });
 
-      // Phase 11 — Remaining subsystems + Desktop ready
-      await this._phase(11, () => {
+      // Phase 11 — Remaining subsystems + NovaAgent + Desktop ready
+      await this._phase(11, async () => {
         this.fs.init(this);
         this.notifications.init(this);
         this.processes.init(this);
         this.processes.boot();
-        this._log(11, 'Desktop ready. Boot took ' + (Date.now() - this._bootStart) + 'ms.');
+
+        // Boot NovaAgent — persistent AI with context awareness + tool calls
+        this.nova.init(this);
+        await this.nova.boot();
+
+        // Schedule Nova proactive check every 10 minutes
+        this.scheduler.schedule('nova:proactive', () => {
+          this.nova.proactiveCheck?.();
+        }, { interval: 600_000, tags: ['system', 'nova'] });
+
+        this._log(11, 'Desktop ready. Nova online. Boot took ' + (Date.now() - this._bootStart) + 'ms.');
       });
 
       this.bootPhase = 'ready';

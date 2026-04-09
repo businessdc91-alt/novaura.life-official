@@ -24,4 +24,5 @@ export {
   usePlugins,
   useScheduler,
   useCrash,
+  useLocalModel,
 } from './useKernel.js';

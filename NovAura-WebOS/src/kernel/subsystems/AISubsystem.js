@@ -27,6 +27,15 @@ const BACKEND_URL =
 
 const PROVIDER_CHAIN = ['gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'];
 
+// Nova (local-first) vs Aura (cloud-first) persona routing
+// persona: 'nova' → prefer webgpu-local, fallback cloud
+// persona: 'aura' → always cloud Gemini, never local
+const PERSONA_CHAINS = {
+  nova:  ['webgpu-local', 'gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'],
+  aura:  ['gemini', 'claude', 'qwen', 'openai'],  // Aura never touches local
+  default: PROVIDER_CHAIN,
+};
+
 // Phase 2: expanded pool
 const MAX_CONCURRENT = 5;
 const RATE_WINDOW_MS = 60_000;
@@ -137,10 +146,12 @@ class AISubsystem {
   init(kernel) {
     this._kernel = kernel;
 
-    PROVIDER_CHAIN.forEach((name, i) => {
+    // Register all providers including webgpu-local
+    const allProviders = ['webgpu-local', ...PROVIDER_CHAIN];
+    allProviders.forEach((name, i) => {
       this._providers.set(name, {
         name,
-        available: true,
+        available: name === 'webgpu-local' ? false : true,  // enabled when LocalModelSubsystem activates
         priority: i,
         model: this._defaultModel(name),
         requestCount: 0,
@@ -149,6 +160,16 @@ class AISubsystem {
         avgQuality: 0.7,
         lastError: null,
       });
+    });
+
+    // Listen for local model readiness
+    kernel.ipc.on('localmodel:ready', () => {
+      const p = this._providers.get('webgpu-local');
+      if (p) p.available = true;
+    });
+    kernel.ipc.on('localmodel:deactivated', () => {
+      const p = this._providers.get('webgpu-local');
+      if (p) p.available = false;
     });
 
     kernel.ipc.on('settings:changed', ({ key, value }) => {
@@ -291,6 +312,13 @@ class AISubsystem {
   }
 
   async _callProvider(provider, prompt, options) {
+    // ── WebGPU local model shortcut ──
+    if (provider.name === 'webgpu-local') {
+      const localModel = this._kernel.localModel;
+      if (!localModel?.isReady) throw new Error('Local model not active');
+      return localModel.chat(prompt, options);
+    }
+
     const token = await this._kernel.auth.getToken();
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -384,9 +412,13 @@ class AISubsystem {
     const classified = classifyProvider(prompt);
     const preferredProvider = options.provider || this._config?.provider || classified;
 
+    // Persona-aware chain: nova → local-first, aura → cloud-only
+    const persona = options.persona || this._config?.persona || 'default';
+    const baseChain = PERSONA_CHAINS[persona] || PERSONA_CHAINS.default;
+
     const chain = preferredProvider
-      ? [preferredProvider, ...PROVIDER_CHAIN.filter(p => p !== preferredProvider)]
-      : PROVIDER_CHAIN;
+      ? [preferredProvider, ...baseChain.filter(p => p !== preferredProvider)]
+      : baseChain;
 
     let result = null;
     let lastError = null;
@@ -590,6 +622,78 @@ class AISubsystem {
       maxSize: MAX_CACHE_ENTRIES,
       ttlMs: CACHE_TTL_MS,
     };
+  }
+
+  // ─── Diagnostics ─────────────────────────────────────────────────────────
+
+  /**
+   * Deep health-check — pings the backend /ai/health-check endpoint which
+   * actually tests each provider with a tiny prompt. Returns per-provider
+   * status, latency, errors, key validity, plus local engine state.
+   */
+  async diagnose() {
+    const report = {
+      timestamp: new Date().toISOString(),
+      backend: { reachable: false, url: BACKEND_URL },
+      providers: {},
+      localModel: null,
+      cache: this.getCacheStats(),
+      queue: { high: this._queue.high.length, normal: this._queue.normal.length, low: this._queue.low.length },
+      pending: this._pending,
+    };
+
+    // 1. Backend reachability
+    try {
+      const token = await this._kernel.auth.getToken().catch(() => null);
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+
+      const res = await fetch(BACKEND_URL + '/ai/health-check', { headers, signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        const data = await res.json();
+        report.backend.reachable = true;
+        report.backend.status = data.status;
+        report.backend.summary = data.summary;
+        report.providers = data.providers || {};
+      } else {
+        report.backend.error = 'HTTP ' + res.status;
+      }
+    } catch (err) {
+      report.backend.error = err.name === 'TimeoutError' ? 'Backend unreachable (timeout 15s)' : err.message;
+    }
+
+    // 2. Overlay local provider state from AISubsystem
+    for (const [name, provider] of this._providers) {
+      const remote = report.providers[name] || {};
+      report.providers[name] = {
+        ...remote,
+        localState: {
+          available: provider.available,
+          requestCount: provider.requestCount,
+          errorCount: provider.errorCount,
+          successCount: provider.successCount,
+          avgQuality: Math.round(provider.avgQuality * 100) / 100,
+          lastError: provider.lastError,
+          rateLimited: this._isRateLimited(name),
+        },
+      };
+    }
+
+    // 3. Local model diagnostics
+    const lm = this._kernel.localModel;
+    if (lm) {
+      report.localModel = {
+        state: lm._state,
+        modelId: lm._modelId,
+        progress: lm._progress,
+        error: lm._error,
+        webgpuAvailable: !!navigator.gpu,
+        enabled: lm._enabled,
+      };
+    }
+
+    this._kernel.ipc.emit('ai:diagnostics', report);
+    return report;
   }
 
   // ─── Semantics Engine Integration ──────────────────────────────────────────

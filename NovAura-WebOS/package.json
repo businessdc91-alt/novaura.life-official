@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:platform": "cd platform && npm run build",
+    "build:os": "vite build",
+    "build:all": "cd platform && npm run build && cd .. && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

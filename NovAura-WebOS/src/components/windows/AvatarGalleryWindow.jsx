@@ -1,21 +1,9 @@
-import React, { useState, useMemo } from 'react';
-import { Search, Heart, Users, User, ArrowLeft, Eye, Grid, SortAsc } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Search, Heart, Users, User, ArrowLeft, Eye, Grid, SortAsc, Loader2 } from 'lucide-react';
 import { kernelStorage } from '../../kernel/kernelStorage.js';
 
-const COMMUNITY_AVATARS = [
-  { id: 'av1', name: 'Cyber Punk', creator: 'NeonRider', style: 'Cyberpunk', emoji: '🤖', body: 'athletic', colors: ['#00ffcc', '#ff00ff', '#1a1a2e'], views: 342 },
-  { id: 'av2', name: 'Forest Elf', creator: 'WoodlandArt', style: 'Fantasy', emoji: '🧝', body: 'slim', colors: ['#2ecc71', '#8b4513', '#f5f5dc'], views: 287 },
-  { id: 'av3', name: 'Space Captain', creator: 'StarForge', style: 'Sci-Fi', emoji: '👨‍🚀', body: 'muscular', colors: ['#3498db', '#ecf0f1', '#e74c3c'], views: 456 },
-  { id: 'av4', name: 'Sakura Girl', creator: 'AnimeVault', style: 'Anime', emoji: '🌸', body: 'petite', colors: ['#ff69b4', '#fff0f5', '#ff1493'], views: 523 },
-  { id: 'av5', name: 'Shadow Knight', creator: 'DarkForge', style: 'Gothic', emoji: '⚔️', body: 'muscular', colors: ['#2c3e50', '#7f8c8d', '#c0392b'], views: 398 },
-  { id: 'av6', name: 'Beach Vibes', creator: 'SunsetCrew', style: 'Casual', emoji: '🏖️', body: 'average', colors: ['#f39c12', '#e67e22', '#1abc9c'], views: 178 },
-  { id: 'av7', name: 'Neon Hacker', creator: 'CodeBreaker', style: 'Cyberpunk', emoji: '💻', body: 'slim', colors: ['#00ff00', '#000000', '#ff00ff'], views: 612 },
-  { id: 'av8', name: 'Dragon Mage', creator: 'MysticArts', style: 'Fantasy', emoji: '🐉', body: 'average', colors: ['#9b59b6', '#f1c40f', '#e74c3c'], views: 445 },
-  { id: 'av9', name: 'Street Racer', creator: 'TurboKid', style: 'Casual', emoji: '🏎️', body: 'athletic', colors: ['#e74c3c', '#2c3e50', '#f1c40f'], views: 234 },
-  { id: 'av10', name: 'Moon Priestess', creator: 'LunarWitch', style: 'Fantasy', emoji: '🌙', body: 'slim', colors: ['#9b59b6', '#ecf0f1', '#3498db'], views: 367 },
-  { id: 'av11', name: 'Mecha Pilot', creator: 'GundamFan', style: 'Sci-Fi', emoji: '🤖', body: 'muscular', colors: ['#2c3e50', '#3498db', '#e74c3c'], views: 498 },
-  { id: 'av12', name: 'Kawaii Cat', creator: 'NyaArts', style: 'Anime', emoji: '😺', body: 'petite', colors: ['#ff69b4', '#fff0f5', '#9b59b6'], views: 589 },
-];
+// Avatar Gallery - Loads from backend API or local storage
+// No demo data - only real uploaded avatars
 
 const STYLES = ['All', 'Cyberpunk', 'Fantasy', 'Sci-Fi', 'Anime', 'Gothic', 'Casual'];
 const BODY_TYPES = ['All', 'slim', 'average', 'athletic', 'muscular', 'petite'];
@@ -30,6 +18,28 @@ export default function AvatarGalleryWindow() {
     try { return JSON.parse(kernelStorage.getItem('avatar_favorites') || '[]'); } catch { return []; }
   });
   const [selected, setSelected] = useState(null);
+  const [communityAvatars, setCommunityAvatars] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load community avatars from backend
+  useEffect(() => {
+    const loadAvatars = async () => {
+      try {
+        setIsLoading(true);
+        const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+        const response = await fetch(`${BACKEND_URL}/avatars`);
+        if (response.ok) {
+          const data = await response.json();
+          setCommunityAvatars(data.avatars || []);
+        }
+      } catch (err) {
+        console.error('Failed to load avatars:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadAvatars();
+  }, []);
 
   const myAvatars = useMemo(() => {
     try { return JSON.parse(kernelStorage.getItem('saved_avatars') || '[]'); } catch { return []; }
@@ -42,7 +52,7 @@ export default function AvatarGalleryWindow() {
   };
 
   const filtered = useMemo(() => {
-    let list = tab === 'community' ? COMMUNITY_AVATARS : myAvatars.map((a, i) => ({
+    let list = tab === 'community' ? communityAvatars : myAvatars.map((a, i) => ({
       id: a.id || `my-${i}`, name: a.name || 'Untitled', creator: 'You', style: 'Custom',
       emoji: a.expression === 'happy' ? '😊' : a.expression === 'cool' ? '😎' : '🙂',
       body: a.body || 'average', colors: [a.skinColor || '#f5d0a9', a.hairColor || '#333', a.eyeColor || '#3498db'],
@@ -55,7 +65,7 @@ export default function AvatarGalleryWindow() {
     else if (sortBy === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
     else if (sortBy === 'favorites') list = list.filter(a => favorites.includes(a.id));
     return list;
-  }, [tab, search, styleFilter, bodyFilter, sortBy, favorites, myAvatars]);
+  }, [tab, search, styleFilter, bodyFilter, sortBy, favorites, myAvatars, communityAvatars]);
 
   // Detail view
   if (selected) {
@@ -158,12 +168,20 @@ export default function AvatarGalleryWindow() {
 
       {/* Grid */}
       <div className="flex-1 overflow-y-auto p-3">
-        {filtered.length === 0 ? (
+        {isLoading && tab === 'community' && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-6 h-6 text-slate-500 animate-spin" />
+          </div>
+        )}
+        
+        {!isLoading && filtered.length === 0 && (
           <div className="text-center py-8">
             <Users className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-            <div className="text-xs text-slate-500">{tab === 'mine' ? 'No saved avatars yet' : 'No matches'}</div>
+            <div className="text-xs text-slate-500">{tab === 'mine' ? 'No saved avatars yet' : 'No avatars in gallery'}</div>
           </div>
-        ) : (
+        )}
+        
+        {!isLoading && filtered.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
             {filtered.map(a => (
               <button key={a.id} onClick={() => setSelected(a)}

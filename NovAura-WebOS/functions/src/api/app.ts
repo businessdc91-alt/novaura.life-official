@@ -20,6 +20,8 @@ import syncRoutes from './routes/sync';
 import assetsRoutes from './routes/assets';
 import ordersRoutes from './routes/orders';
 import royaltiesRoutes from './routes/royalties';
+import adminKeysRoutes from './routes/admin-keys';
+import userKeysRoutes from './routes/user-keys';
 
 const app = express();
 
@@ -71,6 +73,8 @@ mountRoute('/sync', syncRoutes);
 mountRoute('/assets', assetsRoutes);
 mountRoute('/orders', ordersRoutes);
 mountRoute('/royalties', royaltiesRoutes);
+mountRoute('/admin/keys', adminKeysRoutes);
+mountRoute('/user/keys', userKeysRoutes);
 
 // Health check
 const healthHandler = (req: express.Request, res: express.Response) => {

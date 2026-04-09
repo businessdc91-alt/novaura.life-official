@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { kernelStorage } from '../kernel/kernelStorage.js';
 import {
   Clock, Cpu, Wifi, Activity, Bell, Settings, ChevronLeft, ChevronRight,
   Layers, Gauge, MemoryStick, Search,
@@ -15,7 +16,9 @@ import {
   // Logout icons
   LogOut, AlertTriangle, X,
   // Platform icons
-  ExternalLink, ArrowLeftFromLine
+  ExternalLink, ArrowLeftFromLine,
+  // Layout icons
+  Smartphone, Monitor
 } from 'lucide-react';
 
 // ─── App Registry ───
@@ -423,6 +426,27 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
               >
                 <Palette className="w-3 h-3" />
                 <span className="text-[10px]">Themes</span>
+              </button>
+              <button
+                onClick={() => {
+                  const current = kernelStorage.getItem('novaura_layout_mode');
+                  const newMode = current === 'mobile' ? 'desktop' : 'mobile';
+                  kernelStorage.setItem('novaura_layout_mode', newMode);
+                  window.location.reload();
+                }}
+                className="w-full flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white/5 transition-colors text-white/40 hover:text-white/70"
+              >
+                {kernelStorage.getItem('novaura_layout_mode') === 'mobile' ? (
+                  <>
+                    <Monitor className="w-3 h-3" />
+                    <span className="text-[10px]">Desktop Mode</span>
+                  </>
+                ) : (
+                  <>
+                    <Smartphone className="w-3 h-3" />
+                    <span className="text-[10px]">Mobile Mode</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

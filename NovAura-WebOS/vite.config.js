@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig(({ mode }) => ({
+  base: '/os/',
   plugins: [react()],
   resolve: {
     alias: {
@@ -14,6 +15,8 @@ export default defineConfig(({ mode }) => ({
     open: true,
   },
   build: {
+    outDir: path.resolve(__dirname, 'dist/os'),
+    emptyOutDir: true,
     rollupOptions: {
       input: mode === 'landing' 
         ? path.resolve(__dirname, 'src/landing-main.jsx')

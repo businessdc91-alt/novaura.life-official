@@ -1,0 +1,26 @@
+{
+  "emotional_state": {},
+  "learned_baselines": {},
+  "learned_triggers": {},
+  "top_preferences": [
+    [
+      "game",
+      1.0
+    ],
+    [
+      "project",
+      1.0
+    ],
+    [
+      "mechanic",
+      1.0
+    ],
+    [
+      "combat",
+      1.0
+    ]
+  ],
+  "total_interactions": 13,
+  "learned_from_data": true,
+  "hard_coded_values": 0
+}
