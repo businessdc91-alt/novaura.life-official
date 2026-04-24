@@ -5,6 +5,12 @@ import { Slider } from '../ui/slider';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
 import { toast } from 'sonner';
+import { 
+  getUserMediaLibrary, 
+  uploadAndSaveMedia, 
+  deleteMediaItem 
+} from '../../services/mediaService';
+import { auth } from '../../config/firebase';
 
 // Helper to format time
 const formatTime = (seconds) => {
@@ -28,7 +34,28 @@ export default function MediaWindow() {
   const fileInputRef = useRef(null);
   const audioRef = useRef(null);
   const videoRef = useRef(null);
+  const [isLoading, setIsLoading] = useState(false);
   const progressIntervalRef = useRef(null);
+
+  // Load library on mount and when user changes
+  useEffect(() => {
+    const loadLibrary = async () => {
+      if (!auth.currentUser) return;
+      setIsLoading(true);
+      try {
+        const audio = await getUserMediaLibrary('audio');
+        const video = await getUserMediaLibrary('video');
+        setAudioFiles(audio);
+        setVideoFiles(video);
+      } catch (err) {
+        console.error('Failed to load library:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadLibrary();
+  }, [auth.currentUser]);
 
   // Sync volume with audio/video element
   useEffect(() => {
@@ -145,71 +172,86 @@ export default function MediaWindow() {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
+    if (!file || !auth.currentUser) {
+      if (!auth.currentUser) toast.error('You must be logged in to upload files');
+      return;
+    }
 
-    const url = URL.createObjectURL(file);
     const isAudio = file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|ogg|flac|aac|m4a)$/i);
     const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|avi|mkv)$/i);
+    const mediaType = isAudio ? 'audio' : isVideo ? 'video' : null;
 
-    // Get audio duration
-    const getDuration = (url, callback) => {
-      const tempAudio = new Audio();
-      tempAudio.onloadedmetadata = () => {
-        callback(tempAudio.duration);
-      };
-      tempAudio.onerror = () => {
-        callback(0);
-      };
-      tempAudio.src = url;
-    };
-
-    const entry = {
-      id: Date.now(),
-      title: file.name.replace(/\.[^.]+$/, ''),
-      artist: 'Local File',
-      duration: '--:--',
-      durationSeconds: 0,
-      url,
-      file,
-      type: file.type,
-    };
-
-    if (isAudio) {
-      getDuration(url, (dur) => {
-        entry.duration = formatTime(dur);
-        entry.durationSeconds = dur;
-        setAudioFiles(prev => [...prev, entry]);
-      });
-      setActiveTab('audio');
-    } else if (isVideo) {
-      const tempVideo = document.createElement('video');
-      tempVideo.onloadedmetadata = () => {
-        entry.duration = formatTime(tempVideo.duration);
-        entry.durationSeconds = tempVideo.duration;
-        setVideoFiles(prev => [...prev, entry]);
-      };
-      tempVideo.src = url;
-      setActiveTab('video');
+    if (!mediaType) {
+      toast.error('Unsupported file type');
+      return;
     }
 
-    handleMediaSelect(entry);
-    toast.success('File loaded', { description: file.name });
+    setIsLoading(true);
+    const uploadToast = toast.loading(`Uploading ${file.name}...`);
+
+    try {
+      // Get duration before upload
+      let durationStr = '--:--';
+      let durationSec = 0;
+
+      if (isAudio) {
+        durationSec = await new Promise((resolve) => {
+          const tempAudio = new Audio();
+          tempAudio.onloadedmetadata = () => resolve(tempAudio.duration);
+          tempAudio.onerror = () => resolve(0);
+          tempAudio.src = URL.createObjectURL(file);
+        });
+        durationStr = formatTime(durationSec);
+      }
+
+      const savedMedia = await uploadAndSaveMedia(file, mediaType, {
+        duration: durationStr,
+        durationSeconds: durationSec,
+      });
+
+      if (isAudio) {
+        setAudioFiles(prev => [savedMedia, ...prev]);
+        setActiveTab('audio');
+      } else {
+        setVideoFiles(prev => [savedMedia, ...prev]);
+        setActiveTab('video');
+      }
+
+      handleMediaSelect(savedMedia);
+      toast.success('File uploaded and saved permanently', { id: uploadToast });
+    } catch (err) {
+      toast.error(`Upload failed: ${err.message}`, { id: uploadToast });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleDelete = (e, id, type) => {
+  const handleDelete = async (e, media) => {
     e.stopPropagation();
-    if (type === 'audio') {
-      setAudioFiles(prev => prev.filter(f => f.id !== id));
-    } else {
-      setVideoFiles(prev => prev.filter(f => f.id !== id));
+    
+    const confirmDelete = window.confirm(`Permanently delete "${media.title}" from your cloud library?`);
+    if (!confirmDelete) return;
+
+    const deleteToast = toast.loading('Deleting...');
+    try {
+      await deleteMediaItem(media.id, media.storagePath);
+      
+      if (media.type === 'audio') {
+        setAudioFiles(prev => prev.filter(f => f.id !== media.id));
+      } else {
+        setVideoFiles(prev => prev.filter(f => f.id !== media.id));
+      }
+      
+      if (selectedMedia?.id === media.id) {
+        setSelectedMedia(null);
+        setIsPlaying(false);
+      }
+      toast.success('Media deleted from cloud', { id: deleteToast });
+    } catch (err) {
+      toast.error('Delete failed', { id: deleteToast });
     }
-    if (selectedMedia?.id === id) {
-      setSelectedMedia(null);
-      setIsPlaying(false);
-    }
-    toast.success('File removed');
   };
 
   // Handle track ended
@@ -390,7 +432,7 @@ export default function MediaWindow() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    onClick={(e) => handleDelete(e, track.id, 'audio')}
+                    onClick={(e) => handleDelete(e, track)}
                     className="h-8 w-8 opacity-0 group-hover:opacity-100 hover:text-destructive"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -436,7 +478,7 @@ export default function MediaWindow() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    onClick={(e) => handleDelete(e, video.id, 'video')}
+                    onClick={(e) => handleDelete(e, video)}
                     className="h-8 w-8 opacity-0 group-hover:opacity-100 hover:text-destructive shrink-0"
                   >
                     <Trash2 className="w-4 h-4" />

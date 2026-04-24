@@ -20,8 +20,10 @@ import syncRoutes from './routes/sync';
 import assetsRoutes from './routes/assets';
 import ordersRoutes from './routes/orders';
 import royaltiesRoutes from './routes/royalties';
+import emailRoutes from './routes/email';
 import adminKeysRoutes from './routes/admin-keys';
 import userKeysRoutes from './routes/user-keys';
+import prereleaseRoutes from './routes/prerelease';
 
 const app = express();
 
@@ -60,6 +62,7 @@ const mountRoute = (path: string, router: express.Router) => {
   app.use(`/api${path}`, router);
 };
 
+mountRoute('/email', emailRoutes);
 mountRoute('/auth', authRoutes);
 mountRoute('/ai', aiRoutes);
 mountRoute('/domains', domainsRoutes);
@@ -75,6 +78,7 @@ mountRoute('/orders', ordersRoutes);
 mountRoute('/royalties', royaltiesRoutes);
 mountRoute('/admin/keys', adminKeysRoutes);
 mountRoute('/user/keys', userKeysRoutes);
+mountRoute('/prerelease', prereleaseRoutes);
 
 // Health check
 const healthHandler = (req: express.Request, res: express.Response) => {

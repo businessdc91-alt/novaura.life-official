@@ -1,5 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { kernelStorage } from '../kernel/kernelStorage.js';
+import { useSystemTelemetry } from '../hooks/useSystemTelemetry';
+import { useAuthStore } from '../../platform/src/stores/authStore';
 import {
   Clock, Cpu, Wifi, Activity, Bell, Settings, ChevronLeft, ChevronRight,
   Layers, Gauge, MemoryStick, Search,
@@ -14,12 +16,14 @@ import {
   BellRing, Grid as GridIcon, Shield, Briefcase, Sparkles,
   CloudSun, Bitcoin, Calculator, Package, Smile,
   // Logout icons
-  LogOut, AlertTriangle, X,
+  LogOut, AlertTriangle, X, Mail,
   // Platform icons
   ExternalLink, ArrowLeftFromLine,
   // Layout icons
   Smartphone, Monitor
 } from 'lucide-react';
+
+import { AIOrchestrator } from '../utils/AIOrchestrator.js';
 
 // ─── App Registry ───
 const APP_CATEGORIES = [
@@ -71,11 +75,14 @@ const APP_CATEGORIES = [
   {
     id: 'ai', label: 'AI', color: 'text-blue-400',
     apps: [
+      { type: 'social', label: 'Social Network', icon: MessageSquare },
+      { type: 'direct-messenger', label: 'Contact Founder', icon: Mail },
       { type: 'chat', label: 'Chat', icon: MessageSquare },
       { type: 'voice', label: 'Voice', icon: Phone },
       { type: 'live-ai', label: 'Nova Live', icon: Radio },
       { type: 'ai-assistant', label: 'Assistant', icon: Brain },
       { type: 'ai-companion', label: 'Nova AI', icon: Bot },
+      { type: 'local-nova', label: 'Local Nova', icon: Zap },
       { type: 'vertex', label: 'Vertex AI', icon: Palette },
       { type: 'imagen', label: 'Imagen', icon: Sparkles },
       { type: 'bg-remover', label: 'BG Remove', icon: Eraser },
@@ -91,24 +98,32 @@ const APP_CATEGORIES = [
       { type: 'business-card', label: 'Biz Cards', icon: CreditCard },
       { type: 'tax-filing', label: 'Tax Filing', icon: FileText },
       { type: 'weather', label: 'Weather', icon: CloudSun },
+      { type: 'system-diagnostics', label: 'System Health', icon: Activity },
       { type: 'crypto', label: 'Crypto', icon: Bitcoin },
       { type: 'calculator', label: 'Calculator', icon: Calculator },
       { type: 'notifications', label: 'Alerts', icon: BellRing },
       { type: 'profile', label: 'Profile', icon: User },
       { type: 'appstore', label: 'Repo Station', icon: Store },
+      { type: 'platform', label: 'NovAura Platform', icon: ShoppingBag },
     ],
   },
   {
     id: 'business', label: 'Business', color: 'text-orange-400',
     apps: [
-      { type: 'business-operator', label: 'Operator', icon: Briefcase },
-      { type: 'nova-concierge', label: 'Nova Biz', icon: Sparkles },
+      { type: 'business-operator', label: 'Venture Orchestrator', icon: Briefcase },
+      { type: 'nova-concierge', label: 'Ecosystem Manager', icon: Sparkles },
     ],
   },
   {
     id: 'admin', label: 'Admin', color: 'text-red-400',
     apps: [
       { type: 'admin-panel', label: 'Admin Panel', icon: Shield },
+    ],
+  },
+  {
+    id: 'founders', label: 'Founders', color: 'text-amber-400',
+    apps: [
+      { type: 'founding-father-chat', label: 'Founding Fathers Lounge', icon: Crown },
     ],
   },
   {
@@ -125,14 +140,25 @@ const APP_CATEGORIES = [
   },
 ];
 
-function SystemWidget({ icon: Icon, label, value }) {
+
+function SystemWidget({ icon: Icon, label, value, progress, color = 'text-primary' }) {
   return (
-    <div className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white/5 transition-colors group">
-      <Icon className="w-3 h-3 text-primary/50 group-hover:text-primary/80" />
-      <div className="flex-1 min-w-0">
-        <p className="text-[8px] text-white/30 leading-none">{label}</p>
-        <p className="text-[10px] text-white/70 font-medium leading-tight truncate">{value}</p>
+    <div className="flex flex-col gap-1 px-2 py-1 rounded-lg hover:bg-white/5 transition-colors group">
+      <div className="flex items-center gap-2">
+        <Icon className={`w-3 h-3 ${color}/50 group-hover:${color}/80`} />
+        <div className="flex-1 min-w-0">
+          <p className="text-[8px] text-white/30 leading-none">{label}</p>
+          <p className="text-[10px] text-white/70 font-medium leading-tight truncate">{value}</p>
+        </div>
       </div>
+      {progress !== undefined && (
+        <div className="h-0.5 w-full bg-white/5 rounded-full overflow-hidden">
+          <div 
+            className={`h-full ${color.replace('text-', 'bg-')} transition-all duration-500`} 
+            style={{ width: `${progress}%` }} 
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -147,6 +173,7 @@ const PINNED_APPS = [
   { type: 'terminal',      label: 'Terminal',     icon: Terminal },
   { type: 'browser',       label: 'Browser',      icon: Globe },
   { type: 'appstore',      label: 'Repo Station', icon: Store },
+  { type: 'platform',      label: 'NovAura Platform', icon: ShoppingBag },
   { type: 'profile',       label: 'Profile',      icon: User },
 ];
 
@@ -180,12 +207,12 @@ function RailButton({ icon: Icon, label, color = 'text-white/40', onClick }) {
 }
 
 // Rail button with neon glow + click-to-open dropdown
-function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen }) {
+function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen, status }) {
   return (
     <div className="relative">
       <button
         onClick={onToggle}
-        className="flex items-center justify-center w-8 h-8 rounded-lg transition-all"
+        className="relative flex items-center justify-center w-8 h-8 rounded-lg transition-all group"
         style={{
           background: isOpen ? 'rgba(57,255,20,0.08)' : 'transparent',
           boxShadow: isOpen ? '0 0 10px rgba(57,255,20,0.15)' : 'none',
@@ -202,6 +229,11 @@ function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen }) {
           onMouseEnter={e => { if (!isOpen) { e.currentTarget.style.color = '#39ff14'; e.currentTarget.style.filter = 'drop-shadow(0 0 6px #39ff14)'; }}}
           onMouseLeave={e => { if (!isOpen) { e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; e.currentTarget.style.filter = 'none'; }}}
         />
+        {status && (
+          <div className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full border border-black shadow-sm ${
+            status === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
+          }`} />
+        )}
       </button>
       {isOpen && (
         <div className="absolute left-full ml-2.5 top-0 z-[900] min-w-[160px] overflow-hidden"
@@ -235,13 +267,19 @@ function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen }) {
 }
 
 // ─── LEFT SIDEBAR: App Launcher ───
-export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, className = '' }) {
+export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, windowCount, telemetry }) {
   const [collapsed, setCollapsed] = useState(true);
   const [time, setTime] = useState(new Date());
   const [search, setSearch] = useState('');
-  const [expandedCats, setExpandedCats] = useState({ creative: true, writing: true, dev: true, media: true, ai: true, utility: false, admin: false, learn: true });
+  const [expandedCats, setExpandedCats] = useState({ creative: true, writing: true, dev: true, media: true, ai: true, utility: false, admin: false, learn: true, founders: true });
   const [showSystem, setShowSystem] = useState(false);
   const [openDropdown, setOpenDropdown] = useState(null);
+
+  const suggestions = useMemo(() => {
+    if (windows.length === 0) return [];
+    const activeType = windows[windows.length - 1]?.type;
+    return AIOrchestrator.getSuggestions(activeType);
+  }, [windows]);
 
   React.useEffect(() => {
     const interval = setInterval(() => setTime(new Date()), 1000);
@@ -253,14 +291,40 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
 
   const toggleCat = (id) => setExpandedCats(prev => ({ ...prev, [id]: !prev[id] }));
 
-  const filteredCategories = useMemo(() => {
-    if (!search.trim()) return APP_CATEGORIES;
-    const q = search.toLowerCase();
-    return APP_CATEGORIES.map(cat => ({
-      ...cat,
-      apps: cat.apps.filter(a => a.label.toLowerCase().includes(q) || a.type.toLowerCase().includes(q)),
-    })).filter(cat => cat.apps.length > 0);
+  const { isOwner } = useAuthStore();
+  const ownerMode = isOwner();
+
+  const intentResult = useMemo(() => {
+    if (!search.trim()) return null;
+    return AIOrchestrator.matchIntent(search);
   }, [search]);
+
+  const filteredCategories = useMemo(() => {
+    // Determine access levels
+    const isFounder = ['catalyst-crew-founders', 'strategic-investor', 'founding-catalyst', 'founding-nova', 'founding-spark'].includes(userTier);
+    const isAdminEligible = ['catalyst-crew-founders', 'strategic-investor', 'founding-catalyst'].includes(userTier) || ownerMode;
+
+    let categories = APP_CATEGORIES;
+
+    // Filter by tier-based visibility
+    categories = categories.filter(cat => {
+      if (cat.id === 'admin') return isAdminEligible;
+      if (cat.id === 'founders') return isFounder || ownerMode;
+      return true;
+    });
+
+    if (!search.trim()) return categories;
+    const q = search.toLowerCase();
+    
+    // Semantic search - include app keywords if possible (future optimization)
+    return categories.map(cat => ({
+      ...cat,
+      apps: cat.apps.filter(a => 
+        a.label.toLowerCase().includes(q) || 
+        a.type.toLowerCase().includes(q)
+      ),
+    })).filter(cat => cat.apps.length > 0);
+  }, [search, ownerMode]);
 
   if (collapsed) {
     return (
@@ -279,16 +343,20 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
 
             {/* Pinned app icons — scrollable */}
             <div className="flex flex-col items-center gap-1 overflow-y-auto max-h-[55vh]" style={{ scrollbarWidth: 'none' }}>
-              {PINNED_APPS.map(app => (
-                <RailDropButton
-                  key={app.type}
-                  icon={app.icon}
-                  label={app.label}
-                  isOpen={openDropdown === app.type}
-                  onToggle={() => setOpenDropdown(openDropdown === app.type ? null : app.type)}
-                  onOpen={() => { onOpenWindow?.(app.type, app.label); setOpenDropdown(null); }}
-                />
-              ))}
+              {PINNED_APPS.map(app => {
+                const isAIApp = ['chat', 'voice', 'live-ai', 'ai-assistant', 'ai-companion', 'vertex', 'imagen', 'pixai'].includes(app.type);
+                return (
+                  <RailDropButton
+                    key={app.type}
+                    icon={app.icon}
+                    label={app.label}
+                    isOpen={openDropdown === app.type}
+                    onToggle={() => setOpenDropdown(openDropdown === app.type ? null : app.type)}
+                    onOpen={() => { onOpenWindow?.(app.type, app.label); setOpenDropdown(null); }}
+                    status={isAIApp ? (telemetry?.aiReachable ? 'ok' : 'error') : null}
+                  />
+                );
+              })}
             </div>
 
             {/* Divider + clock */}
@@ -324,7 +392,13 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search apps..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && intentResult) {
+                    onOpenWindow?.(intentResult.appType, intentResult.label, intentResult.params);
+                    setSearch('');
+                  }
+                }}
+                placeholder="Intent / Search..."
                 className="w-full pl-7 pr-2 py-1 bg-white/5 border border-white/[0.06] rounded-lg text-[10px] text-white placeholder-white/20 focus:outline-none focus:border-primary/30"
               />
             </div>
@@ -332,6 +406,37 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
 
           {/* App List */}
           <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5 scrollbar-thin">
+            {/* Semantic Intent Suggestion */}
+            {intentResult && (
+              <div className="mb-3 px-1">
+                <button
+                  onClick={() => onOpenWindow?.(intentResult.appType, intentResult.label, intentResult.params)}
+                  className="w-full flex flex-col gap-1 p-2 rounded-lg bg-gradient-to-br from-primary/20 to-blue-500/5 border border-primary/30 hover:border-primary/60 transition-all group overflow-hidden relative"
+                >
+                  <div className="absolute top-0 right-0 p-1 opacity-20 group-hover:opacity-40 transition-opacity">
+                    <Sparkles className="w-8 h-8 text-primary" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Bot className="w-3 h-3 text-primary animate-pulse" />
+                    <span className="text-[10px] font-bold text-primary uppercase tracking-tighter">Aura Intelligence</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-white/90 font-medium">{intentResult.label}</span>
+                    <ChevronRight className="w-3 h-3 text-white/20 group-hover:text-primary transition-colors" />
+                  </div>
+                  <p className="text-[8px] text-white/40 italic truncate">"{search}"</p>
+                </button>
+                <div className="h-px w-full bg-white/[0.06] mt-3" />
+              </div>
+            )}
+
+            {filteredCategories.length === 0 && !intentResult && (
+              <div className="py-8 text-center">
+                <Search className="w-6 h-6 text-white/5 mx-auto mb-2" />
+                <p className="text-[10px] text-white/20">No matching apps found</p>
+              </div>
+            )}
+
             {filteredCategories.map(cat => (
               <div key={cat.id}>
                 <button
@@ -339,21 +444,56 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
                   className="w-full flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-white/5 transition-colors"
                 >
                   {expandedCats[cat.id] ? <ChevronDown className="w-2.5 h-2.5 text-white/30" /> : <ChevronRight className="w-2.5 h-2.5 text-white/30" />}
-                  <span className={`text-[9px] font-semibold uppercase tracking-wider ${cat.color}`}>{cat.label}</span>
-                  <span className="text-[8px] text-white/20 ml-auto">{cat.apps.length}</span>
+                  <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[9px] font-semibold uppercase tracking-wider ${cat.color}`}>{cat.label}</span>
+                    {cat.id === 'ai' && (
+                      <div className="flex items-center gap-1 px-1 py-0.5 rounded-full bg-white/5 border border-white/10">
+                        <div className={`w-1 h-1 rounded-full ${
+                          telemetry?.aiStatus === 'Healthy' ? 'bg-emerald-500 animate-pulse' : 
+                          telemetry?.aiStatus === 'Standby' ? 'bg-amber-500' : 'bg-white/20'
+                        }`} />
+                        <span className="text-[6px] text-white/40 uppercase font-bold">
+                          {telemetry?.aiStatus === 'Healthy' ? 'Active' : telemetry?.aiStatus === 'Standby' ? 'Hibernating (Cost Optimized)' : telemetry?.aiStatus || 'Offline'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {cat.apps.length > 5 && (
+                    <span className="text-[8px] text-white/20 font-mono">[{cat.apps.length}]</span>
+                  )}
+                </div>
                 </button>
                 {expandedCats[cat.id] && (
                   <div className="ml-1 space-y-px">
                     {cat.apps.map(app => {
                       const Icon = app.icon;
+                      const isAIApp = ['chat', 'voice', 'live-ai', 'ai-assistant', 'ai-companion', 'vertex', 'imagen', 'pixai'].includes(app.type);
                       return (
                         <button
                           key={app.type}
                           onClick={() => onOpenWindow?.(app.type, app.label)}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.07] transition-all group text-left"
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.07] transition-all group text-left relative"
                         >
-                          <Icon className="w-3.5 h-3.5 text-white/40 group-hover:text-white/80 transition-colors shrink-0" />
-                          <span className="text-[11px] text-white/60 group-hover:text-white/90 truncate">{app.label}</span>
+                          <div className="relative">
+                            <Icon className="w-3.5 h-3.5 text-white/40 group-hover:text-white/80 transition-colors shrink-0" />
+                            {isAIApp && (
+                              <div className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-black shadow-sm ${
+                                telemetry?.aiReachable ? 'bg-emerald-500 animate-pulse' : 
+                                telemetry?.aiStatus === 'Checking...' ? 'bg-amber-500' : 'bg-red-500'
+                              }`} />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[11px] text-white/60 group-hover:text-white/90 truncate block">{app.label}</span>
+                            {isAIApp && (
+                              <span className={`text-[7px] uppercase tracking-tighter leading-none ${
+                                telemetry?.aiStatus === 'Healthy' ? 'text-white/40' : 'text-white/20'
+                              }`}>
+                                {telemetry?.aiStatus === 'Healthy' ? 'Active' : telemetry?.aiStatus || 'Standby'}
+                              </span>
+                            )}
+                          </div>
                         </button>
                       );
                     })}
@@ -362,6 +502,28 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
               </div>
             ))}
           </div>
+
+          {/* Contextual Suggestions - Shown when not searching */}
+          {!search && suggestions.length > 0 && (
+            <div className="shrink-0 border-t border-white/[0.06] p-2 bg-gradient-to-b from-transparent to-white/[0.02]">
+              <div className="flex items-center gap-1.5 mb-2 px-1">
+                <Activity className="w-2.5 h-2.5 text-primary/50" />
+                <span className="text-[8px] text-white/30 font-semibold uppercase tracking-wider">Suggested Next</span>
+              </div>
+              <div className="grid grid-cols-1 gap-1">
+                {suggestions.map(s => (
+                  <button
+                    key={s.type}
+                    onClick={() => onOpenWindow?.(s.type, s.label)}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.04] hover:bg-white/[0.08] hover:border-white/[0.1] transition-all group"
+                  >
+                    <s.icon className="w-3 h-3 text-white/40 group-hover:text-primary transition-colors" />
+                    <span className="text-[9px] text-white/60 group-hover:text-white/90">{s.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Exit to Platform */}
           <div className="shrink-0 border-t border-white/[0.06] px-2 pb-2">
@@ -398,11 +560,38 @@ export function LeftSidebar({ windowCount = 0, onOpenWindow, onExitToPlatform, c
             </button>
             {showSystem && (
               <div className="px-2 pb-2 space-y-0.5">
-                <SystemWidget icon={Cpu} label="CPU" value="Ready" />
-                <SystemWidget icon={MemoryStick} label="Memory" value={`${navigator.deviceMemory || '?'} GB`} />
-                <SystemWidget icon={Gauge} label="GPU" value={navigator.gpu ? 'WebGPU' : 'WebGL'} />
-                <SystemWidget icon={Wifi} label="Network" value={navigator.onLine ? 'Online' : 'Offline'} />
-                <SystemWidget icon={Layers} label="Windows" value={`${windowCount} open`} />
+                <SystemWidget 
+                  icon={Cpu} 
+                  label="CPU" 
+                  value={`${telemetry.cpuUsage}% (${telemetry.cpuCores} Cores)`} 
+                  progress={telemetry.cpuUsage}
+                  color={telemetry.cpuUsage > 80 ? 'text-red-400' : 'text-cyan-400'}
+                />
+                <SystemWidget 
+                  icon={MemoryStick} 
+                  label="Memory" 
+                  value={`${telemetry.memoryUsed.toFixed(1)} / ${telemetry.memoryTotal} GB`} 
+                  progress={(telemetry.memoryUsed / telemetry.memoryTotal) * 100}
+                  color="text-purple-400"
+                />
+                <SystemWidget 
+                  icon={Gauge} 
+                  label="GPU" 
+                  value={telemetry.gpuStatus} 
+                  color="text-emerald-400"
+                />
+                <SystemWidget 
+                  icon={Wifi} 
+                  label="Network" 
+                  value={`${telemetry.isOnline ? telemetry.networkType : 'Offline'} (${telemetry.networkSpeed} Mbps)`} 
+                  color={telemetry.isOnline ? 'text-blue-400' : 'text-white/20'}
+                />
+                <SystemWidget 
+                  icon={Layers} 
+                  label="Windows" 
+                  value={`${windowCount} active sessions`} 
+                  color="text-amber-400"
+                />
               </div>
             )}
             <div className="px-2 pb-2 space-y-0.5">
@@ -464,7 +653,6 @@ const GAMES = [
 ];
 
 const SOCIAL = [
-  { id: 'appstore', title: 'Repo Station', desc: 'Repo Station', icon: ShoppingBag, windowType: 'appstore', ready: true },
   { id: 'community', title: 'Community', desc: 'Connect & Share', icon: Users, windowType: 'social', ready: true },
 ];
 
@@ -485,15 +673,12 @@ export function RightSidebar({ onOpenGame, onOpenWindow, onLogout, className = '
       <div className={`fixed right-0 top-1/2 -translate-y-1/2 z-[800] pointer-events-auto ${className}`}>
         <div className="flex flex-col items-center gap-1 py-3 px-1.5 bg-black/60 backdrop-blur-sm border border-white/[0.06] border-r-0 rounded-l-xl">
           {/* Expand */}
-          <button
-            onClick={() => setCollapsed(false)}
-            className="relative group flex items-center justify-center w-8 h-8 rounded-lg hover:bg-white/10 transition-all"
-          >
-            <ChevronLeft className="w-4 h-4 text-white/30 group-hover:text-white/60 transition-colors" />
-            <span className="absolute right-full mr-2.5 z-50 px-2.5 py-1 rounded-lg bg-black/90 backdrop-blur-sm border border-white/[0.08] text-[11px] text-white/85 font-medium whitespace-nowrap pointer-events-none opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 ease-out">
-              Games & More
-            </span>
-          </button>
+          <RailDropButton 
+            icon={ChevronLeft} 
+            label="Games & More" 
+            isOpen={false} 
+            onToggle={() => setCollapsed(false)} 
+          />
 
           <div className="w-5 h-px bg-white/[0.06] my-1" />
 

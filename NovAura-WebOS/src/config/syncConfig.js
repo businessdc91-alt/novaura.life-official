@@ -80,7 +80,10 @@ export function getCurrentHost() {
   if (hostname === 'novaura.life') return 'primary';
   if (hostname === 'www.novaura.life') return 'secondary';
   if (hostname === 'staff.novaura.life') return 'staff';
-  return 'development';
+  
+  // Restricted mode for unknown domains (like localhost) in production environment
+  console.warn(`[Security] Unauthorized host detected: ${hostname}. Running in restricted mode.`);
+  return 'restricted';
 }
 
 // Get sync endpoint based on current host

@@ -8,9 +8,12 @@ declare global {
       userId?: string;
       userEmail?: string;
       userTier?: string;
+      unlimitedCredits?: boolean;
     }
   }
 }
+
+const SUPERUSERS = ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'];
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
@@ -26,6 +29,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const decoded = await admin.auth().verifyIdToken(token);
     req.userId = decoded.uid;
     req.userEmail = decoded.email || '';
+    
+    // Check for superuser status
+    if (req.userEmail && SUPERUSERS.includes(req.userEmail)) {
+      req.userTier = 'catalyst';
+      req.unlimitedCredits = true;
+    }
+    
     next();
   } catch (err) {
     console.error('Auth error:', err);

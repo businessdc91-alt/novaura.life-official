@@ -111,7 +111,7 @@ function getTemp(traits, passType) {
 
 // Vertex is Gemini hosted on separate Google Cloud infra — same models, different endpoint.
 // If gemini is down, vertex is almost certainly still up (and vice versa).
-const FALLBACK_ORDER = ['gemini', 'vertex', 'claude', 'openai', 'kimi'];
+const FALLBACK_ORDER = ['gemini', 'vertex', 'claude', 'kimi'];
 
 async function callAI(provider, prompt, temp, isCancelled, _log) {
   if (isCancelled()) throw new Error('CANCELLED');

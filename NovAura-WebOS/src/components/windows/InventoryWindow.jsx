@@ -1,10 +1,16 @@
-import React, { useState, useMemo } from 'react';
-import { kernelStorage } from '../../kernel/kernelStorage.js';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Package, Layers, Swords, Code2, ImageIcon, BookOpen, ArrowLeftRight,
   Plus, Trash2, Search, Filter, Star, Zap, Shield, Heart, ChevronRight,
-  Send, Check, X, Link, Clock, Users, Sparkles, Eye
+  Send, Check, X, Link, Clock, Users, Sparkles, Eye, Loader2
 } from 'lucide-react';
+import { 
+  getUserAssets, saveAsset, deleteAsset,
+  getUserDecks, saveDeck as dbSaveDeck,
+  listenToTrades, createTrade as dbCreateTrade, respondToTrade
+} from '../../services/assetService.js';
+import { kernel } from '../../kernel/NovaKernel.js';
+import { toast } from 'sonner';
 
 
 // ─── Import Aetherium card DB ─────────────────────────────────────────────────
@@ -29,6 +35,10 @@ const CARD_DB = [
   { id:'trap-001', name:'Gear Trap', type:'trap', faction:'cogborn', element:'chrome', rarity:'common', cost:1, abilities:[{name:'Gear Trap',description:'Negate attack, deal 2 to attacker.',type:'chain'}], flavor:'The gears grind those who trespass.', art:'⚠️' },
   { id:'trap-002', name:'Firewall Protocol', type:'trap', faction:'nanoswarm', element:'nano', rarity:'rare', cost:3, abilities:[{name:'Firewall Protocol',description:'Negate spell, draw 2 cards.',type:'chain'}], flavor:'Access denied.', art:'🛡️' },
   { id:'trap-003', name:'Void Mirror', type:'trap', faction:'voidforge', element:'void', rarity:'epic', cost:4, abilities:[{name:'Void Mirror',description:'Reflect enemy effect back.',type:'chain'}], flavor:'Gaze into the void, and it gazes back.', art:'🪞' },
+  { id:'spell-001', name:'Overclock', type:'spell', faction:'cogborn', element:'steam', rarity:'common', cost:2, abilities:[{name:'Overclock',description:'Target +2/+0, can attack again.',type:'activated'}], flavor:'Push beyond the limits.', art:'⚡' },
+  { id:'spell-002', name:'Nanoswarm Surge', type:'spell', faction:'nanoswarm', element:'nano', rarity:'rare', cost:4, abilities:[{name:'Nanoswarm Surge',description:'Summon 3 Nanite tokens (0/1).',type:'activated'}], flavor:'The swarm awakens.', art:'🌊' },
+  { id:'spell-003', name:'Quantum Entanglement', type:'spell', faction:'nanoswarm', element:'void', rarity:'epic', cost:5, abilities:[{name:'Quantum Entanglement',description:'Steal enemy construct for 1 turn.',type:'activated'}], flavor:'Distance is an illusion.', art:'🔗' },
+  { id:'spell-004', name:'Emergency Shutdown', type:'spell', faction:'neutral', element:'chrome', rarity:'uncommon', cost:3, abilities:[{name:'Emergency Shutdown',description:'Tap all constructs. No untap next turn.',type:'activated'}], flavor:'Sometimes the only solution is to start over.', art:'🛑' },
   { id:'ench-001', name:'Steamworks Blessing', type:'enchantment', faction:'steamwright', element:'steam', rarity:'uncommon', cost:2, abilities:[{name:'Steamworks Blessing',description:'All your constructs +1/+1.',type:'passive'}], flavor:'The machines sing in harmony.', art:'🌟' },
   { id:'ench-002', name:'Digital Domain', type:'enchantment', faction:'nanoswarm', element:'nano', rarity:'rare', cost:4, abilities:[{name:'Digital Domain',description:'Nano constructs untargetable.',type:'passive'}], flavor:'In the realm of data, we are gods.', art:'💻' },
   { id:'gear-001', name:'Chrono Gauntlet', type:'gear', faction:'cogborn', element:'steam', rarity:'rare', cost:3, atkBonus:2, abilities:[{name:'Chrono Gauntlet',description:'+2/+0. On attack: extra main phase.',type:'passive'}], flavor:'Time bends to the will of brass.', art:'🧤' },
@@ -51,13 +61,9 @@ const TABS = [
   { id:'trades', label:'Trades',          icon:ArrowLeftRight },
 ];
 
-// ─── Storage helpers ──────────────────────────────────────────────────────────
-const load = (key, def) => { try { return JSON.parse(kernelStorage.getItem(key) ?? 'null') ?? def; } catch { return def; } };
-const save = (key, val) => { try { kernelStorage.setItem(key, JSON.stringify(val)); } catch {} };
-
 // ─── Mini card component ──────────────────────────────────────────────────────
 function MiniCard({ card, onClick, selected, inDeck, count }) {
-  const TypeIcon = TYPE_ICON[card.type] || Package;
+  if (!card) return null;
   return (
     <button
       onClick={onClick}
@@ -91,7 +97,6 @@ function MiniCard({ card, onClick, selected, inDeck, count }) {
 // ─── Card detail panel ────────────────────────────────────────────────────────
 function CardDetail({ card, onClose, onAddToDeck, deckCount }) {
   if (!card) return null;
-  const TypeIcon = TYPE_ICON[card.type] || Package;
   return (
     <div className="flex flex-col h-full bg-slate-900 border-l border-slate-700">
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
@@ -120,13 +125,9 @@ function CardDetail({ card, onClose, onAddToDeck, deckCount }) {
               <div className="text-white font-bold">{card.defense}</div>
             </div>
           </>}
-          {card.tribute && <div className="bg-amber-900/40 rounded p-2">
-            <div className="text-amber-300 text-xs">Tribute</div>
-            <div className="text-white font-bold">{card.tribute}</div>
-          </div>}
         </div>
         <div className="space-y-2">
-          {card.abilities.map((ab, i) => (
+          {card.abilities?.map((ab, i) => (
             <div key={i} className="bg-slate-800 rounded p-2">
               <div className="flex items-center gap-1 mb-1">
                 <Sparkles className="w-3 h-3 text-yellow-400" />
@@ -137,11 +138,6 @@ function CardDetail({ card, onClose, onAddToDeck, deckCount }) {
             </div>
           ))}
         </div>
-        {card.flavor && (
-          <div className="border-t border-slate-700 pt-2">
-            <p className="text-slate-500 text-xs italic">"{card.flavor}"</p>
-          </div>
-        )}
       </div>
       {onAddToDeck && (
         <div className="p-3 border-t border-slate-700">
@@ -150,7 +146,7 @@ function CardDetail({ card, onClose, onAddToDeck, deckCount }) {
             className="w-full py-2 rounded bg-cyan-700 hover:bg-cyan-600 text-white text-sm font-semibold flex items-center justify-center gap-2"
           >
             <Plus className="w-4 h-4" />
-            {deckCount > 0 ? `In Deck (${deckCount}) — Add Again` : 'Add to Deck'}
+            {deckCount > 0 ? `In Deck (${deckCount})` : 'Add to Deck'}
           </button>
         </div>
       )}
@@ -179,31 +175,17 @@ function CardCollectionTab() {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex flex-col flex-1 min-w-0">
-        {/* Filters */}
         <div className="flex flex-wrap gap-2 p-3 border-b border-slate-700 shrink-0">
           <div className="relative flex-1 min-w-[140px]">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search cards..."
               className="w-full pl-7 pr-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500" />
           </div>
-          {[
-            { label:'Type', val:filterType, set:setFilterType, opts:['all','construct','spell','trap','enchantment','gear','catalyst'] },
-            { label:'Faction', val:filterFaction, set:setFilterFaction, opts:['all','cogborn','nanoswarm','steamwright','voidforge','neutral'] },
-            { label:'Rarity', val:filterRarity, set:setFilterRarity, opts:['all','common','uncommon','rare','epic','legendary','mythic'] },
-          ].map(f => (
-            <select key={f.label} value={f.val} onChange={e=>f.set(e.target.value)}
-              className="bg-slate-800 border border-slate-600 rounded text-xs text-slate-300 px-2 py-1.5 outline-none focus:border-cyan-500">
-              {f.opts.map(o => <option key={o} value={o}>{o === 'all' ? `All ${f.label}s` : o.charAt(0).toUpperCase()+o.slice(1)}</option>)}
-            </select>
-          ))}
-          <span className="text-slate-500 text-xs self-center">{filtered.length} cards</span>
         </div>
-        {/* Grid */}
         <div className="flex-1 overflow-y-auto p-3 grid grid-cols-2 gap-2 content-start">
           {filtered.map(card => (
             <MiniCard key={card.id} card={card} onClick={() => setSelected(s => s === card.id ? null : card.id)} selected={selected === card.id} />
           ))}
-          {filtered.length === 0 && <div className="col-span-2 text-center text-slate-500 text-sm py-12">No cards match your filters.</div>}
         </div>
       </div>
       {selectedCard && (
@@ -217,109 +199,81 @@ function CardCollectionTab() {
 
 // ─── MY DECKS TAB ─────────────────────────────────────────────────────────────
 function DecksTab() {
-  const [decks, setDecks] = useState(() => load('aetherium_decks_v2', []));
-  const [editing, setEditing] = useState(null); // deck id or 'new'
+  const [decks, setDecks] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [editing, setEditing] = useState(null); 
   const [deckName, setDeckName] = useState('');
-  const [deckCards, setDeckCards] = useState([]); // array of card ids
+  const [deckCards, setDeckCards] = useState([]); 
   const [search, setSearch] = useState('');
   const [selectedCard, setSelectedCard] = useState(null);
 
-  const persist = (updated) => { setDecks(updated); save('aetherium_decks_v2', updated); };
+  const loadDecks = useCallback(async () => {
+    const uid = kernel.auth?.uid;
+    if (!uid) return;
+    setIsLoading(true);
+    const data = await getUserDecks(uid);
+    setDecks(data || []);
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadDecks();
+  }, [loadDecks]);
 
   const startNew = () => { setDeckName('New Deck'); setDeckCards([]); setEditing('new'); };
   const startEdit = (deck) => { setDeckName(deck.name); setDeckCards([...deck.cardIds]); setEditing(deck.id); };
 
-  const saveDeck = () => {
-    if (!deckName.trim()) return;
-    if (editing === 'new') {
-      const deck = { id: `deck-${Date.now()}`, name: deckName.trim(), cardIds: deckCards, createdAt: new Date().toISOString() };
-      persist([...decks, deck]);
-    } else {
-      persist(decks.map(d => d.id === editing ? { ...d, name: deckName.trim(), cardIds: deckCards, updatedAt: new Date().toISOString() } : d));
+  const saveDeck = async () => {
+    const uid = kernel.auth?.uid;
+    if (!uid || !deckName.trim()) return;
+    const deckData = { name: deckName.trim(), cardIds: deckCards };
+    if (editing !== 'new') deckData.id = editing;
+    const savedId = await dbSaveDeck(uid, deckData);
+    if (savedId) {
+      toast.success('Deck successfully bonded to your cloud identity');
+      loadDecks();
+      setEditing(null);
     }
-    setEditing(null);
   };
-
-  const deleteDeck = (id) => persist(decks.filter(d => d.id !== id));
 
   const addCard = (cardId) => {
     const count = deckCards.filter(id => id === cardId).length;
-    if (count >= 3) return; // max 3 copies
+    if (count >= 3) return;
     setDeckCards(prev => [...prev, cardId]);
   };
   const removeCard = (idx) => setDeckCards(prev => prev.filter((_, i) => i !== idx));
-
-  const filtered = useMemo(() => CARD_DB.filter(c =>
-    !search || c.name.toLowerCase().includes(search.toLowerCase())
-  ), [search]);
-
-  const countInDeck = (cardId) => deckCards.filter(id => id === cardId).length;
 
   if (editing !== null) {
     const deckCardObjects = deckCards.map(id => CARD_DB.find(c => c.id === id)).filter(Boolean);
     const selectedCardObj = CARD_DB.find(c => c.id === selectedCard);
     return (
       <div className="flex flex-col h-full min-h-0">
-        {/* Header */}
         <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700 shrink-0">
           <button onClick={() => setEditing(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
           <input value={deckName} onChange={e => setDeckName(e.target.value)}
             className="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white outline-none focus:border-cyan-500" />
-          <span className="text-slate-500 text-xs">{deckCards.length} cards</span>
-          <button onClick={saveDeck} className="bg-cyan-700 hover:bg-cyan-600 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1">
-            <Check className="w-3 h-3" /> Save
-          </button>
+          <button onClick={saveDeck} className="bg-cyan-700 hover:bg-cyan-600 text-white text-xs px-3 py-1.5 rounded">Save</button>
         </div>
         <div className="flex flex-1 min-h-0">
-          {/* Card browser */}
-          <div className="flex flex-col w-1/2 border-r border-slate-700 min-h-0">
-            <div className="p-2 border-b border-slate-700 shrink-0">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search cards..."
-                  className="w-full pl-7 pr-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500" />
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              {filtered.map(card => (
-                <MiniCard key={card.id} card={card}
-                  onClick={() => setSelectedCard(s => s === card.id ? null : card.id)}
-                  selected={selectedCard === card.id}
-                  inDeck={countInDeck(card.id) > 0}
-                  count={countInDeck(card.id)} />
-              ))}
-            </div>
+          <div className="w-1/2 overflow-y-auto p-2 space-y-1 border-r border-slate-700">
+             {CARD_DB.map(card => (
+                <MiniCard key={card.id} card={card} onClick={() => setSelectedCard(card.id)} selected={selectedCard === card.id} inDeck={deckCards.includes(card.id)} />
+             ))}
           </div>
-          {/* Deck list or card detail */}
-          {selectedCardObj ? (
-            <div className="w-1/2">
-              <CardDetail card={selectedCardObj} onClose={() => setSelectedCard(null)}
-                onAddToDeck={addCard} deckCount={countInDeck(selectedCardObj.id)} />
-            </div>
-          ) : (
-            <div className="flex flex-col w-1/2 min-h-0">
-              <div className="px-3 py-2 border-b border-slate-700 shrink-0">
-                <span className="text-xs text-slate-400">Deck — {deckCards.length}/40 cards (max 3 copies)</span>
-              </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                {deckCardObjects.length === 0 && (
-                  <div className="text-center text-slate-600 text-xs py-8">Click a card on the left to add it.</div>
-                )}
-                {deckCardObjects.map((card, idx) => (
-                  <div key={idx} className="flex items-center gap-2 bg-slate-800 rounded px-2 py-1.5">
-                    <span className="text-lg">{card.art}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs text-white truncate">{card.name}</div>
-                      <div className={`text-[10px] ${RARITY_COLOR[card.rarity]}`}>{card.rarity}</div>
-                    </div>
-                    <button onClick={() => removeCard(idx)} className="text-slate-600 hover:text-red-400 shrink-0">
-                      <X className="w-3 h-3" />
-                    </button>
+          <div className="w-1/2 p-2">
+            {selectedCardObj ? (
+              <CardDetail card={selectedCardObj} onClose={() => setSelectedCard(null)} onAddToDeck={addCard} deckCount={deckCards.filter(id => id === selectedCardObj.id).length} />
+            ) : (
+              <div className="space-y-1">
+                {deckCardObjects.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-slate-800 p-1.5 rounded">
+                    <span className="text-xs text-white truncate flex-1">{c.name}</span>
+                    <button onClick={() => removeCard(i)}><X className="w-3 h-3 text-slate-500 hover:text-white" /></button>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     );
@@ -327,44 +281,21 @@ function DecksTab() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700 shrink-0">
-        <span className="text-sm text-slate-300">{decks.length} saved deck{decks.length !== 1 ? 's' : ''}</span>
-        <button onClick={startNew} className="flex items-center gap-1.5 bg-cyan-700 hover:bg-cyan-600 text-white text-xs px-3 py-1.5 rounded">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+        <button onClick={startNew} className="bg-cyan-700 hover:bg-cyan-600 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1">
           <Plus className="w-3 h-3" /> New Deck
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {decks.length === 0 && (
-          <div className="text-center py-16">
-            <Layers className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">No decks yet.</p>
-            <p className="text-slate-600 text-xs mt-1">Build your first Aetherium deck.</p>
-          </div>
-        )}
-        {decks.map(deck => {
-          const factions = [...new Set(deck.cardIds.map(id => CARD_DB.find(c => c.id === id)?.faction).filter(Boolean))];
-          return (
-            <div key={deck.id} className="bg-slate-800 rounded-lg p-3 border border-slate-700 hover:border-slate-600 transition-colors">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-white font-semibold text-sm">{deck.name}</div>
-                  <div className="text-slate-500 text-xs mt-0.5">{deck.cardIds.length} cards</div>
-                  <div className="flex gap-1 mt-1.5 flex-wrap">
-                    {factions.map(f => (
-                      <span key={f} className={`text-[10px] px-1.5 py-0.5 rounded-full bg-slate-700 ${FACTION_COLOR[f]}`}>{f}</span>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex gap-1 shrink-0">
-                  <button onClick={() => startEdit(deck)} className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded">Edit</button>
-                  <button onClick={() => deleteDeck(deck.id)} className="text-xs px-2 py-1 bg-red-900/50 hover:bg-red-800 text-red-300 rounded">
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
+        {isLoading ? <Loader2 className="w-6 h-6 animate-spin mx-auto mt-12 text-cyan-400" /> : decks.map(deck => (
+          <div key={deck.id} className="bg-slate-800 rounded-lg p-3 border border-slate-700 flex items-center justify-between">
+            <div>
+              <div className="text-white font-semibold text-sm">{deck.name}</div>
+              <div className="text-slate-500 text-xs">{deck.cardIds.length} cards</div>
             </div>
-          );
-        })}
+            <button onClick={() => startEdit(deck)} className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded">Edit</button>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -372,67 +303,40 @@ function DecksTab() {
 
 // ─── ASSETS TAB ───────────────────────────────────────────────────────────────
 function AssetsTab() {
-  const [assets] = useState(() => load('novaura_assets', [
-    { id:'a1', type:'code', name:'Auth Middleware', desc:'JWT + Firebase Auth middleware for Express', tags:['typescript','auth'], createdAt:'2026-03-15', size:'4.2kb' },
-    { id:'a2', type:'project', name:'BuilderBot v1', desc:'Initial BuilderBot IDE scaffolding', tags:['react','vite'], createdAt:'2026-03-20', size:'—' },
-  ]));
-  const [filter, setFilter] = useState('all');
+  const [assets, setAssets] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const typeIcon = { code:Code2, project:Layers, image:ImageIcon, writing:BookOpen, other:Package };
-  const typeColor = { code:'text-cyan-400', project:'text-purple-400', image:'text-pink-400', writing:'text-yellow-400', other:'text-slate-400' };
+  const loadAssets = useCallback(async () => {
+    const uid = kernel.auth?.uid;
+    if (!uid) return;
+    setIsLoading(true);
+    const data = await getUserAssets(uid);
+    setAssets(data || []);
+    setIsLoading(false);
+  }, []);
 
-  const filtered = filter === 'all' ? assets : assets.filter(a => a.type === filter);
+  useEffect(() => { loadAssets(); }, [loadAssets]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700 shrink-0 flex-wrap">
-        {['all','code','project','image','writing','other'].map(t => (
-          <button key={t} onClick={() => setFilter(t)}
-            className={`text-xs px-2.5 py-1 rounded-full transition-colors ${filter === t ? 'bg-cyan-700 text-white' : 'text-slate-400 hover:text-white'}`}>
-            {t.charAt(0).toUpperCase()+t.slice(1)}
-          </button>
-        ))}
-      </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
-        {filtered.length === 0 && (
-          <div className="text-center py-16">
-            <Package className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">No assets yet.</p>
-            <p className="text-slate-600 text-xs mt-1">Assets from BuilderBot and the platform will appear here.</p>
+        {isLoading ? <Loader2 className="w-6 h-6 animate-spin mx-auto" /> : assets.length === 0 ? (
+          <div className="text-center py-16 opacity-30">
+             <Package className="w-10 h-10 mx-auto mb-2" />
+             <p className="text-sm">Cloud Assets Empty</p>
           </div>
-        )}
-        {filtered.map(asset => {
-          const Icon = typeIcon[asset.type] || Package;
-          return (
-            <div key={asset.id} className="bg-slate-800 rounded-lg p-3 border border-slate-700 hover:border-slate-600 transition-colors">
-              <div className="flex items-start gap-3">
-                <div className="bg-slate-700 rounded p-1.5 shrink-0">
-                  <Icon className={`w-4 h-4 ${typeColor[asset.type]}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-white text-sm font-medium">{asset.name}</div>
-                      <div className="text-slate-400 text-xs mt-0.5">{asset.desc}</div>
-                    </div>
-                    <button className="text-slate-500 hover:text-cyan-400 shrink-0 transition-colors" title="Share / Trade">
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2 mt-2 flex-wrap">
-                    {asset.tags.map(t => <span key={t} className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">{t}</span>)}
-                    <span className="text-[10px] text-slate-600 ml-auto">{asset.size} · {asset.createdAt}</span>
-                  </div>
-                </div>
+        ) : assets.map(asset => (
+          <div key={asset.id} className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Code2 className="w-4 h-4 text-cyan-400" />
+              <div>
+                <div className="text-white text-sm font-medium">{asset.name}</div>
+                <div className="text-[10px] text-slate-500">{asset.type} · {asset.size}</div>
               </div>
             </div>
-          );
-        })}
-      </div>
-      <div className="px-4 py-3 border-t border-slate-700 bg-slate-900/50 shrink-0">
-        <p className="text-xs text-slate-500 text-center">
-          Assets from BuilderBot, Literature IDE, and platform projects auto-sync here.
-        </p>
+            <button onClick={() => deleteAsset(kernel.auth.uid, asset.id).then(loadAssets)} className="text-slate-500 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -440,67 +344,50 @@ function AssetsTab() {
 
 // ─── TRADES TAB ───────────────────────────────────────────────────────────────
 function TradesTab() {
-  const [trades, setTrades] = useState(() => load('novaura_trades', []));
-  const [view, setView] = useState('inbox'); // inbox | compose
+  const [trades, setTrades] = useState([]);
+  const [view, setView] = useState('inbox'); 
   const [offer, setOffer] = useState({ to: '', message: '', items: [] });
+  const [isSyncing, setIsSyncing] = useState(true);
 
-  const persist = (updated) => { setTrades(updated); save('novaura_trades', updated); };
+  useEffect(() => {
+    const uid = kernel.auth?.uid;
+    if (!uid) return;
+    setIsSyncing(true);
+    const unsubscribe = listenToTrades(uid, (updatedTrades) => {
+      setTrades(updatedTrades);
+      setIsSyncing(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  const sendTrade = () => {
-    if (!offer.to.trim()) return;
-    const t = { id:`trade-${Date.now()}`, to: offer.to.trim(), message: offer.message, items: offer.items, status:'pending', sentAt: new Date().toISOString(), direction:'out' };
-    persist([t, ...trades]);
-    setOffer({ to:'', message:'', items:[] });
-    setView('inbox');
+  const sendTrade = async () => {
+    const uid = kernel.auth?.uid;
+    if (!uid || !offer.to.trim()) return;
+    const sent = await dbCreateTrade(uid, offer.to.trim(), offer.items, [], offer.message);
+    if (sent) {
+      toast.success('Trade request broadcasted');
+      setOffer({ to:'', message:'', items:[] });
+      setView('inbox');
+    }
   };
 
-  const accept = (id) => persist(trades.map(t => t.id === id ? { ...t, status:'accepted' } : t));
-  const decline = (id) => persist(trades.map(t => t.id === id ? { ...t, status:'declined' } : t));
-  const remove = (id) => persist(trades.filter(t => t.id !== id));
-
-  const copyLink = (trade) => {
-    const link = `${window.location.origin}/?trade=${trade.id}`;
-    navigator.clipboard.writeText(link).catch(() => {});
+  const handleResponse = async (id, action) => {
+    const uid = kernel.auth?.uid;
+    if (!uid) return;
+    const ok = await respondToTrade(id, uid, action);
+    if (ok) toast.success(`Trade ${action}`);
   };
-
-  const statusColor = { pending:'text-yellow-400', accepted:'text-green-400', declined:'text-red-400' };
-  const statusIcon  = { pending: Clock, accepted: Check, declined: X };
 
   if (view === 'compose') {
     return (
-      <div className="flex flex-col h-full min-h-0">
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700 shrink-0">
-          <button onClick={() => setView('inbox')} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
-          <span className="text-sm text-white font-medium">New Trade Request</span>
+      <div className="flex flex-col h-full min-h-0 p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold text-white">Broadcast Trade</span>
+          <button onClick={() => setView('inbox')}><X className="w-4 h-4" /></button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div>
-            <label className="text-xs text-slate-400 block mb-1">To (username or @handle)</label>
-            <input value={offer.to} onChange={e => setOffer(o => ({ ...o, to: e.target.value }))} placeholder="@pilot"
-              className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-white outline-none focus:border-cyan-500 placeholder-slate-600" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-1">Message</label>
-            <textarea value={offer.message} onChange={e => setOffer(o => ({ ...o, message: e.target.value }))} placeholder="What are you offering or requesting?"
-              rows={3} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-white outline-none focus:border-cyan-500 placeholder-slate-600 resize-none" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-2">Items to offer</label>
-            <div className="bg-slate-800/50 border border-slate-700 rounded p-3 text-xs text-slate-500 text-center">
-              Item picker coming in next update — attach Aetherium cards, assets, or platform items.
-            </div>
-          </div>
-          <div className="bg-slate-800/40 border border-slate-700 rounded p-3">
-            <div className="flex items-center gap-2 text-slate-400 text-xs mb-1"><Link className="w-3 h-3" /> Or share a trade link</div>
-            <div className="text-slate-600 text-xs">Generate a shareable link after sending — the other user clicks it to review and respond without needing to find you first.</div>
-          </div>
-        </div>
-        <div className="p-3 border-t border-slate-700 shrink-0">
-          <button onClick={sendTrade} disabled={!offer.to.trim()}
-            className="w-full py-2 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded flex items-center justify-center gap-2">
-            <Send className="w-4 h-4" /> Send Trade Request
-          </button>
-        </div>
+        <input value={offer.to} onChange={e=>setOffer({...offer, to:e.target.value})} placeholder="To: handle or UID" className="bg-slate-800 border border-slate-700 p-2 text-xs text-white rounded w-full outline-none focus:border-cyan-500" />
+        <textarea value={offer.message} onChange={e=>setOffer({...offer, message:e.target.value})} placeholder="Message..." className="bg-slate-800 border border-slate-700 p-2 text-xs text-white rounded w-full h-20 outline-none focus:border-cyan-500" />
+        <button onClick={sendTrade} className="bg-cyan-700 p-2 rounded text-xs font-bold text-white">Send Request</button>
       </div>
     );
   }
@@ -508,56 +395,25 @@ function TradesTab() {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 shrink-0">
-        <span className="text-sm text-slate-300">{trades.filter(t=>t.status==='pending').length} pending</span>
-        <button onClick={() => setView('compose')}
-          className="flex items-center gap-1.5 bg-cyan-700 hover:bg-cyan-600 text-white text-xs px-3 py-1.5 rounded">
-          <Plus className="w-3 h-3" /> New Trade
-        </button>
+        <span className="text-xs text-slate-400">{trades.length} active trades</span>
+        <button onClick={() => setView('compose')} className="bg-cyan-700 text-white text-[10px] px-2 py-1 rounded">New Trade</button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {trades.length === 0 && (
-          <div className="text-center py-16">
-            <ArrowLeftRight className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm">No trades yet.</p>
-            <p className="text-slate-600 text-xs mt-1">Send trade requests to exchange cards and assets with other pilots.</p>
+        {trades.map(trade => (
+          <div key={trade.id} className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+             <div className="flex justify-between items-start mb-2">
+               <span className="text-xs text-white font-bold">{trade.sender === kernel.auth.uid ? `To: ${trade.receiverHandle}` : `From: ${trade.sender}`}</span>
+               <span className="text-[10px] uppercase text-cyan-400">{trade.status}</span>
+             </div>
+             <p className="text-[10px] text-slate-400 mb-3">{trade.message}</p>
+             {trade.sender !== kernel.auth.uid && trade.status === 'pending' && (
+               <div className="flex gap-2">
+                 <button onClick={() => handleResponse(trade.id, 'accepted')} className="flex-1 bg-green-900/40 text-green-400 text-[10px] py-1 rounded">Accept</button>
+                 <button onClick={() => handleResponse(trade.id, 'declined')} className="flex-1 bg-red-900/40 text-red-400 text-[10px] py-1 rounded">Decline</button>
+               </div>
+             )}
           </div>
-        )}
-        {trades.map(trade => {
-          const SIcon = statusIcon[trade.status] || Clock;
-          return (
-            <div key={trade.id} className="bg-slate-800 rounded-lg p-3 border border-slate-700">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs text-slate-400">{trade.direction === 'out' ? '→' : '←'}</span>
-                    <span className="text-white text-sm font-medium">{trade.to}</span>
-                    <span className={`flex items-center gap-0.5 text-[10px] ml-auto ${statusColor[trade.status]}`}>
-                      <SIcon className="w-3 h-3" /> {trade.status}
-                    </span>
-                  </div>
-                  {trade.message && <p className="text-slate-400 text-xs">{trade.message}</p>}
-                  <div className="text-slate-600 text-[10px] mt-1">{new Date(trade.sentAt).toLocaleDateString()}</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                {trade.direction === 'in' && trade.status === 'pending' && <>
-                  <button onClick={() => accept(trade.id)} className="flex-1 py-1 bg-green-800 hover:bg-green-700 text-green-200 text-xs rounded flex items-center justify-center gap-1">
-                    <Check className="w-3 h-3" /> Accept
-                  </button>
-                  <button onClick={() => decline(trade.id)} className="flex-1 py-1 bg-red-900/60 hover:bg-red-800 text-red-300 text-xs rounded flex items-center justify-center gap-1">
-                    <X className="w-3 h-3" /> Decline
-                  </button>
-                </>}
-                <button onClick={() => copyLink(trade)} className="py-1 px-2 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded flex items-center gap-1">
-                  <Link className="w-3 h-3" /> Link
-                </button>
-                <button onClick={() => remove(trade.id)} className="py-1 px-2 bg-slate-700 hover:bg-red-900/50 text-slate-400 hover:text-red-300 text-xs rounded">
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
+        ))}
       </div>
     </div>
   );
@@ -568,30 +424,24 @@ export default function InventoryWindow() {
   const [tab, setTab] = useState('cards');
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700 shrink-0 bg-slate-900/80">
+    <div className="flex flex-col h-full bg-[#050508] overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 shrink-0 bg-black/40 backdrop-blur-xl">
         <Package className="w-5 h-5 text-cyan-400" />
         <div>
-          <h1 className="text-white font-bold text-sm leading-none">Inventory</h1>
-          <p className="text-slate-500 text-[10px] mt-0.5">Cards · Decks · Assets · Trades</p>
+          <h1 className="text-white font-bold text-sm leading-none tracking-tight">INVENTORY LEDGER</h1>
+          <p className="text-cyan-400/50 text-[9px] font-mono mt-0.5 uppercase tracking-widest">Universal Asset Exchange</p>
         </div>
       </div>
-      {/* Tab bar */}
-      <div className="flex border-b border-slate-700 shrink-0">
-        {TABS.map(t => {
-          const Icon = t.icon;
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors flex-1 justify-center
-                ${tab === t.id ? 'text-cyan-400 border-b-2 border-cyan-500 bg-slate-800/50' : 'text-slate-400 hover:text-white'}`}>
-              <Icon className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{t.label}</span>
-            </button>
-          );
-        })}
+      <div className="flex border-b border-white/5 shrink-0 bg-black/20">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all flex-1 justify-center
+              ${tab === t.id ? 'text-cyan-400 border-b-2 border-cyan-500 bg-white/5' : 'text-white/30 hover:text-white'}`}>
+            <t.icon className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{t.label}</span>
+          </button>
+        ))}
       </div>
-      {/* Content */}
       <div className="flex-1 min-h-0">
         {tab === 'cards'  && <CardCollectionTab />}
         {tab === 'decks'  && <DecksTab />}

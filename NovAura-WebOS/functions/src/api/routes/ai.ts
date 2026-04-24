@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as admin from 'firebase-admin';
 import { secretService } from '../../services/secretService';
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 
 const router = Router();
 
@@ -12,8 +13,8 @@ const PROVIDERS: Record<string, any> = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${key}`
     }),
-    formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'gpt-4o-mini',
+    formatBody: (prompt: string, maxTokens: number, temp: number, model?: string) => ({
+      model: model || 'google/gemma-3-27b-it',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: maxTokens,
       temperature: temp
@@ -21,8 +22,11 @@ const PROVIDERS: Record<string, any> = {
     parseResponse: (data: any) => data.choices?.[0]?.message?.content || ''
   },
   gemini: {
-    url: (key: string) => `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
-    headers: { 'Content-Type': 'application/json' },
+    url: () => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+    headers: (key: string) => ({
+      'Content-Type': 'application/json',
+      'X-goog-api-key': key
+    }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: temp, maxOutputTokens: maxTokens }
@@ -37,7 +41,7 @@ const PROVIDERS: Record<string, any> = {
       'anthropic-version': '2023-06-01'
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-4-sonnet',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
       temperature: temp
@@ -53,7 +57,7 @@ const PROVIDERS: Record<string, any> = {
       'anthropic-version': '2023-06-01'
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-4-sonnet',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
       temperature: temp
@@ -67,7 +71,7 @@ const PROVIDERS: Record<string, any> = {
       'Authorization': `Bearer ${key}`
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: maxTokens,
       temperature: temp
@@ -128,7 +132,7 @@ const PROVIDERS: Record<string, any> = {
       'Authorization': `Bearer ${key}`
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'qwen-turbo',
+      model: 'qwen-4-max',
       input: {
         messages: [
           { role: 'system', content: 'You are a helpful assistant.' },
@@ -219,6 +223,21 @@ const PROVIDERS: Record<string, any> = {
       temperature: temp
     }),
     parseResponse: (data: any) => data.choices?.[0]?.message?.content || ''
+  },
+  nova: {
+    // Amazon Nova OpenAI-compatible API
+    url: () => 'https://api.nova.amazon.com/v1/chat/completions',
+    headers: (key: string) => ({
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${key}`
+    }),
+    formatBody: (prompt: string, maxTokens: number, temp: number, model?: string) => ({
+      model: model || 'amazon.nova-pro-v1',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: maxTokens,
+      temperature: temp
+    }),
+    parseResponse: (data: any) => data.choices?.[0]?.message?.content || ''
   }
 };
 
@@ -245,11 +264,24 @@ router.post('/chat', async (req, res) => {
       return;
     }
 
-    const response = await fetch(config.url(apiKey), {
+    let response = await fetch(config.url(apiKey), {
       method: 'POST',
       headers: typeof config.headers === 'function' ? config.headers(apiKey) : config.headers,
-      body: JSON.stringify(config.formatBody(prompt, maxTokens, temperature))
+      body: JSON.stringify(config.formatBody(prompt, maxTokens, temperature, req.body.model))
     });
+
+    // BACKUP LOGIC: If Gemini fails (Quota or Error), try the backup key
+    if (!response.ok && selectedProvider === 'gemini') {
+      const backupKey = await getApiKey('gemini_backup');
+      if (backupKey && backupKey !== apiKey) {
+        console.warn('Gemini primary key failed/quota-reached. Retrying with backup key...');
+        response = await fetch(config.url(backupKey), {
+          method: 'POST',
+          headers: typeof config.headers === 'function' ? config.headers(backupKey) : config.headers,
+          body: JSON.stringify(config.formatBody(prompt, maxTokens, temperature))
+        });
+      }
+    }
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -272,6 +304,106 @@ router.post('/chat', async (req, res) => {
   } catch (err: any) {
     console.error('AI error:', err);
     res.status(500).json({ error: 'AI request failed', detail: err.message });
+  }
+});
+
+/**
+ * Specialized AWS Bedrock Route (BYOK)
+ * Handles direct Bedrock invocation with Access/Secret Keys
+ */
+router.post('/aws/chat', async (req, res) => {
+  try {
+    const { prompt, accessKey, secretKey, region = 'us-east-1', model = 'amazon.nova-pro-v1:0' } = req.body;
+    
+    if (!prompt || !accessKey || !secretKey) {
+      res.status(400).json({ error: 'Missing prompt or AWS credentials' });
+      return;
+    }
+
+    const client = new BedrockRuntimeClient({
+      region,
+      credentials: {
+        accessKeyId: accessKey,
+        secretAccessKey: secretKey,
+      }
+    });
+
+    // Prepare Bedrock payload (Nova uses Converse-like or specialized format)
+    // For now, using standard InvokeModel format for Nova
+    const payload = {
+      inputText: prompt,
+      textGenerationConfig: {
+        maxTokenCount: 1024,
+        temperature: 0.7,
+        topP: 0.9,
+      }
+    };
+
+    const command = new InvokeModelCommand({
+      modelId: model,
+      contentType: "application/json",
+      accept: "application/json",
+      body: JSON.stringify(payload),
+    });
+
+    const response = await client.send(command);
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+
+    // Nova response format check
+    const content = result.results?.[0]?.outputText || result.outputText || JSON.stringify(result);
+
+    res.json({
+      success: true,
+      response: content,
+      provider: 'aws-bedrock',
+      model
+    });
+  } catch (err: any) {
+    console.error('AWS Bedrock error:', err);
+    res.status(500).json({ error: 'AWS Bedrock request failed', detail: err.message });
+  }
+});
+
+/**
+ * Specialized Alibaba Cloud Route (BYOK)
+ */
+router.post('/alibaba/chat', async (req, res) => {
+  try {
+    const { prompt, apiKey, model = 'qwen-max' } = req.body;
+    
+    if (!prompt || !apiKey) {
+      res.status(400).json({ error: 'Missing prompt or Alibaba API key' });
+      return;
+    }
+
+    const config = PROVIDERS.alibaba;
+    const response = await fetch(config.url(), {
+      method: 'POST',
+      headers: config.headers(apiKey),
+      body: JSON.stringify(config.formatBody(prompt, 1024, 0.7))
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      res.status(response.status).json({ 
+        error: `Alibaba error: ${response.status}`,
+        detail: err.error?.message || err.message 
+      });
+      return;
+    }
+
+    const data = await response.json();
+    const content = config.parseResponse(data);
+
+    res.json({
+      success: true,
+      response: content,
+      provider: 'alibaba',
+      model
+    });
+  } catch (err: any) {
+    console.error('Alibaba error:', err);
+    res.status(500).json({ error: 'Alibaba request failed', detail: err.message });
   }
 });
 
@@ -320,7 +452,7 @@ router.post('/builder', async (req, res) => {
     const response = await fetch(config.url(apiKey), {
       method: 'POST',
       headers: typeof config.headers === 'function' ? config.headers(apiKey) : config.headers,
-      body: JSON.stringify(config.formatBody(enhancedPrompt, maxTokens, 0.7))
+      body: JSON.stringify(config.formatBody(enhancedPrompt, maxTokens, 0.7, model))
     });
 
     if (!response.ok) {
@@ -381,7 +513,8 @@ router.get('/providers', (req, res) => {
       novita: !!process.env.NOVITA_API_KEY,
       scaleway: !!process.env.SCALEWAY_API_KEY,
       hyperbolic: !!process.env.HYPERBOLIC_API_KEY,
-      fireworks: !!process.env.FIREWORKS_API_KEY
+      fireworks: !!process.env.FIREWORKS_API_KEY,
+      aiml: !!process.env.AIML_API_KEY
     }
   });
 });
@@ -448,7 +581,7 @@ router.get('/health', async (req, res) => {
 router.get('/health-check', async (req, res) => {
   const TEST_PROMPT = 'Reply with the single word OK.';
   const TIMEOUT_MS = 12000;
-  const CORE_PROVIDERS = ['gemini', 'claude', 'openai', 'kimi', 'alibaba', 'aiml', 'novita', 'scaleway', 'hyperbolic', 'fireworks', 'azure'];
+  const CORE_PROVIDERS = ['gemini', 'claude', 'openai', 'nova', 'alibaba', 'kimi', 'aiml', 'novita', 'scaleway', 'hyperbolic', 'fireworks', 'azure'];
 
   const results: Record<string, any> = {};
 
@@ -544,7 +677,9 @@ async function getApiKey(provider: string): Promise<string | undefined> {
     'fireworks': 'FIREWORKS_API_KEY',
     'azure': 'AZURE_OPENAI_KEY',
     'azure_openai': 'AZURE_OPENAI_KEY',
-    'lmstudio': 'LM_STUDIO_API_KEY'
+    'lmstudio': 'LM_STUDIO_API_KEY',
+    'gemini_backup': 'GEMINI_API_KEY_BACKUP',
+    'nova': 'AWS_NOVA_API_KEY'
   };
   
   const envKey = envVarMap[provider] || provider.toUpperCase() + '_API_KEY';
@@ -554,7 +689,7 @@ async function getApiKey(provider: string): Promise<string | undefined> {
 
 // Provider priority: Azure (primary) > Alibaba (cheap) > Kimi (cheap) > Gemini (free) > OpenAI > Claude
 async function detectProvider(): Promise<string> {
-  const providers = ['azure', 'alibaba', 'kimi', 'gemini', 'openai', 'claude'];
+  const providers = ['gemini', 'azure', 'alibaba', 'kimi', 'openai', 'claude'];
   for (const p of providers) {
     if (await getApiKey(p)) return p;
   }

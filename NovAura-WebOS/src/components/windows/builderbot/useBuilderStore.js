@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { kernelStorage } from '../../../kernel/kernelStorage.js';
+import { kernel } from '../../../kernel/NovaKernel.js';
 
 // ── Storage keys ────────────────────────────────────────────
 const STORAGE_PROJECT = 'novaura_builder_project';
@@ -160,8 +160,8 @@ function defaultCodeLibraries() {
 
 function loadCodeLibraries() {
   try {
-    const raw = kernelStorage.getItem(STORAGE_CODE_LIBRARIES);
-    if (raw) return JSON.parse(raw);
+    const raw = kernel.memory.get(STORAGE_CODE_LIBRARIES);
+    if (raw) return typeof raw === 'string' ? JSON.parse(raw) : raw;
   } catch { /* ignore */ }
   return defaultCodeLibraries();
 }
@@ -178,8 +178,11 @@ function defaultAIConfig() {
 
 function loadAIConfig() {
   try {
-    const raw = kernelStorage.getItem(STORAGE_AI_CONFIG);
-    if (raw) return { ...defaultAIConfig(), ...JSON.parse(raw) };
+    const raw = kernel.memory.get(STORAGE_AI_CONFIG);
+    if (raw) {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return { ...defaultAIConfig(), ...parsed };
+    }
   } catch { /* ignore */ }
   return defaultAIConfig();
 }
@@ -203,8 +206,8 @@ function loadAuraHistory() {
 // ── Persistence ─────────────────────────────────────────────
 function loadProject() {
   try {
-    const raw = kernelStorage.getItem(STORAGE_PROJECT);
-    if (raw) return JSON.parse(raw);
+    const raw = kernel.memory.get(STORAGE_PROJECT);
+    if (raw) return typeof raw === 'string' ? JSON.parse(raw) : raw;
   } catch { /* ignore */ }
   return defaultProject();
 }
@@ -283,7 +286,7 @@ const useBuilderStore = create((set, get) => {
     // ── Persist helper ──
     _persist() {
       const { projectName, tree } = get();
-      kernelStorage.setItem(STORAGE_PROJECT, JSON.stringify({ name: projectName, tree }));
+      kernel.memory.set(STORAGE_PROJECT, { name: projectName, tree });
     },
 
     // ── Project actions ──

@@ -205,7 +205,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
       });
 
       const session = await stripe!.checkout.sessions.create({
-        payment_method_types: ['card'],
+        payment_method_types: ['card', 'cashapp', 'paypal'],
         mode: 'subscription',
         line_items: [{ price: price.id, quantity: 1 }],
         client_reference_id: userId,
@@ -247,7 +247,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
     });
 
     const session = await stripe!.checkout.sessions.create({
-      payment_method_types: ['card'],
+      payment_method_types: ['card', 'cashapp', 'paypal'],
       mode: 'payment',
       line_items,
       client_reference_id: userId,
@@ -422,6 +422,56 @@ router.post('/webhook', async (req: Request, res: Response) => {
           await userRef.update({
             purchasedAssetIds: admin.firestore.FieldValue.arrayUnion(...purchasedAssetIds)
           });
+        }
+
+        // ── Handle Founders Pass One-time Purchase ────────────────────────
+        if (session.metadata?.type === 'founders_pass') {
+          const tier = session.metadata.tier;
+          const statsRef = db.collection('platform_stats').doc('founders_presale');
+          const field = `${tier.replace(/-/g, '_')}_remaining`;
+          
+          await statsRef.update({
+            [field]: admin.firestore.FieldValue.increment(-1),
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+          // Grant lifetime membership
+          const membershipTier = tier.includes('spark') ? 'spark' : tier.includes('nova') ? 'nova' : 'catalyst';
+          const shares = parseInt(session.metadata.shares || '0', 10);
+          const claimDate = session.metadata.claimDate || 'August 10, 2026';
+          
+          let congratsMessage = '';
+          if (tier === 'founding-spark') {
+            congratsMessage = 'Congratulations you are part owner in Novaura.life the future has been sparked by your support';
+          } else if (tier === 'founding-catalyst') {
+            congratsMessage = 'Congratulations you are the catalyst to making this happen you are now part owner of Novaura.life the future begins here';
+          } else if (tier === 'founding-nova') {
+            congratsMessage = 'Thank you for being the burning nova that generates the aura of our journey congratulations you now own part of the next big platform for the coming era you have pushed this into existence with the brilliance of your light';
+          }
+
+          await userRef.update({
+            membershipTier,
+            subscriptionStatus: 'active',
+            isFoundingMember: true,
+            foundersPassTier: tier,
+            foundersPassPurchasedAt: admin.firestore.FieldValue.serverTimestamp(),
+            companyShares: admin.firestore.FieldValue.increment(shares),
+            sharesClaimDate: claimDate,
+            foundersCongratsMessage: congratsMessage,
+            canBuyExtraShares: tier === 'founding-nova' // Nova class can buy more
+          });
+
+          console.log(`[Stripe Webhook] Founders Pass (${tier}) processed for user ${userId}. Shares: ${shares}`);
+        }
+
+        // ── Handle Extra Shares Purchase ───────────────────────────────
+        if (session.metadata?.type === 'extra_shares') {
+          const count = parseInt(session.metadata.count || '0', 10);
+          await userRef.update({
+            companyShares: admin.firestore.FieldValue.increment(count),
+            extraSharesPurchasedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          console.log(`[Stripe Webhook] Extra Shares (${count}) processed for user ${userId}`);
         }
       }
     }

@@ -25,14 +25,12 @@ const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
   'https://us-central1-novaura-systems.cloudfunctions.net/api';
 
-const PROVIDER_CHAIN = ['gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'];
+const PROVIDER_CHAIN = ['gemini', 'aws', 'alibaba', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'];
 
-// Nova (local-first) vs Aura (cloud-first) persona routing
-// persona: 'nova' → prefer webgpu-local, fallback cloud
-// persona: 'aura' → always cloud Gemini, never local
 const PERSONA_CHAINS = {
-  nova:  ['webgpu-local', 'gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'],
-  aura:  ['gemini', 'claude', 'qwen', 'openai'],  // Aura never touches local
+  nova:  ['aws', 'webgpu-local', 'gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'],
+  aura:  ['gemini-2.5-pro', 'gemini-3.1-flash', 'claude', 'qwen', 'openai'],
+  cybeni: ['alibaba', 'qwen', 'gemini', 'claude'], // Cybeni prefers Qwen/Alibaba
   default: PROVIDER_CHAIN,
 };
 
@@ -181,7 +179,9 @@ class AISubsystem {
 
   _defaultModel(provider) {
     return {
-      gemini:   'gemini-2.5-flash',
+      gemini:   'gemini-3.1-flash',
+      aws:      'amazon.nova-pro-v1:0',
+      alibaba:  'qwen-max',
       qwen:     'qwen-plus',
       claude:   'claude-sonnet-4-6',
       openai:   'gpt-4o-mini',
@@ -336,7 +336,23 @@ class AISubsystem {
       conversation: options.conversation || [],
     };
 
-    const res = await fetch(BACKEND_URL + '/ai/chat', {
+    // Specialized BYOK Routing
+    let endpoint = '/ai/chat';
+    if (provider.name === 'aws' && (options.awsAccessKey || this._config?.awsAccessKey)) {
+      endpoint = '/ai/aws/chat';
+      Object.assign(body, {
+        accessKey: options.awsAccessKey || this._config.awsAccessKey,
+        secretKey: options.awsSecretKey || this._config.awsSecretKey,
+        region: options.awsRegion || this._config.awsRegion || 'us-east-1'
+      });
+    } else if (provider.name === 'alibaba' && (options.alibabaApiKey || this._config?.alibabaApiKey)) {
+      endpoint = '/ai/alibaba/chat';
+      Object.assign(body, {
+        apiKey: options.alibabaApiKey || this._config.alibabaApiKey
+      });
+    }
+
+    const res = await fetch(BACKEND_URL + endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),

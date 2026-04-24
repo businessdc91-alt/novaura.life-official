@@ -53,13 +53,14 @@ const APP_KEYWORDS = {
   'admin-panel': ['admin', 'admin panel', 'administration', 'dashboard'],
   'business-operator': ['business operator', 'operator', 'business', 'dropship', 'store manager', 'business automation', 'ai operator'],
   'nova-concierge': ['nova concierge', 'concierge', 'nova operator', 'ai assistant', 'business manager', 'nova control', 'control center'],
+  'founding-father-chat': ['founding', 'father', 'council', 'chamber', 'catalyst', 'lounge', 'investor chat'],
 };
 
 const APP_TITLES = {
   'ide': 'Code IDE', 'website-builder': 'Website Builder', 'browser': 'AI Browser',
   'vertex': 'Vertex AI', 'bg-remover': 'Background Remover', 'media': 'Media Player',
   'media-library': 'Media Library', 'chat': 'AI Chat', 'voice': 'Voice Chat',
-  'terminal': 'Terminal', 'ai-assistant': 'AI Assistant', 'literature-ide': 'Literature IDE',
+  'terminal': 'Terminal', 'ai-assistant': 'Aura Assistant', 'literature-ide': 'Literature IDE',
   'games-arena': 'Games Arena', 'music-composer': 'Music Composer', 'poems': 'Poems Creator',
   'aetherium-tcg': 'Aetherium TCG', 'comic-creator': 'Comic Creator',
   'business-card': 'Business Cards', 'art-studio': 'Art Studio', 'art-gallery': 'Art Gallery',
@@ -76,8 +77,34 @@ const APP_TITLES = {
   'personalization': 'Personalization', 'notifications': 'Notifications',
   'secrets': 'Secrets Manager', 'billing': 'Billing & Plans', 'git': 'Git',
   'pricing': 'Pricing & Plans', 'admin-panel': 'Admin Panel',
-  'business-operator': 'Business Operator',
-  'nova-concierge': 'Nova Concierge',
+  'business-operator': 'Venture Orchestrator',
+  'nova-concierge': 'Ecosystem Concierge',
+  'founding-father-chat': 'Founding Fathers Lounge',
+};
+
+const CHAIN_LOGIC = {
+  'ide': [
+    { type: 'terminal', label: 'Open Terminal', action: 'open_app' },
+    { type: 'vibe-coding', label: 'Aura Vibe Code', action: 'vibe_code' },
+    { type: 'browser', label: 'Debug in Browser', action: 'browse_url' }
+  ],
+  'art-studio': [
+    { type: 'art-gallery', label: 'View Gallery', action: 'open_app' },
+    { type: 'vertex', label: 'Generate More', action: 'generate_image' },
+    { type: 'pixai', label: 'Pixel Art Style', action: 'open_app' }
+  ],
+  'chat': [
+    { type: 'voice', label: 'Switch to Voice', action: 'open_app' },
+    { type: 'ai-assistant', label: 'Ask Assistant', action: 'open_app' }
+  ],
+  'founding-catalyst-chat': [
+    { type: 'business-operator', label: 'Business Ops', action: 'open_app' },
+    { type: 'nova-concierge', label: 'Nova Concierge', action: 'open_app' }
+  ],
+  'billing': [
+    { type: 'profile', label: 'Back to Profile', action: 'open_app' },
+    { type: 'pricing', label: 'Compare Plans', action: 'open_app' }
+  ]
 };
 
 export class AIOrchestrator {
@@ -156,19 +183,58 @@ export class AIOrchestrator {
   }
 
   detectAppFromText(text) {
-    const lower = text.toLowerCase();
+    const match = AIOrchestrator.matchIntent(text);
+    return match?.appType || null;
+  }
+
+  static matchIntent(text) {
+    const lower = text.toLowerCase().trim();
+    if (!lower || lower.length < 3) return null;
+
+    // Direct app matching
     let bestMatch = null;
     let bestLen = 0;
 
     for (const [appType, keywords] of Object.entries(APP_KEYWORDS)) {
       for (const kw of keywords) {
         if (lower.includes(kw) && kw.length > bestLen) {
-          bestMatch = appType;
+          bestMatch = { appType, action: 'open_app', label: APP_TITLES[appType] };
           bestLen = kw.length;
         }
       }
     }
+
+    // Verb-based intent matching
+    if (/generate|create|make|draw|paint/.test(lower)) {
+      if (lower.includes('image') || lower.includes('picture') || lower.includes('art')) {
+        return { appType: 'vertex', action: 'generate_image', label: 'Generate AI Image', params: { prompt: text } };
+      }
+      if (lower.includes('video') || lower.includes('movie')) {
+        return { appType: 'vertex', action: 'generate_video', label: 'Generate AI Video', params: { prompt: text } };
+      }
+      if (lower.includes('code') || lower.includes('app') || lower.includes('website')) {
+        return { appType: 'vibe-coding', action: 'vibe_code', label: 'Launch Vibe Coding', params: { prompt: text } };
+      }
+    }
+
+    if (/research|search|find|lookup|browse/.test(lower)) {
+      return { appType: 'browser', action: 'browse_url', label: 'Research with Aura', params: { query: text } };
+    }
+
+    if (/terminal|run|execute|cmd|shell/.test(lower)) {
+      return { appType: 'terminal', action: 'execute_command', label: 'Execute Command', params: { command: text } };
+    }
+
+    if (/chat|talk|ask|question/.test(lower)) {
+      return { appType: 'chat', action: 'open_app', label: 'Ask Nova' };
+    }
+
     return bestMatch;
+  }
+
+  static getSuggestions(activeWindowType) {
+    if (!activeWindowType) return [];
+    return CHAIN_LOGIC[activeWindowType] || [];
   }
 
   openApp(appType, params = {}) {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Landing Page Entry Point
  * Standalone search engine for novaura.life
  */
@@ -8,16 +8,21 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import { Toaster } from './components/ui/sonner';
+import { useAuthStore } from '../platform/src/stores/authStore';
 import './index.css';
 
 // Standalone landing page (no OS)
 function LandingApp() {
+  React.useEffect(() => {
+    useAuthStore.getState().init();
+  }, []);
+
   return (
     <BrowserRouter>
       <LandingPage 
         onLaunchOS={() => {
-          // Redirect to OS subdomain
-          window.location.href = 'https://os.novaura.life';
+          // Redirect to OS path
+          window.location.href = '/os/';
         }}
         isAuthenticated={false}
       />

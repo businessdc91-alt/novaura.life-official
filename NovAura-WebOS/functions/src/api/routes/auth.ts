@@ -4,6 +4,8 @@ import * as admin from 'firebase-admin';
 const router = Router();
 const db = admin.firestore();
 
+const SUPERUSERS = ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'];
+
 // Get current user (from Firebase Auth token)
 router.get('/me', async (req, res) => {
   try {
@@ -20,13 +22,18 @@ router.get('/me', async (req, res) => {
     const profileDoc = await db.collection('social_profiles').doc(decoded.uid).get();
     const profile = profileDoc.exists ? profileDoc.data() : null;
     
+    // Force catalyst tier for superusers
+    const userTier = (decoded.email && SUPERUSERS.includes(decoded.email)) 
+      ? 'catalyst' 
+      : (profile?.tier || 'free');
+    
     res.json({
       user: {
         id: decoded.uid,
         email: decoded.email,
         displayName: profile?.displayName || decoded.name || decoded.email?.split('@')[0],
         avatar: profile?.avatar || decoded.picture,
-        tier: profile?.tier || 'free'
+        tier: userTier
       }
     });
   } catch {
@@ -62,13 +69,15 @@ router.post('/profile', async (req, res) => {
     const decoded = await admin.auth().verifyIdToken(token);
     const { displayName, bio, avatar } = req.body;
 
+    const userTier = (decoded.email && SUPERUSERS.includes(decoded.email)) ? 'catalyst' : 'free';
+
     await db.collection('social_profiles').doc(decoded.uid).set({
       id: decoded.uid,
       email: decoded.email,
       displayName: displayName || decoded.name || decoded.email?.split('@')[0],
       bio: bio || '',
       avatar: avatar || decoded.picture || '',
-      tier: 'free',
+      tier: userTier,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 

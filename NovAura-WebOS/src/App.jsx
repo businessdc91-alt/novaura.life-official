@@ -1,15 +1,14 @@
 import React, { useState, useCallback, useEffect, useRef, Suspense, lazy } from 'react';
-import { useLocation } from 'react-router-dom';
 import ParticleBackground from './components/ParticleBackground';
 import ChatBar from './components/ChatBar';
 import Toolbar from './components/Toolbar';
+import { useSystemTelemetry } from './hooks/useSystemTelemetry';
 import WindowManager from './components/WindowManager';
 import MobileLayout from './components/MobileLayout';
 import { LayoutToggle } from './components/LayoutToggle';
 import SetupPage from './pages/SetupPage';
 import AuthPage from './pages/AuthPage';
-import CinematicIntro from './components/CinematicIntro';
-import ParticleTextAnimation from './components/ParticleTextAnimation';
+import LandingPage from './pages/LandingPage';
 import { Toaster } from './components/ui/sonner';
 import { LeftSidebar, RightSidebar } from './components/Sidebar';
 import AvatarButton from './components/AvatarButton';
@@ -26,8 +25,9 @@ import { smartChat } from './services/aiService';
 import { auth, isFirebaseConfigured } from './config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { loadUserPrefs, saveUserPref, recordSession } from './services/userService';
-// Nova — persistent AI companion (always visible, kernel-connected)
+// Nova & Aura — persistent AI companions (always visible, kernel-connected)
 const NovaChatFloating = lazy(() => import('./components/windows/NovaChatWindow'));
+const AuraChatFloating = lazy(() => import('./components/windows/AuraChatWindow'));
 import { kernelStorage } from './kernel/kernelStorage.js';
 
 // Lazy load window components for mobile layout
@@ -39,7 +39,8 @@ const windowComponents = {
   'media-library': lazy(() => import('./components/windows/MediaLibraryWindow')),
   voice: lazy(() => import('./components/windows/VoiceChatWindow')),
   terminal: lazy(() => import('./components/windows/TerminalWindow')),
-  'ai-assistant': lazy(() => import('./components/windows/AIAssistantWindow')),
+  'ai-assistant': lazy(() => import('./components/windows/AuraChatWindow')),
+  'aura': lazy(() => import('./components/windows/AuraChatWindow')),
   'vertex': lazy(() => import('./components/windows/VertexAIWindow')),
   'bg-remover': lazy(() => import('./components/windows/BackgroundRemoverWindow')),
   'appstore': lazy(() => import('./components/windows/AppStoreWindow')),
@@ -104,6 +105,8 @@ const windowComponents = {
   'music-tools': lazy(() => import('./components/windows/MusicToolsWindow')),
   'admin-key-hub': lazy(() => import('./components/windows/AdminKeyHubWindow')),
   'user-key-hub': lazy(() => import('./components/windows/UserKeyHubWindow')),
+  'platform': lazy(() => import('./components/windows/PlatformWindow')),
+  'founding-father-chat': lazy(() => import('./components/windows/FoundingFathersChatWindow')),
 };
 
 export default function App() {
@@ -121,14 +124,6 @@ export default function App() {
   const [showAuraHistory, setShowAuraHistory] = useState(false);
   const [auraHistory, setAuraHistory] = useState([]);
   const [promptLibrary, setPromptLibrary] = useState([]);
-  const [introComplete, setIntroComplete] = useState(() => {
-    // Only show intro once per session
-    return sessionStorage.getItem('novaura-intro-shown') === 'true';
-  });
-  const [showParticleWelcome, setShowParticleWelcome] = useState(() => {
-    // Only show particle welcome once per session
-    return sessionStorage.getItem('novaura-particles-shown') === 'true';
-  });
   const [userTier, setUserTier] = useState('free');
   const orchestratorRef = useRef(null);
   const { isOpen: isCommandPaletteOpen, close: closeCommandPalette } = useCommandPalette();
@@ -146,6 +141,34 @@ export default function App() {
   } = useLayoutMode();
 
   useEffect(() => {
+    // Check if we are on the OS, System, or window deep-link path
+    const path = window.location.pathname;
+    
+    // Track path in Analytics
+    if (typeof window.gtag === 'function') {
+      window.gtag('config', 'G-JXSHZN0FT0', {
+        page_path: path
+      });
+    }
+
+    // Safety check: redirect away from faulty subdomain
+    if (window.location.hostname === 'os.novaura.life' || window.location.hostname === '0s.novaura.life') {
+      window.location.replace('https://novaura.life/os/');
+      return;
+    }
+
+    if (path.startsWith('/os') || path.startsWith('/system') || path.includes('/window/')) {
+      setShowOS(true);
+      
+      // Handle deep links to specific windows
+      if (path.includes('/window/')) {
+        const windowType = path.split('/window/')[1]?.split('/')[0];
+        if (windowType) {
+          setPendingWindow(windowType);
+        }
+      }
+    }
+
     // Load saved theme
     const savedTheme = kernelStorage.getItem('novaura-theme');
     if (savedTheme) {
@@ -218,7 +241,7 @@ export default function App() {
         // Load user's membership tier
         try {
           const { getUserTier } = await import('./services/creditService');
-          const tier = await getUserTier(firebaseUser.uid);
+          const tier = await getUserTier(firebaseUser.uid, firebaseUser.email);
           setUserTier(tier);
         } catch (e) {
           console.log('Could not load user tier:', e);
@@ -238,13 +261,9 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // URL deep-link support — WebOS lives at /os, always show OS
-  const location = useLocation();
-  useEffect(() => {
-    // WebOS is always the OS — the Platform landing page handles /
-    setShowOS(true);
-  }, []);
-  
+  // Keep novaura.life as the landing page only.
+  // Do not auto-activate the Web OS unless the user explicitly clicks the OS launch link.
+
   // Persist Aura history
   useEffect(() => {
     if (auraHistory.length > 0) {
@@ -479,7 +498,8 @@ export default function App() {
       'chat': 'AI Chat',
       'voice': 'Voice Chat',
       'terminal': 'Terminal',
-      'ai-assistant': 'AI Assistant',
+      'ai-assistant': 'Aura Assistant',
+      'aura': 'Aura Assistant',
       'literature-ide': 'Literature IDE',
       'games-arena': 'Games Arena',
       'music-composer': 'Music Composer',
@@ -523,8 +543,8 @@ export default function App() {
       'files': 'Files',
       'imagen': 'Imagen',
       'pixai': 'PixAI Art',
-      'business-operator': 'Business Operator',
-      'nova-concierge': 'Concierge',
+      'business-operator': 'Venture Orchestrator',
+      'nova-concierge': 'Ecosystem Concierge',
       'weather': 'Weather',
       'crypto': 'Crypto Markets',
       'calculator': 'Calculator',
@@ -543,16 +563,15 @@ export default function App() {
       'user-key-hub': 'User Key Hub',
       'deploy': 'Deploy',
       'music-tools': 'Music Tools',
+      'founding-catalyst-chat': 'Founding Fathers Lounge',
+      'platform': 'NovAura Platform',
     };
     return titles[type] || 'Window';
   };
 
   // Handle launching OS from landing page
-  const handleLaunchOS = (windowType) => {
-    if (windowType) {
-      setPendingWindow(windowType);
-    }
-    setShowOS(true);
+  const handleLaunchOS = () => {
+    window.location.href = '/os/';
   };
 
   // Handle login from within OS
@@ -586,15 +605,15 @@ export default function App() {
     }
   }, [isSetupComplete, pendingWindow]);
 
-  // Show cinematic intro on first load
-  if (!introComplete) {
+  // Landing page (search engine) - entry point for all users
+  if (!showOS) {
     return (
-      <CinematicIntro 
-        onComplete={() => {
-          sessionStorage.setItem('novaura-intro-shown', 'true');
-          setIntroComplete(true);
-        }} 
-      />
+      <>
+        <LandingPage 
+          onLaunchOS={handleLaunchOS}
+        />
+        <Toaster position="top-right" />
+      </>
     );
   }
 
@@ -613,22 +632,6 @@ export default function App() {
     return (
       <>
         <SetupPage onComplete={handleSetupComplete} />
-        <Toaster position="top-right" />
-      </>
-    );
-  }
-
-  // Particle welcome animation
-  if (!showParticleWelcome) {
-    return (
-      <>
-        <ParticleTextAnimation 
-          userTier={userTier}
-          onComplete={() => {
-            sessionStorage.setItem('novaura-particles-shown', 'true');
-            setShowParticleWelcome(true);
-          }}
-        />
         <Toaster position="top-right" />
       </>
     );
@@ -685,6 +688,7 @@ export default function App() {
               'security': () => openWindow('security-monitor', 'Sentinel Shield'),
               'profile': () => openWindow('profile', 'Profile'),
               'billing': () => openWindow('billing', 'Billing'),
+              'platform': () => openWindow('platform', 'NovAura Platform'),
             };
             
             if (windowMap[commandId]) {
@@ -738,16 +742,20 @@ export default function App() {
           kernelStorage.setItem('novaura-theme', newTheme);
           document.documentElement.setAttribute('data-theme', newTheme);
         }}
+        userTier={userTier}
       />
 
       {/* Sidebars */}
       <LeftSidebar 
+        windows={windows}
         windowCount={windows.length} 
         onOpenWindow={openWindow}
         onExitToPlatform={() => {
           toast.info('Returning to NovAura Platform...');
           window.location.href = 'https://novaura.life';
         }}
+        userTier={userTier}
+        telemetry={telemetry}
       />
       <RightSidebar 
         onOpenWindow={openWindow} 
@@ -755,13 +763,7 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      {/* Avatar Chat Button — opens Nova chat window for deep conversation */}
-      <div className="fixed bottom-28 right-6 z-[850] pointer-events-auto">
-        <AvatarButton
-          onClick={() => openWindow('nova-chat', 'Nova')}
-          mood="idle"
-        />
-      </div>
+      {/* AI Assistants are now handled via persistent floating popouts below */}
 
       {/* Bottom UI Layer */}
       <div className="fixed bottom-0 left-0 right-0 z-[900] flex flex-col items-center pointer-events-none">
@@ -782,7 +784,7 @@ export default function App() {
                 <polyline points="18 15 12 9 6 15" />
               </svg>
             </button>
-            <ChatBar onSubmit={handleChatSubmit} llmConfig={llmConfig} />
+            <ChatBar onSubmit={handleChatSubmit} llmConfig={llmConfig} telemetry={telemetry} />
           </div>
         </div>
       </div>
@@ -801,30 +803,7 @@ export default function App() {
 
       <Toaster position="top-right" />
       
-      {/* Aura Chat History - Top Right Panel */}
-      <AuraChatHistory
-        isOpen={showAuraHistory}
-        onClose={() => setShowAuraHistory(false)}
-        messages={auraHistory}
-        onSendMessage={handleChatSubmit}
-        savedPrompts={promptLibrary}
-        onSavePrompt={(prompt) => {
-          setPromptLibrary(prev => {
-            const exists = prev.some(p => p.text === prompt.text);
-            if (exists) return prev;
-            const updated = [...prev, prompt];
-            kernelStorage.setItem('novaura_prompt_library', JSON.stringify(updated));
-            return updated;
-          });
-        }}
-        onDeletePrompt={(promptId) => {
-          setPromptLibrary(prev => {
-            const updated = prev.filter(p => p.id !== promptId);
-            kernelStorage.setItem('novaura_prompt_library', JSON.stringify(updated));
-            return updated;
-          });
-        }}
-      />
+      {/* Aura Chat History is now integrated into AuraChatWindow (Popout) */}
       
       {/* Auth/Login Button - Top Right */}
       {!isAuthenticated && (
@@ -837,23 +816,7 @@ export default function App() {
         </button>
       )}
 
-      {/* Aura Memory Toggle Button - Top Right */}
-      <button
-        onClick={() => setShowAuraHistory(!showAuraHistory)}
-        className={`fixed top-4 right-4 z-[1000] flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${
-          showAuraHistory 
-            ? 'bg-primary/20 border-primary/40 text-primary' 
-            : 'bg-black/50 border-white/10 text-gray-300 hover:bg-white/10'
-        } backdrop-blur-sm`}
-      >
-        <MessageSquare className="w-3.5 h-3.5" />
-        <span className="text-[10px] font-medium">Aura Memory</span>
-        {promptLibrary.length > 0 && (
-          <span className="text-[9px] px-1 rounded bg-primary/30 text-primary">
-            {promptLibrary.length}
-          </span>
-        )}
-      </button>
+      {/* Aura Memory hidden from top-right as it is now in bottom-right */}
       
       {/* Command Palette - Global Cmd+K */}
       <CommandPalette
@@ -909,9 +872,10 @@ export default function App() {
       {/* Help Button - always visible */}
       <HelpButton />
       
-      {/* Nova — persistent AI companion, always visible, kernel-connected */}
+      {/* Dual AI Persistent Companions */}
       <Suspense fallback={null}>
         <NovaChatFloating isPopout={true} />
+        <AuraChatFloating isPopout={true} userTier={userTier} />
       </Suspense>
 
       {/* Tips Widget - rotating helpful hints */}

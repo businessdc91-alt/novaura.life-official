@@ -2,7 +2,7 @@
  * DeployEngine - One-click deployment to multiple platforms
  * 
  * Supports: Vercel, Netlify, Firebase, GitHub Pages
- * Features: Preview deployments, custom domains, environment variables
+ * Features: Preview deployments, secure hosting, environment variables
  */
 
 export const DEPLOYMENT_TARGETS = {

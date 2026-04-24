@@ -10,7 +10,7 @@
     "source": "functions"
   },
   "hosting": {
-    "site": "novaura-systems",
+    "target": "main",
     "public": "dist",
     "httpsOnly": true,
     "ignore": [
@@ -18,13 +18,50 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "trailingSlash": true,
     "rewrites": [
       {
         "source": "/api/**",
         "function": "api"
       },
       {
+        "source": "/platform",
+        "destination": "/platform/index.html"
+      },
+      {
+        "source": "/platform/**",
+        "destination": "/platform/index.html"
+      },
+      {
+        "source": "/login",
+        "destination": "/platform/index.html"
+      },
+      {
+        "source": "/browse",
+        "destination": "/platform/index.html"
+      },
+      {
+        "source": "/domains",
+        "destination": "/platform/index.html"
+      },
+      {
+        "source": "/market",
+        "destination": "/platform/index.html"
+      },
+      {
+        "source": "/os",
+        "destination": "/os/index.html"
+      },
+      {
         "source": "/os/**",
+        "destination": "/os/index.html"
+      },
+      {
+        "source": "/system",
+        "destination": "/os/index.html"
+      },
+      {
+        "source": "/system/**",
         "destination": "/os/index.html"
       },
       {

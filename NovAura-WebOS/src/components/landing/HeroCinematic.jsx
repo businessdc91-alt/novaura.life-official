@@ -347,9 +347,12 @@ export default function HeroCinematic({
               <div className="flex gap-1 mb-3 p-1 rounded-lg bg-white/5">
                 {PROVIDERS.map(p => {
                   const Icon = p.icon;
+                  // Restrict Local Forge to Catalyst+
+                  const isLocked = p.id === 'forge' && userTier !== 'catalyst' && userTier !== 'nova' && userTier !== 'catalytic-crew';
                   return (
                     <button
                       key={p.id}
+                      disabled={isLocked}
                       onClick={() => {
                         setProvider(p.id);
                         localStorage.setItem('novaura_hero_provider', p.id);
@@ -357,11 +360,15 @@ export default function HeroCinematic({
                       className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-[10px] font-medium transition-colors ${
                         provider === p.id
                           ? 'bg-cyan-500/20 text-cyan-400'
-                          : 'text-white/50 hover:text-white/80'
+                          : isLocked
+                            ? 'opacity-20 cursor-not-allowed'
+                            : 'text-white/50 hover:text-white/80'
                       }`}
+                      title={isLocked ? 'Catalyst Membership Required' : ''}
                     >
                       <Icon className="w-3 h-3" />
                       {p.name}
+                      {isLocked && <span className="ml-1 text-[8px]">🔒</span>}
                     </button>
                   );
                 })}
@@ -402,7 +409,7 @@ export default function HeroCinematic({
 
               <button
                 onClick={generateFrames}
-                disabled={generating}
+                disabled={generating || (provider === 'forge' && userTier !== 'catalyst' && userTier !== 'nova' && userTier !== 'catalytic-crew')}
                 className="w-full py-2 rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 text-xs font-medium hover:bg-cyan-500/30 transition-colors disabled:opacity-50"
               >
                 {generating

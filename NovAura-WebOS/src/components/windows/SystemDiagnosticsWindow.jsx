@@ -28,6 +28,8 @@ const PROVIDER_LABELS = {
   hyperbolic: 'Hyperbolic',
   fireworks: 'Fireworks AI',
   azure: 'Azure OpenAI',
+  nova: 'Amazon Nova',
+  aws: 'AWS Bedrock',
   'webgpu-local': 'WebGPU Local (Nova)',
   ollama: 'Ollama (Local)',
   lmstudio: 'LM Studio (Local)',

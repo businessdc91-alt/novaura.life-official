@@ -25,26 +25,24 @@ export default function SwarmPanel({ onFilesGenerated }) {
       const currentStatus = swarm.getProjectStatus(currentProject.projectId);
       setStatus(currentStatus);
 
+      // Sync event log from engine
+      if (currentStatus?.eventLog) {
+        setLogs(currentStatus.eventLog);
+      }
+
       // Detect hard failure
       if (currentStatus?.failed) {
-        addLog(`❌ Swarm failed: ${currentStatus.failReason}`, 'error');
         setIsRunning(false);
         return;
       }
 
-      // Show planning state
-      if (currentStatus?.isPlanning) {
-        addLog('🧠 Orchestrator planning project...', 'info');
-      }
-
-      // Completion: totalTasks > 0 guards against false-positive before plan is made
+      // Completion check
       if (
         currentStatus &&
         currentStatus.totalTasks > 0 &&
         currentStatus.working === 0 &&
         currentStatus.pending === 0
       ) {
-        // Project complete
         const files = swarm.getProjectFiles(currentProject.projectId);
         setGeneratedFiles(Object.entries(files).map(([path, content]) => ({
           path,
@@ -52,7 +50,6 @@ export default function SwarmPanel({ onFilesGenerated }) {
           size: content.length
         })));
         setIsRunning(false);
-        addLog(`✅ Swarm complete! ${Object.keys(files).length} files generated.`, 'success');
         
         if (onFilesGenerated) {
           onFilesGenerated(files);
@@ -61,7 +58,7 @@ export default function SwarmPanel({ onFilesGenerated }) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isRunning, currentProject, swarm, onFilesGenerated]);
+  }, [isRunning, currentProject, swarm, onFilesGenerated, logs]);
 
   const startSwarm = async () => {
     if (!prompt.trim()) return;
@@ -87,11 +84,16 @@ export default function SwarmPanel({ onFilesGenerated }) {
   };
 
   const addLog = (message, type = 'info') => {
-    setLogs(prev => [...prev, {
-      timestamp: Date.now(),
-      message,
-      type
-    }]);
+    setLogs(prev => {
+      // Prevent identical consecutive logs
+      if (prev.length > 0 && prev[prev.length - 1].message === message) return prev;
+      
+      return [...prev, {
+        timestamp: Date.now(),
+        message,
+        type
+      }];
+    });
   };
 
   const toggleAgentExpand = (agentType) => {

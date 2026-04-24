@@ -120,14 +120,14 @@ namespace AuraxNova_Command_v5.Core
     }
 
         private static readonly string ENV_PATH = AuraPaths.GetNovaFilesSubPath(".env");
-        private static readonly string OAUTH_PATH = AuraPaths.GetNovaFilesSubPath("client_secret_470026177564-0av747ps2diqkrcd1peef807jcu1m9vj.apps.googleusercontent.com.json");
 
-        // Extracted credentials from your existing files
-        private const string GOOGLE_CLIENT_ID = "470026177564-0av747ps2diqkrcd1peef807jcu1m9vj.apps.googleusercontent.com";
-        private const string GOOGLE_CLIENT_SECRET = "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";
-        private const string GOOGLE_API_KEY = "AIzaSyDWtjHaRwvSB1cVrZbCubbJzQlAyouBGxY";
-        private const string FIREBASE_PROJECT_ID = "auraxnovaos";
-        private const string CATALYST_MASTER_KEY = "DILLAN_MASTER_KEY_V1";
+        // Credentials now loaded from environment variables or .env file
+        private static readonly string OAUTH_PATH = AuraPaths.GetNovaFilesSubPath("client_secret.json");
+        private static readonly string GOOGLE_CLIENT_ID = Environment.GetEnvironmentVariable("GOOGLE_CLIENT_ID") ?? "";
+        private static readonly string GOOGLE_CLIENT_SECRET = Environment.GetEnvironmentVariable("GOOGLE_CLIENT_SECRET") ?? "";
+        private static readonly string GOOGLE_API_KEY = Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? "";
+        private static readonly string FIREBASE_PROJECT_ID = Environment.GetEnvironmentVariable("FIREBASE_PROJECT_ID") ?? "";
+        private static readonly string CATALYST_MASTER_KEY = Environment.GetEnvironmentVariable("CATALYST_MASTER_KEY") ?? "";
 
         public static async Task<AuraInstance> InitializeAsync(Image avatarControl = null)
         {

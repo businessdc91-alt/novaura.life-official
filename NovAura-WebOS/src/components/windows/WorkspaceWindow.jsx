@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { FolderOpen, Plus, Trash2, FileCode, Image, Package, Grid, List, Search, Download, Upload, Settings } from 'lucide-react';
-import { kernelStorage } from '../../kernel/kernelStorage.js';
+import { kernel } from '../../kernel/NovaKernel.js';
 
 const ASSET_TYPES = [
   { id: 'code', label: 'Code', icon: '💻', color: 'text-cyan-400' },
@@ -15,7 +15,10 @@ const ENGINES = ['Unreal','Unity','Godot','Phaser','Custom'];
 
 export default function WorkspaceWindow() {
   const [projects, setProjects] = useState(() => {
-    try { return JSON.parse(kernelStorage.getItem('workspace_projects') || '[]'); } catch { return []; }
+    try { 
+      const raw = kernel.memory.get('workspace_projects');
+      return (typeof raw === 'string' ? JSON.parse(raw) : raw) || []; 
+    } catch { return []; }
   });
   const [activeProject, setActiveProject] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
@@ -25,7 +28,10 @@ export default function WorkspaceWindow() {
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectEngine, setNewProjectEngine] = useState('Godot');
 
-  const save = (updated) => { setProjects(updated); kernelStorage.setItem('workspace_projects', JSON.stringify(updated)); };
+  const save = (updated) => { 
+    setProjects(updated); 
+    kernel.memory.set('workspace_projects', updated); 
+  };
 
   const createProject = () => {
     if (!newProjectName.trim()) return;

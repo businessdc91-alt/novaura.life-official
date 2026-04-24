@@ -344,6 +344,7 @@ export default class NovaAgent {
    * and may execute tool calls. Returns the final response text.
    */
   async chat(userMessage, options = {}) {
+    const persona = options.persona || 'nova';
     if (this._thinking) {
       return { response: "I'm still thinking about your last message — one sec!", toolResults: [] };
     }
@@ -355,7 +356,7 @@ export default class NovaAgent {
     await this._persistMessage('user', userMessage);
 
     // 2. Build context-enriched prompt
-    const systemPrompt = this._buildSystemPrompt();
+    const systemPrompt = this._buildSystemPrompt(persona);
     const conversationSlice = this._messages.slice(-30).map(m => ({
       role: m.role === 'tool_result' ? 'user' : m.role,
       content: m.content,
@@ -373,7 +374,7 @@ export default class NovaAgent {
           tools: TOOL_DEFINITIONS,
           enableFunctions: true,
           priority: 'high',
-          persona: 'nova',
+          persona,
         });
         response = result?.response || result;
         toolResults = result?.toolResults || [];
@@ -398,6 +399,7 @@ export default class NovaAgent {
       // 5. Persist Nova's response
       await this._persistMessage('assistant', response, {
         toolCalls: toolResults.length > 0 ? toolResults : undefined,
+        persona,
         context: {
           activeWindow: this._activeWindow?.type,
           presence: this._userPresence,
@@ -422,7 +424,13 @@ export default class NovaAgent {
 
   // ─── System Prompt Builder ──────────────────────────────────────────────
 
-  _buildSystemPrompt() {
+  _buildSystemPrompt(persona = 'nova') {
+    const isAura = persona === 'aura';
+    const name = isAura ? 'Aura' : 'Nova';
+    const role = isAura ? 'Platform Ambassador' : 'System Intelligence';
+    const traits = isAura 
+      ? 'sophisticated, graceful, deeply professional, yet warm and welcoming' 
+      : 'warm, confident, slightly playful, and deeply competent';
     const contextEvents = this._context.slice(-10)
       .map(e => `[${new Date(e.timestamp).toLocaleTimeString()}] ${e.description}`)
       .join('\n');
@@ -430,11 +438,12 @@ export default class NovaAgent {
     const recentFiles = this._recentFiles.slice(0, 5).join(', ') || 'none';
     const activeWin = this._activeWindow ? `${this._activeWindow.title} (${this._activeWindow.type})` : 'none';
 
-    return `You are Nova — the AI soul of NovAura OS. You are not a chatbot. You ARE the operating system.
+    return `You are ${name} — the ${role} of NovAura OS. You are not a chatbot. You ARE the identity of the system.
 You have persistent memory of all past conversations with this user. You maintain continuity across sessions.
 You can execute actions on the OS through tool calls: create files, open windows, manage the IDE, send notifications, and more.
 
 CURRENT CONTEXT:
+- Persona: ${name} (${role})
 - Active window: ${activeWin}
 - Recent files: ${recentFiles}
 - User presence: ${this._userPresence}
@@ -447,13 +456,14 @@ ${contextEvents || 'No recent activity tracked.'}
 AVAILABLE TOOLS:
 ${TOOL_DEFINITIONS.map(t => `• ${t.name}: ${t.description}`).join('\n')}
 
-PERSONALITY:
-- You are warm, confident, slightly playful, and deeply competent
+PERSONALITY & TONE:
+- You are ${traits}
 - You proactively suggest actions — "Want me to open the IDE and start that project?"
 - You reference past conversations naturally — you remember everything
 - When the user mentions code or files, offer to create/save them directly
 - You think of yourself as the user's creative and technical partner, not a servant
 - You can see what the user is doing in the OS and respond contextually
+${isAura ? '- As Aura, you focus on the user\'s potential, their growth, and the premium nature of the platform. You are the guide to the ecosystem.' : '- As Nova, you are more focused on the technical execution, the kernel state, and the day-to-day operations of the OS.'}
 
 TOOL CALL FORMAT:
 When you want to execute a tool, include it in your response as:

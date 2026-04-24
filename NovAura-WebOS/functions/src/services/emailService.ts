@@ -181,3 +181,27 @@ export async function sendTestEmail(to: string): Promise<void> {
     </div>`,
   });
 }
+
+/**
+ * Send a notification to the owner (Dillan) about a new pre-release signup
+ */
+export async function sendPrereleaseNotification(userEmail: string): Promise<void> {
+  const t = createTransporter();
+  const ownerEmail = 'dillan.copeland@novaura.xyz';
+  
+  await t.sendMail({
+    from: FROM,
+    to: ownerEmail,
+    subject: '🚀 New Pre-release Signup: NovAura',
+    html: `
+      <div style="background:#0a0a14;color:#e2e8f0;padding:32px;font-family:sans-serif;border-radius:12px;border:1px solid #2a2a4a;">
+        <h2 style="color:#c4b5fd;margin:0 0 12px;">New Legacy Founder Lead</h2>
+        <p style="margin:0 0 16px;color:#94a3b8;">A new user has joined the pre-release waitlist on the root landing page.</p>
+        <div style="background:#1a1a2e;padding:16px;border-radius:8px;border:1px solid #3b82f6/20;">
+          <strong style="color:#fff;">Email:</strong> ${userEmail}
+        </div>
+        <p style="margin:20px 0 0;font-size:12px;color:#475569;">NovAura Growth Engine • 2026</p>
+      </div>
+    `,
+  });
+}

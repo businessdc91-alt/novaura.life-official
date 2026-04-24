@@ -6,7 +6,7 @@ import {
   Wand2, Blocks, Shuffle, Briefcase, Swords, Image, Shirt,
   Sparkles, UserCircle, Users, Bot, Radio, PenTool, Library,
   CreditCard, FileText, Bell, Trophy, PieChart, Layers, Shield,
-  Mic, Guitar
+  Mic, Guitar, Crown, ShoppingBag
 } from 'lucide-react';
 import { kernelStorage } from '../kernel/kernelStorage.js';
 
@@ -47,7 +47,7 @@ const APP_REGISTRY = {
   // AI
   'chat':              { icon: MessageSquare,  label: 'Chat',     color: 'var(--app-chat)' },
   'voice':             { icon: Phone,          label: 'Voice',    color: 'var(--app-voice)' },
-  'ai-assistant':      { icon: Brain,          label: 'Assist',   color: 'var(--app-chat)' },
+  'ai-assistant':      { icon: Crown,          label: 'Aura',    color: '#ffcc00' },
   'ai-companion':      { icon: Bot,            label: 'Nova',     color: 'var(--app-chat)' },
   'vertex':            { icon: Palette,        label: 'Vertex',   color: 'var(--app-vertex)' },
   'bg-remover':        { icon: Eraser,         label: 'BG Cut',   color: 'var(--app-bgremover)' },
@@ -57,7 +57,8 @@ const APP_REGISTRY = {
   'tax-filing':        { icon: FileText,       label: 'Tax',      color: 'var(--app-files)' },
   'notifications':     { icon: Bell,           label: 'Alerts',   color: 'var(--app-chat)' },
   'profile':           { icon: User,           label: 'Profile',  color: 'var(--app-profile)' },
-  'appstore':          { icon: Store,          label: 'Store',    color: 'var(--app-store)' },
+  'appstore':          { icon: Store,          label: 'Repo Station', color: 'var(--app-store)' },
+  'platform':          { icon: ShoppingBag,    label: 'NovAura Platform', color: 'var(--app-store)' },
   'personalization':   { icon: Settings,       label: 'Settings', color: 'var(--app-chat)' },
   // Games & Learn
   'games-arena':       { icon: Gamepad2,       label: 'Games',    color: 'var(--app-store)' },
@@ -79,7 +80,7 @@ const DEFAULT_APPS = [
   'ide', 'website-builder', 'browser', 'vertex', 'bg-remover',
   'media', 'media-library', 'chat', 'voice', 'terminal',
   'ai-assistant', 'literature-ide', 'art-studio', 'music-composer',
-  'vibe-coding', 'games-arena', 'appstore', 'profile', 'personalization',
+  'vibe-coding', 'games-arena', 'profile', 'personalization',
   'voice-studio', 'music-studio', 'practice-tools',
 ];
 

@@ -177,6 +177,60 @@ function QuickActions({ onAction }) {
   );
 }
 
+// ─── Model Selector ───────────────────────────────────────────────────────────
+function ModelSelector({ currentModel, onSelect }) {
+  const models = [
+    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', desc: 'Experimental Speed', color: 'text-cyan-400' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', desc: 'Ultimate Intelligence', color: 'text-purple-400' },
+    { id: 'amazon.nova-pro-v1:0', name: 'Amazon Nova Pro', desc: 'Multimodal / AWS Nova', color: 'text-orange-400' },
+    { id: 'qwen-max', name: 'Qwen Max (Cybeni)', desc: 'Reasoning Specialist', color: 'text-red-400' },
+    { id: 'webgpu-local', name: 'WebLLM (Local GPU)', desc: 'Privacy-First / Browser-Native', color: 'text-cyan-400' },
+  ];
+
+  const [isOpen, setIsOpen] = useState(false);
+  const activeModel = models.find(m => m.id === currentModel) || models[0];
+
+  return (
+    <div className="relative">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 border border-white/10 hover:border-cyan-500/30 transition-all group"
+      >
+        <div className={`w-1 h-1 rounded-full ${activeModel.color} animate-pulse`} />
+        <span className="text-[9px] font-medium text-white/50 group-hover:text-cyan-400">{activeModel.name}</span>
+        <ChevronDown className={`w-2.5 h-2.5 text-white/20 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div 
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 5 }}
+            className="absolute top-full mt-1.5 right-0 w-44 p-1 rounded-lg bg-[#0c0c14] border border-cyan-500/20 shadow-2xl z-50 backdrop-blur-xl"
+          >
+            {models.map(m => (
+              <button
+                key={m.id}
+                onClick={() => { onSelect(m.id); setIsOpen(false); }}
+                className={`w-full text-left p-1.5 rounded transition-colors flex flex-col gap-0.5 ${
+                  currentModel === m.id ? 'bg-cyan-500/10' : 'hover:bg-white/5'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-[10px] font-semibold ${m.color}`}>{m.name}</span>
+                  {currentModel === m.id && <Check className="w-3 h-3 text-cyan-400" />}
+                </div>
+                <span className="text-[8px] text-white/20">{m.desc}</span>
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // ─── Main NovaChatWindow ──────────────────────────────────────────────────────
 export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, onClose }) {
   const kernelFromHook = useKernel();
@@ -185,6 +239,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
+  const [model, setModel] = useState('gemini-2.0-flash-exp'); // Nova defaults to Flash 2.0
   const [context, setContext] = useState(null);
   const [showContext, setShowContext] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
@@ -197,14 +252,17 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
   useEffect(() => {
     if (!agent) return;
 
-    // Initial load
-    setMessages(agent.getMessages());
+    // Initial load - filter for Nova persona or no persona
+    setMessages(agent.getMessages().filter(m => m.persona === 'nova' || !m.persona));
     setContext(agent.getContext());
     setThinking(agent._thinking);
 
     // Subscribe to state changes
     const unsub = agent.onStateChange((event) => {
-      if (event === 'messages') setMessages([...agent.getMessages()]);
+      if (event === 'messages') {
+        const msgs = agent.getMessages();
+        setMessages(msgs.filter(m => m.persona === 'nova' || !m.persona));
+      }
       if (event === 'thinking') setThinking(agent._thinking);
       if (event === 'ready') setContext(agent.getContext());
     });
@@ -239,7 +297,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
     if (!text || !agent) return;
 
     setInput('');
-    const { response, toolResults } = await agent.chat(text);
+    const { response, toolResults } = await agent.chat(text, { persona: 'nova', model });
 
     // Show tool execution results as toasts
     if (toolResults?.length > 0) {
@@ -251,7 +309,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
         }
       }
     }
-  }, [input, agent]);
+  }, [input, agent, model]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -303,10 +361,10 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 bg-white/3">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary via-purple-500 to-pink-500 flex items-center justify-center relative">
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-cyan-400 via-blue-500 to-purple-500 flex items-center justify-center relative">
             <Bot className="w-4 h-4 text-white" />
             {thinking && (
-              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
             )}
           </div>
           <div>
@@ -316,19 +374,21 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          <ModelSelector currentModel={model} onSelect={setModel} />
+          <div className="h-4 w-[1px] bg-white/10 mx-1" />
           <button
             onClick={() => setShowContext(!showContext)}
-            className={`p-1.5 rounded hover:bg-white/10 transition-colors ${showContext ? 'text-primary' : 'text-white/30'}`}
+            className={`p-1 rounded hover:bg-white/10 transition-colors ${showContext ? 'text-cyan-400' : 'text-white/30'}`}
             title="Toggle context awareness"
           >
             <Eye className="w-3.5 h-3.5" />
           </button>
-          <button onClick={handleClear} className="p-1.5 rounded hover:bg-white/10 text-white/30 hover:text-red-400 transition-colors" title="Clear history">
+          <button onClick={handleClear} className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-red-400 transition-colors" title="Clear history">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           {isPopout && (
-            <button onClick={() => setIsOpen(false)} className="p-1.5 rounded hover:bg-white/10 text-white/30 hover:text-white transition-colors" title="Minimize">
+            <button onClick={() => setIsOpen(false)} className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white transition-colors" title="Minimize">
               <Minus className="w-3.5 h-3.5" />
             </button>
           )}
@@ -341,14 +401,14 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3" style={isPopout ? { maxHeight: 340 } : {}}>
         {showGreeting && (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary/30 via-purple-500/20 to-pink-500/20 flex items-center justify-center mb-4">
-              <Sparkles className="w-8 h-8 text-primary" />
+          <div className="flex flex-col items-center justify-center h-full text-center p-4">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-cyan-400/30 via-blue-500/20 to-purple-500/20 flex items-center justify-center mb-4">
+              <Sparkles className="w-8 h-8 text-cyan-400" />
             </div>
             <h3 className="text-sm font-semibold text-white/70 mb-1">Hey — I'm Nova</h3>
             <p className="text-[11px] text-white/30 max-w-[250px] leading-relaxed">
               I'm always here. I can see what you're working on, create files, open apps,
-              remember things across sessions, and help you build. Just talk to me.
+              remember things across sessions, and help you build.
             </p>
           </div>
         )}
@@ -363,11 +423,11 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
 
         {thinking && (
           <div className="flex items-center gap-2 mb-3">
-            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-primary via-purple-500 to-pink-500 flex items-center justify-center">
+            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-cyan-400 via-blue-500 to-purple-500 flex items-center justify-center">
               <Bot className="w-3 h-3 text-white" />
             </div>
             <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
-              <Loader2 className="w-3 h-3 text-primary animate-spin" />
+              <Loader2 className="w-3 h-3 text-cyan-400 animate-spin" />
               <span className="text-[11px] text-white/40">Nova is thinking...</span>
             </div>
           </div>
@@ -379,7 +439,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
 
       {/* Input */}
       <div className="px-3 pb-3">
-        <div className="flex items-end gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2 focus-within:border-primary/40 transition-colors">
+        <div className="flex items-end gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2 focus-within:border-cyan-500/40 transition-colors">
           <textarea
             ref={inputRef}
             value={input}
@@ -393,7 +453,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
           <button
             onClick={handleSend}
             disabled={!input.trim() || thinking}
-            className="p-1.5 rounded-lg bg-primary/20 hover:bg-primary/30 border border-primary/30 text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            className="p-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             <Send className="w-4 h-4" />
           </button>
@@ -455,4 +515,5 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
   // ─── Window Mode: Rendered inside WindowManager ────────────────────────────
   return chatContent;
 }
+
 

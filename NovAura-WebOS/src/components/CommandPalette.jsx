@@ -5,7 +5,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, X, Terminal, Settings, FileCode, GitBranch, FolderOpen, Globe, Shield, CreditCard, User, Plus, Moon, LogOut, Palette, Image } from 'lucide-react';
+import { Search, X, Terminal, Settings, FileCode, GitBranch, FolderOpen, Globe, Shield, CreditCard, User, Plus, Moon, LogOut, Palette, Image, Sparkles, Bot } from 'lucide-react';
+import { AIOrchestrator } from '../utils/AIOrchestrator.js';
 
 const COMMANDS = [
   { id: 'ide', label: 'Open IDE', icon: FileCode, category: 'Apps' },
@@ -28,9 +29,29 @@ export default function CommandPalette({ isOpen, onClose, onSelect }) {
   const [selected, setSelected] = useState(0);
 
   const filtered = useMemo(() => {
-    if (!search) return COMMANDS;
-    const q = search.toLowerCase();
-    return COMMANDS.filter(c => c.label.toLowerCase().includes(q) || c.category.toLowerCase().includes(q));
+    const q = search.toLowerCase().trim();
+    
+    let results = [...COMMANDS];
+    if (q) {
+      results = COMMANDS.filter(c => c.label.toLowerCase().includes(q) || c.category.toLowerCase().includes(q));
+    }
+
+    // Add Semantic Intent at the top if detected
+    if (q) {
+      const intent = AIOrchestrator.matchIntent(q);
+      if (intent && !results.some(r => r.id === intent.appType)) {
+        results.unshift({
+          id: intent.appType,
+          label: intent.label,
+          icon: Sparkles,
+          category: 'AI Intent',
+          isIntent: true,
+          params: intent.params
+        });
+      }
+    }
+
+    return results;
   }, [search]);
 
   useEffect(() => {
@@ -47,7 +68,12 @@ export default function CommandPalette({ isOpen, onClose, onSelect }) {
         setSelected(s => (s - 1 + filtered.length) % filtered.length);
       }
       if (e.key === 'Enter' && filtered[selected]) {
-        onSelect(filtered[selected].id);
+        const item = filtered[selected];
+        if (item.isIntent) {
+          onSelect(item.id, item.label, item.params);
+        } else {
+          onSelect(item.id);
+        }
         onClose();
       }
     };
@@ -105,16 +131,25 @@ export default function CommandPalette({ isOpen, onClose, onSelect }) {
                 
                 return (
                   <button
-                    key={cmd.id}
+                    key={cmd.id + (cmd.isIntent ? '-intent' : '')}
                     className={`w-full flex items-center gap-3 px-4 py-3 mx-2 rounded-lg text-left transition-colors ${
-                      isSelected ? 'bg-cyan-500/20 text-cyan-300' : 'text-white/70 hover:bg-white/5'
+                      isSelected 
+                        ? cmd.isIntent ? 'bg-primary/20 text-primary' : 'bg-cyan-500/20 text-cyan-300' 
+                        : 'text-white/70 hover:bg-white/5'
                     }`}
                     style={{ width: 'calc(100% - 16px)' }}
-                    onClick={() => { onSelect(cmd.id); onClose(); }}
+                    onClick={() => { 
+                      if (cmd.isIntent) onSelect(cmd.id, cmd.label, cmd.params);
+                      else onSelect(cmd.id); 
+                      onClose(); 
+                    }}
                     onMouseEnter={() => setSelected(i)}
                   >
-                    <Icon className="w-5 h-5" />
-                    <span className="flex-1">{cmd.label}</span>
+                    <Icon className={`w-5 h-5 ${cmd.isIntent ? 'animate-pulse text-primary' : ''}`} />
+                    <div className="flex-1">
+                      <span className="block">{cmd.label}</span>
+                      {cmd.isIntent && <span className="text-[9px] text-primary/60 uppercase font-bold tracking-tighter">Powered by Aura</span>}
+                    </div>
                     <span className="text-xs text-white/40">{cmd.category}</span>
                     {cmd.shortcut && (
                       <kbd className="px-2 py-0.5 text-xs bg-white/10 rounded">

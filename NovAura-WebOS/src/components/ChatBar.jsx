@@ -5,7 +5,7 @@ import { Input } from './ui/input';
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-export default function ChatBar({ onSubmit, llmConfig }) {
+export default function ChatBar({ onSubmit, llmConfig, telemetry }) {
   const [message, setMessage] = useState('');
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
@@ -65,11 +65,26 @@ export default function ChatBar({ onSubmit, llmConfig }) {
           <div className="relative z-10 bg-black rounded-2xl overflow-hidden">
             <div className="flex items-center gap-2 md:gap-3 px-3 py-1.5 md:px-4 md:py-2">
               {/* AI Indicator */}
-              <div className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-lg bg-primary/10 border border-primary/30 flex-shrink-0">
-                <Sparkles className="w-3 h-3 md:w-4 md:h-4 text-primary animate-pulse" />
-                <span className="text-xs md:text-sm font-medium text-primary">
-                  {llmConfig?.useLocalLLM ? 'Local+Gemini' : 'Gemini'}
-                </span>
+              <div className={`flex items-center gap-1 md:gap-2 px-2 md:px-3 py-2 rounded-lg border transition-all flex-shrink-0 ${
+                telemetry?.aiStatus === 'Healthy' ? 'bg-primary/10 border-primary/30' : 
+                telemetry?.aiStatus === 'Standby' ? 'bg-amber-500/10 border-amber-500/30' : 
+                'bg-red-500/10 border-red-500/30'
+              }`}>
+                <Sparkles className={`w-3 h-3 md:w-4 md:h-4 ${
+                  telemetry?.aiStatus === 'Healthy' ? 'text-primary animate-pulse' : 
+                  telemetry?.aiStatus === 'Standby' ? 'text-amber-400' : 'text-red-400'
+                }`} />
+                <div className="flex flex-col">
+                  <span className={`text-[10px] md:text-xs font-bold leading-none ${
+                    telemetry?.aiStatus === 'Healthy' ? 'text-primary' : 
+                    telemetry?.aiStatus === 'Standby' ? 'text-amber-400' : 'text-red-400'
+                  }`}>
+                    {llmConfig?.useLocalLLM ? 'LOCAL+GEMINI' : 'GEMINI'}
+                  </span>
+                  <span className="text-[8px] md:text-[9px] text-white/40 leading-none mt-0.5">
+                    {telemetry?.aiStatus} {telemetry?.aiLatency ? `(${telemetry.aiLatency}ms)` : ''}
+                  </span>
+                </div>
               </div>
 
               {/* Input */}

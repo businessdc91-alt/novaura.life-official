@@ -50,10 +50,20 @@ export default function ProfileWindow() {
   const [name, setName] = useState(storedUser.name || 'User');
   const [email] = useState(storedUser.email || 'user@novaura.life');
   
-  // ── Subscription tier (1=Free, 2=Creator, 3=Studio, 4=Catalyst) ──
+  // ── Subscription tier mapping ──
   const userTier = storedUser.membershipTier || 'free';
-  const tierNumber = { free: 1, creator: 2, studio: 3, catalyst: 4 }[userTier] || 1;
-  const canUseBYOK = tierNumber >= 3; // Tier 3+ only
+  const tierMap = { 
+    free: 1, 
+    spark: 2, 
+    emergent: 3, 
+    catalyst: 4, 
+    nova: 5, 
+    'catalytic-crew': 6, 
+    investor: 7, 
+    founding: 8 
+  };
+  const tierNumber = tierMap[userTier] || 1;
+  const canUseBYOK = tierNumber >= 3; // Emergent (Tier 3) and above
 
   // ── LLM config ──
   const loadConfig = () => {
@@ -275,7 +285,22 @@ export default function ProfileWindow() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Plan</span>
-                  <Badge className="bg-primary/20 text-primary border-primary/30">Free</Badge>
+                  <div className="flex flex-col items-end gap-1">
+                    <Badge className={`
+                      ${userTier === 'investor' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-[0_0_10px_rgba(0,255,255,0.2)]' : ''}
+                      ${userTier === 'founding' ? 'bg-lime-500/20 text-lime-400 border-lime-500/30 shadow-[0_0_10px_rgba(57,255,20,0.2)]' : ''}
+                      ${userTier === 'catalyst' || userTier === 'nova' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : ''}
+                      ${userTier === 'free' ? 'bg-primary/20 text-primary border-primary/30' : ''}
+                      ${!['investor', 'founding', 'catalyst', 'nova', 'free'].includes(userTier) ? 'bg-purple-500/20 text-purple-400 border-purple-500/30' : ''}
+                    `}>
+                      {userTier.charAt(0).toUpperCase() + userTier.slice(1).replace('-', ' ')}
+                    </Badge>
+                    {['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'].includes(email) && (
+                      <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 animate-pulse">
+                        <Zap className="w-2.5 h-2.5" /> Unlimited Credits
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Member since</span>

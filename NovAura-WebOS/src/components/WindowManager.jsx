@@ -8,7 +8,7 @@ const BrowserWindow = lazy(() => import('./windows/BrowserWindow'));
 const MediaWindow = lazy(() => import('./windows/MediaWindow'));
 // ChatWindow removed — Nova is now persistent floating companion in App.jsx
 const TerminalWindow = lazy(() => import('./windows/TerminalWindow'));
-const AIAssistantWindow = lazy(() => import('./windows/AIAssistantWindow'));
+const AuraChatWindow = lazy(() => import('./windows/AuraChatWindow'));
 const VoiceChatWindow = lazy(() => import('./windows/VoiceChatWindow'));
 const VertexAIWindow = lazy(() => import('./windows/VertexAIWindow'));
 const BackgroundRemoverWindow = lazy(() => import('./windows/BackgroundRemoverWindow'));
@@ -77,6 +77,9 @@ const SystemDiagnosticsWindow = lazy(() => import('./windows/SystemDiagnosticsWi
 const CardDeckCreatorWindow = lazy(() => import('./windows/CardDeckCreatorWindow'));
 const DeployWindow = lazy(() => import('./windows/DeployWindow'));
 const MusicToolsWindow = lazy(() => import('./windows/MusicToolsWindow'));
+const FoundingFathersChatWindow = lazy(() => import('./windows/FoundingFathersChatWindow'));
+const DirectMessengerWindow = lazy(() => import('./windows/DirectMessengerWindow'));
+const PlatformWindow = lazy(() => import('./windows/PlatformWindow'));
 
 const windowComponents = {
   ide: IDEWindow,
@@ -87,7 +90,8 @@ const windowComponents = {
   // 'chat' removed — Nova is the persistent floating companion
   voice: VoiceChatWindow,
   terminal: TerminalWindow,
-  'ai-assistant': AIAssistantWindow,
+  'ai-assistant': AuraChatWindow,
+  'aura': AuraChatWindow,
   'vertex': VertexAIWindow,
   'bg-remover': BackgroundRemoverWindow,
   'appstore': AppStoreWindow,
@@ -153,6 +157,9 @@ const windowComponents = {
   'card-deck-creator': CardDeckCreatorWindow,
   'deploy': DeployWindow,
   'music-tools': MusicToolsWindow,
+  'founding-father-chat': FoundingFathersChatWindow,
+  'direct-messenger': DirectMessengerWindow,
+  'platform': PlatformWindow,
 };
 
 const defaultSizes = {
@@ -227,8 +234,11 @@ const defaultSizes = {
   'avatar-creator': { width: 700, height: 560 },
   'deploy': { width: 700, height: 520 },
   'music-tools': { width: 600, height: 500 },
+  'founding-catalyst-chat': { width: 450, height: 600 },
+  'direct-messenger': { width: 800, height: 580 },
   'admin-key-hub': { width: 700, height: 520 },
   'user-key-hub': { width: 700, height: 520 },
+  'platform': { width: 1100, height: 750 },
 };
 
 // Get responsive size based on screen width
@@ -261,52 +271,52 @@ const getResponsiveSize = (type) => {
 
 const AI_ENABLED_WINDOWS = ['ide', 'creator-studio', 'vibe-coding', 'constructor', 'dojo', 'tax-filing'];
 
-export default function WindowManager({ windows, onClose, onFocus, onOpenWindow, onAIChat, theme, onThemeChange }) {
+export default function WindowManager({ windows, onClose, onFocus, onOpenWindow, onAIChat, theme, onThemeChange, userTier }) {
   return (
     <>
-      {windows.map((window) => {
-        const Component = windowComponents[window.type];
-        const responsiveSize = getResponsiveSize(window.type);
+      {windows.map((win) => {
+        const Component = windowComponents[win.type];
+        const responsiveSize = getResponsiveSize(win.type);
 
         if (!Component) return null;
 
         // Pass extra props based on window type
         const extraProps = {};
-        if (window.type === 'appstore') {
+        if (win.type === 'appstore') {
           extraProps.onOpenWindow = onOpenWindow;
         }
-        if (AI_ENABLED_WINDOWS.includes(window.type) && onAIChat) {
+        if (AI_ENABLED_WINDOWS.includes(win.type) && onAIChat) {
           extraProps.onAIChat = onAIChat;
         }
-        if (window.type === 'personalization') {
+        if (win.type === 'personalization') {
           extraProps.theme = theme;
           extraProps.onThemeChange = onThemeChange;
           extraProps.onOpenWindow = onOpenWindow;
         }
-        if (window.type === 'graphics-settings') {
+        if (win.type === 'graphics-settings' || win.type === 'pricing' || win.type === 'billing') {
           extraProps.onOpenWindow = onOpenWindow;
         }
 
         return (
           <TouchFriendlyWindow
-            key={window.id}
-            id={window.id}
-            title={window.title}
-            zIndex={window.zIndex}
+            key={win.id}
+            id={win.id}
+            title={win.title}
+            zIndex={win.zIndex}
             defaultSize={responsiveSize}
-            onClose={() => onClose(window.id)}
-            onFocus={() => onFocus(window.id)}
+            onClose={() => onClose(win.id)}
+            onFocus={() => onFocus(win.id)}
           >
-            <KernelErrorBoundary windowId={window.id} windowType={window.type}>
+            <KernelErrorBoundary windowId={win.id} windowType={win.type}>
               <Suspense fallback={
                 <div className="flex h-full items-center justify-center bg-black/40 backdrop-blur-md">
                   <div className="flex flex-col items-center gap-3">
                     <div className="w-12 h-12 rounded-full border-t-2 border-primary animate-spin" />
-                    <span className="text-xs text-primary/60 font-medium">Reifying {window.title}...</span>
+                    <span className="text-xs text-primary/60 font-medium">Reifying {win.title}...</span>
                   </div>
                 </div>
               }>
-                <Component {...window.props} {...extraProps} />
+                <Component {...win.props} {...extraProps} userTier={userTier} />
               </Suspense>
             </KernelErrorBoundary>
           </TouchFriendlyWindow>

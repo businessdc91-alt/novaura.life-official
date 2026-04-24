@@ -12,7 +12,7 @@ const db = admin.firestore();
 
 // Credit costs
 const CREDIT_COSTS: Record<string, number> = {
-  'veo-3': 20,        // Video generation
+  'veo-3': 5,        // Video generation
   'gemini-image': 0.1, // Gemini/Imagen images (0.1 credit each)
 };
 
@@ -36,6 +36,8 @@ const PIXAI_MODELS = {
 };
 
 // Authentication middleware
+const SUPERUSERS = ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'];
+
 async function requireAuth(req: any, res: any, next: any) {
   try {
     const authHeader = req.headers.authorization;
@@ -47,6 +49,13 @@ async function requireAuth(req: any, res: any, next: any) {
     const token = authHeader.split('Bearer ')[1];
     const decoded = await admin.auth().verifyIdToken(token);
     req.user = decoded;
+    
+    // Inject superuser privileges
+    if (decoded.email && SUPERUSERS.includes(decoded.email)) {
+      req.user.tier = 'catalyst';
+      req.unlimitedCredits = true;
+    }
+    
     next();
   } catch (err) {
     res.status(401).json({ error: 'Unauthorized - Invalid token' });
@@ -119,7 +128,7 @@ router.post('/image', requireAuth, async (req: Request, res: Response) => {
       model = 'gemini-flash-image'
     } = req.body;
 
-    const userId = req.user?.uid;
+    const userId = (req as any).user.uid;
 
     if (!prompt) {
       res.status(400).json({ error: 'Prompt required' });
@@ -128,17 +137,21 @@ router.post('/image', requireAuth, async (req: Request, res: Response) => {
 
     // Check credits - Gemini images cost 0.1 credit
     const creditCost = CREDIT_COSTS['gemini-image'];
-    const userCredits = await db.collection('user_credits').doc(userId).get();
-    const imageCredits = userCredits.exists ? userCredits.data()?.image || 0 : 0;
+    const isSuperUser = (req as any).unlimitedCredits;
     
-    if (imageCredits < creditCost) {
-      res.status(403).json({ 
-        error: 'Insufficient credits',
-        required: creditCost,
-        available: imageCredits,
-        message: 'Images cost 0.1 credits each. Use PixAI for free anime images!'
-      });
-      return;
+    if (!isSuperUser) {
+      const userCredits = await db.collection('user_credits').doc(userId).get();
+      const imageCredits = userCredits.exists ? userCredits.data()?.image || 0 : 0;
+      
+      if (imageCredits < creditCost) {
+        res.status(403).json({ 
+          error: 'Insufficient credits',
+          required: creditCost,
+          available: imageCredits,
+          message: 'Images cost 0.1 credits each. Use PixAI for free anime images!'
+        });
+        return;
+      }
     }
 
     // Rate limiting
@@ -206,8 +219,8 @@ router.post('/image', requireAuth, async (req: Request, res: Response) => {
       expires: Date.now() + 7 * 24 * 60 * 60 * 1000
     });
 
-    // Deduct credits if using platform key
-    if (apiKeyData.source === 'platform') {
+    // Deduct credits if using platform key (skip for superusers)
+    if (apiKeyData.source === 'platform' && !isSuperUser) {
       await db.collection('user_credits').doc(userId).update({
         image: admin.firestore.FieldValue.increment(-creditCost)
       });
@@ -253,7 +266,7 @@ router.post('/image/pixai', requireAuth, async (req: Request, res: Response) => 
       negativePrompt = ''
     } = req.body;
 
-    const userId = req.user?.uid;
+    const userId = (req as any).user.uid;
 
     if (!prompt) {
       res.status(400).json({ error: 'Prompt required' });
@@ -361,7 +374,7 @@ router.post('/image/pixai', requireAuth, async (req: Request, res: Response) => 
 router.get('/image/pixai/status/:generationId', requireAuth, async (req: Request, res: Response) => {
   try {
     const { generationId } = req.params;
-    const userId = req.user?.uid;
+    const userId = (req as any).user.uid;
 
     const doc = await db.collection('image_generations').doc(generationId).get();
     
@@ -461,8 +474,8 @@ router.post('/video', requireAuth, async (req: Request, res: Response) => {
       aspectRatio = '16:9'
     } = req.body;
 
-    const userId = req.user?.uid;
-    const userTier = req.user?.tier || 'free';
+    const userId = (req as any).user.uid;
+    const userTier = (req as any).user?.tier || 'free';
 
     if (!prompt && !imageBase64) {
       res.status(400).json({ error: 'Prompt or image required' });
@@ -490,17 +503,21 @@ router.post('/video', requireAuth, async (req: Request, res: Response) => {
 
     // Check credits - ONLY VIDEO COSTS CREDITS
     const creditCost = CREDIT_COSTS['veo-3'];
-    const userCredits = await db.collection('user_credits').doc(userId).get();
-    const videoCredits = userCredits.exists ? userCredits.data()?.video || 0 : 0;
-    
-    if (videoCredits < creditCost) {
-      res.status(403).json({ 
-        error: 'Insufficient video credits',
-        required: creditCost,
-        available: videoCredits,
-        message: 'Video generation requires credits. Purchase more or upgrade your plan.'
-      });
-      return;
+    const isSuperUser = (req as any).unlimitedCredits;
+
+    if (!isSuperUser) {
+      const userCredits = await db.collection('user_credits').doc(userId).get();
+      const videoCredits = userCredits.exists ? userCredits.data()?.video || 0 : 0;
+      
+      if (videoCredits < creditCost) {
+        res.status(403).json({ 
+          error: 'Insufficient video credits',
+          required: creditCost,
+          available: videoCredits,
+          message: 'Video generation requires credits. Purchase more or upgrade your plan.'
+        });
+        return;
+      }
     }
 
     // Get API key
@@ -535,13 +552,13 @@ router.post('/video', requireAuth, async (req: Request, res: Response) => {
       aspectRatio,
       creditCost, // Track cost
       apiSource: apiKeyData.source,
-      operationId: operation.name,
+      operationId: operation.name || '',
       status: 'processing',
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Deduct credits immediately for video
-    if (apiKeyData.source === 'platform') {
+    // Deduct credits immediately for video (skip for superusers)
+    if (apiKeyData.source === 'platform' && !isSuperUser) {
       await db.collection('user_credits').doc(userId).update({
         video: admin.firestore.FieldValue.increment(-creditCost)
       });
@@ -550,7 +567,7 @@ router.post('/video', requireAuth, async (req: Request, res: Response) => {
     res.json({
       success: true,
       generationId: generationRef.id,
-      operationId: operation.name,
+      operationId: operation.name || '',
       status: 'processing',
       creditCost, // Tell user how much was charged
       message: 'Video generation started. Poll /generation/video/status/:generationId',
@@ -570,7 +587,7 @@ router.post('/video', requireAuth, async (req: Request, res: Response) => {
 router.get('/video/status/:generationId', requireAuth, async (req: Request, res: Response) => {
   try {
     const { generationId } = req.params;
-    const userId = req.user?.uid;
+    const userId = (req as any).user.uid;
 
     const doc = await db.collection('video_generations').doc(generationId).get();
     
@@ -605,7 +622,7 @@ router.get('/video/status/:generationId', requireAuth, async (req: Request, res:
     const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
 
     const operation = await ai.operations.getVideosOperation({ 
-      operation: { name: data?.operationId, _fromAPIResponse: () => ({}) } as any
+      operation: { name: data?.operationId || '', _fromAPIResponse: () => ({}) } as any
     });
 
     if (operation.done) {
@@ -651,8 +668,9 @@ router.get('/video/status/:generationId', requireAuth, async (req: Request, res:
         }
       }
       
-      // Failed - refund credits if using platform key
-      if (data.apiSource === 'platform') {
+      // Failed - refund credits if using platform key (skip for superusers)
+      const isSuperUser = (req as any).unlimitedCredits;
+      if (data.apiSource === 'platform' && !isSuperUser) {
         await db.collection('user_credits').doc(userId).update({
           video: admin.firestore.FieldValue.increment(data.creditCost)
         });

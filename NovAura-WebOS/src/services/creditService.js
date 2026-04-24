@@ -8,9 +8,13 @@ import { doc, getDoc } from 'firebase/firestore';
 /**
  * Get user's membership tier from Firestore
  * @param {string} userId 
+ * @param {string} email
  * @returns {Promise<string>} tier - 'free', 'spark', 'emergent', 'catalyst', 'nova', 'catalytic-crew'
  */
-export async function getUserTier(userId) {
+const SUPERUSERS = ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'];
+
+export async function getUserTier(userId, email) {
+  if (email && SUPERUSERS.includes(email)) return 'catalytic-crew';
   if (!db || !userId) return 'free';
   
   try {

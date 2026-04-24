@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig(({ mode }) => ({
-  base: '/os/',
+  base: mode === 'landing' ? '/' : '/os/',
   plugins: [react()],
   resolve: {
     alias: {
@@ -18,9 +18,9 @@ export default defineConfig(({ mode }) => ({
     outDir: path.resolve(__dirname, 'dist/os'),
     emptyOutDir: true,
     rollupOptions: {
-      input: mode === 'landing' 
-        ? path.resolve(__dirname, 'src/landing-main.jsx')
-        : path.resolve(__dirname, 'index.html'),
+      input: {
+        index: path.resolve(__dirname, 'os.html'),
+      },
       external: [
         'isomorphic-git', 
         'isomorphic-git/http/web', 

@@ -1,351 +1,428 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { User, Palette, Save, Download, Shuffle, Shirt, Smile, Scissors, Grid, Trash2 } from 'lucide-react';
-import { kernelStorage } from '../../kernel/kernelStorage.js';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { 
+  User, Sparkles, Wand2, Scissors, Play, Pause, 
+  Download, Save, RefreshCw, Layers, Monitor, 
+  ChevronRight, Trash2, Loader2, Image as ImageIcon,
+  Ghost, Wind, Zap, Smile
+} from 'lucide-react';
+import { Button } from '../ui/button';
+import { Card } from '../ui/card';
+import { toast } from 'sonner';
+import axios from 'axios';
+import { generateImage, BACKEND_URL, getAuthHeaders } from '../../services/aiService';
+import { saveAvatar as dbSaveAvatar, getUserAvatars, deleteAvatar as dbDeleteAvatar } from '../../services/assetService';
+import { kernel } from '../../kernel/NovaKernel.js';
 
-const SKIN_TONES = ['#FFDBB4','#EDB98A','#D08B5B','#AE5D29','#694D3D','#3B2219'];
-const HAIR_COLORS = ['#090806','#2C222B','#71635A','#B7A69E','#D6C4C2','#DEBC99','#B55239','#8D4A43','#CF3476','#4B0082','#00D9FF'];
-const EYE_COLORS = ['#634E34','#2E536F','#3D671D','#1C7847','#497665','#9B59B6','#E74C3C','#00D9FF'];
+/**
+ * AURA AVATAR STUDIO
+ * A high-end production environment for generating, processing, and animating AI avatars.
+ */
 
-const FACE_SHAPES = ['round','oval','square','heart','long'];
-const BODY_TYPES = ['slim','average','athletic','curvy','muscular'];
-const HAIR_STYLES = ['short','medium','long','buzz','curly','wavy','mohawk','braids','bald','ponytail'];
-const EXPRESSIONS = ['neutral','happy','confident','mysterious','fierce','playful','serene','determined'];
-const ACCESSORIES = ['none','glasses','sunglasses','earrings','necklace','headband','mask','crown','horns','halo'];
-const OUTFITS = ['casual','formal','athletic','fantasy','cyberpunk','gothic','steampunk','minimal'];
+const STAGES = [
+  { id: 'void', name: 'The Void', bg: 'bg-slate-950' },
+  { id: 'neon', name: 'Cyberpunk Alley', bg: 'bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900' },
+  { id: 'zen', name: 'Zen Garden', bg: 'bg-gradient-to-br from-emerald-900 to-teal-900' },
+  { id: 'plasma', name: 'Neural Plasma', bg: 'bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-900 via-slate-950 to-black' }
+];
 
-const EMOJI_MAP = {
-  face: { round:'🟡', oval:'🥚', square:'⬜', heart:'❤️', long:'📏' },
-  body: { slim:'🧍', average:'🧍', athletic:'🏃', curvy:'💃', muscular:'💪' },
-  hair: { short:'✂️', medium:'💇', long:'👩‍🦰', buzz:'👨‍🦲', curly:'🌀', wavy:'🌊', mohawk:'🦔', braids:'🪢', bald:'👨‍🦲', ponytail:'🎀' },
-  expression: { neutral:'😐', happy:'😊', confident:'😏', mysterious:'🤔', fierce:'😤', playful:'😜', serene:'😌', determined:'💪' },
+const BEHAVIORS = {
+  serene: { name: 'Serene', float: 2, breathe: 0.02, blinkRate: 0.05 },
+  curious: { name: 'Curious', float: 5, breathe: 0.05, blinkRate: 0.1 },
+  energetic: { name: 'Energetic', float: 12, breathe: 0.1, blinkRate: 0.2 },
+  phantom: { name: 'Phantom', float: 20, breathe: 0.15, blinkRate: 0.01 }
 };
 
-export default function AvatarBuilderWindow() {
-  const [avatar, setAvatar] = useState({
-    skinTone: '#EDB98A', hairColor: '#090806', eyeColor: '#634E34',
-    faceShape: 'oval', bodyType: 'average', hairStyle: 'medium',
-    expression: 'neutral', accessory: 'none', outfit: 'casual',
-    name: 'My Avatar',
-  });
-  const [tab, setTab] = useState('face');
-  const [savedAvatars, setSavedAvatars] = useState(() => JSON.parse(kernelStorage.getItem('saved_avatars') || '[]'));
-  const previewRef = useRef(null);
+export default function AuraAvatarStudio() {
+  // --- State ---
+  const [prompt, setPrompt] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [currentImage, setCurrentImage] = useState(null); // The raw generated image
+  const [processedImage, setProcessedImage] = useState(null); // Transparent PNG
+  const [isAutoRemove, setIsAutoRemove] = useState(true);
+  
+  const [behavior, setBehavior] = useState('serene');
+  const [stage, setStage] = useState('void');
+  const [isAnimating, setIsAnimating] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  
+  const [savedAvatars, setSavedAvatars] = useState([]);
+  const [isVaultLoading, setIsVaultLoading] = useState(false);
 
-  const update = (field, value) => setAvatar(prev => ({ ...prev, [field]: value }));
+  // Load avatars from permanent storage on mount
+  useEffect(() => {
+    const loadVault = async () => {
+      const uid = kernel.auth?.uid;
+      if (!uid) return;
+      setIsVaultLoading(true);
+      const avatars = await getUserAvatars(uid);
+      setSavedAvatars(avatars);
+      setIsVaultLoading(false);
+    };
+    loadVault();
+  }, []);
 
-  const randomize = () => {
-    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-    setAvatar({
-      skinTone: pick(SKIN_TONES), hairColor: pick(HAIR_COLORS), eyeColor: pick(EYE_COLORS),
-      faceShape: pick(FACE_SHAPES), bodyType: pick(BODY_TYPES), hairStyle: pick(HAIR_STYLES),
-      expression: pick(EXPRESSIONS), accessory: pick(ACCESSORIES), outfit: pick(OUTFITS),
-      name: avatar.name,
-    });
-  };
+  // --- Animation Loop ---
+  const [animState, setAnimState] = useState({ y: 0, scale: 1, opacity: 1 });
+  const requestRef = useRef();
+  
+  const animate = useCallback((time) => {
+    if (isAnimating) {
+      const b = BEHAVIORS[behavior];
+      const floatY = Math.sin(time / 1000) * b.float;
+      const breatheScale = 1 + Math.sin(time / 2000) * b.breathe;
+      
+      setAnimState({
+        y: floatY,
+        scale: breatheScale,
+        opacity: 1
+      });
+    }
+    requestRef.current = requestAnimationFrame(animate);
+  }, [isAnimating, behavior]);
 
-  const saveAvatar = () => {
-    const saved = JSON.parse(kernelStorage.getItem('saved_avatars') || '[]');
-    saved.push({ ...avatar, id: `avatar-${Date.now()}`, createdAt: new Date().toISOString() });
-    kernelStorage.setItem('saved_avatars', JSON.stringify(saved));
-    setSavedAvatars(saved);
-  };
+  useEffect(() => {
+    requestRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(requestRef.current);
+  }, [animate]);
 
-  const loadAvatar = (saved) => {
-    const { id, createdAt, ...rest } = saved;
-    setAvatar(rest);
-    setTab('face');
-  };
+  // --- Core Actions ---
 
-  const deleteAvatar = (id) => {
-    const updated = savedAvatars.filter(a => a.id !== id);
-    kernelStorage.setItem('saved_avatars', JSON.stringify(updated));
-    setSavedAvatars(updated);
-  };
-
-  const exportAsImage = useCallback(() => {
-    const el = previewRef.current;
-    if (!el) return;
-    const canvas = document.createElement('canvas');
-    const scale = 2;
-    canvas.width = el.offsetWidth * scale;
-    canvas.height = el.offsetHeight * scale;
-    const ctx = canvas.getContext('2d');
-    ctx.scale(scale, scale);
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-
-    const gradient = ctx.createLinearGradient(0, 0, w, h);
-    gradient.addColorStop(0, avatar.skinTone + '40');
-    gradient.addColorStop(1, '#1a1a2e');
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.roundRect(0, 0, w, h, 16);
-    ctx.fill();
-
-    const cx = w / 2;
-    ctx.fillStyle = avatar.hairColor;
-    ctx.beginPath();
-    ctx.ellipse(cx, 28, 28, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = avatar.skinTone;
-    ctx.strokeStyle = avatar.skinTone + '80';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(cx, 40, 32, 36, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = avatar.eyeColor;
-    ctx.beginPath();
-    ctx.arc(cx - 10, 40, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx + 10, 40, 5, 0, Math.PI * 2);
-    ctx.fill();
-
-    const expr = EMOJI_MAP.expression[avatar.expression] || '😐';
-    ctx.font = '14px serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(expr, cx, 62);
-
-    ctx.fillStyle = avatar.skinTone + '60';
-    ctx.beginPath();
-    ctx.roundRect(cx - 40, h - 64, 80, 64, [16, 16, 0, 0]);
-    ctx.fill();
-
-    if (avatar.accessory !== 'none') {
-      const accEmoji = avatar.accessory === 'glasses' ? '👓' : avatar.accessory === 'sunglasses' ? '🕶️' : avatar.accessory === 'crown' ? '👑' : avatar.accessory === 'mask' ? '🎭' : avatar.accessory === 'horns' ? '😈' : avatar.accessory === 'halo' ? '😇' : '✨';
-      ctx.font = '14px serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(accEmoji, w - 4, 16);
+  const handleGenerate = async () => {
+    if (!prompt.trim()) {
+      toast.error('Please enter a prompt for your avatar');
+      return;
     }
 
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(avatar.name, cx, h - 4);
+    setIsGenerating(true);
+    setCurrentImage(null);
+    setProcessedImage(null);
 
-    const link = document.createElement('a');
-    link.download = `${avatar.name.replace(/\s+/g, '_')}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  }, [avatar]);
+    try {
+      // Enhance prompt for better avatar quality
+      const enhancedPrompt = `High quality professional character portrait, ${prompt}, centered, solid background, highly detailed, 8k resolution, cinematic lighting`;
+      
+      const { imageUrl } = await generateImage(enhancedPrompt, '1:1');
+      setCurrentImage(imageUrl);
+      toast.success('Avatar generated successfully!');
 
-  const TABS = [
-    { id: 'face', label: 'Face', icon: Smile },
-    { id: 'body', label: 'Body', icon: User },
-    { id: 'hair', label: 'Hair', icon: Scissors },
-    { id: 'style', label: 'Style', icon: Shirt },
-    { id: 'gallery', label: 'Gallery', icon: Grid },
-  ];
+      if (isAutoRemove) {
+        await handleRemoveBackground(imageUrl);
+      }
+    } catch (error) {
+      console.error('Generation error:', error);
+      toast.error('Failed to generate avatar');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
-  // Avatar visual preview
-  const AvatarPreview = () => (
-    <div className="flex flex-col items-center gap-2">
-      <div ref={previewRef} className="relative w-32 h-40 rounded-2xl border-2 border-slate-700 overflow-hidden"
-        style={{ background: `linear-gradient(135deg, ${avatar.skinTone}40, #1a1a2e)` }}>
-        {/* Head */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 w-16 h-18 rounded-full border-2"
-          style={{ backgroundColor: avatar.skinTone, borderColor: `${avatar.skinTone}80` }}>
-          {/* Eyes */}
-          <div className="flex justify-center gap-3 mt-5">
-            <div className="w-2.5 h-2.5 rounded-full border" style={{ backgroundColor: avatar.eyeColor, borderColor: '#00000040' }} />
-            <div className="w-2.5 h-2.5 rounded-full border" style={{ backgroundColor: avatar.eyeColor, borderColor: '#00000040' }} />
-          </div>
-          {/* Expression */}
-          <div className="text-center mt-1 text-[10px]">{EMOJI_MAP.expression[avatar.expression] || '😐'}</div>
-          {/* Hair indicator */}
-          <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-14 h-4 rounded-t-full" style={{ backgroundColor: avatar.hairColor }} />
-        </div>
-        {/* Body silhouette */}
-        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-20 h-16 rounded-t-2xl"
-          style={{ backgroundColor: `${avatar.skinTone}60` }} />
-        {/* Accessory badge */}
-        {avatar.accessory !== 'none' && (
-          <div className="absolute top-1 right-1 text-sm">
-            {avatar.accessory === 'glasses' ? '👓' : avatar.accessory === 'sunglasses' ? '🕶️' : avatar.accessory === 'crown' ? '👑' : avatar.accessory === 'mask' ? '🎭' : avatar.accessory === 'horns' ? '😈' : avatar.accessory === 'halo' ? '😇' : '✨'}
-          </div>
-        )}
-      </div>
-      <input value={avatar.name} onChange={e => update('name', e.target.value)}
-        className="text-center text-xs bg-transparent text-white border-none focus:outline-none w-32" />
-      <div className="text-[9px] text-slate-500 capitalize">{avatar.bodyType} · {avatar.outfit} · {avatar.expression}</div>
-    </div>
-  );
+  const handleRemoveBackground = async (imageSource) => {
+    if (!imageSource) return;
+    setIsProcessing(true);
+    
+    try {
+      // Convert to base64 if it's a URL (Backend typically wants base64)
+      let base64;
+      if (imageSource.startsWith('data:')) {
+        base64 = imageSource.split(',')[1];
+      } else {
+        // Fetch URL and convert to blob then base64
+        const response = await fetch(imageSource);
+        const blob = await response.blob();
+        base64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      const res = await axios.post(`${BACKEND_URL}/api/remove-background`, {
+        image: base64
+      }, {
+        headers: getAuthHeaders(),
+        timeout: 45000
+      });
+
+      if (res.data.result) {
+        setProcessedImage(`data:image/png;base64,${res.data.result}`);
+        toast.success('Background removed! Avatar is now "Living".');
+      }
+    } catch (error) {
+      console.error('Background removal error:', error);
+      toast.error('Could not automate background removal');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const saveAvatar = async () => {
+    const uid = kernel.auth?.uid;
+    if (!uid) {
+      toast.error('You must be logged in to save to the vault');
+      return;
+    }
+
+    const avatarData = {
+      name: prompt.slice(0, 20) || 'New Avatar',
+      image: processedImage || currentImage,
+      behavior,
+      stage,
+      createdAt: new Date().toISOString()
+    };
+    
+    const saved = await dbSaveAvatar(uid, avatarData);
+    if (saved) {
+      setSavedAvatars([saved, ...savedAvatars]);
+      toast.success('Avatar successfully bonded to your cloud identity');
+    } else {
+      toast.error('Failed to save to cloud vault');
+    }
+  };
+
+  const deleteAvatar = async (id) => {
+    const uid = kernel.auth?.uid;
+    if (!uid) return;
+
+    const success = await dbDeleteAvatar(uid, id);
+    if (success) {
+      setSavedAvatars(savedAvatars.filter(a => a.id !== id));
+      toast.success('Entity purged from vault');
+    }
+  };
+
+  // --- UI Components ---
 
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-white overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-rose-900/30 to-slate-900 border-b border-slate-800 shrink-0">
-        <div className="flex items-center gap-2">
-          <User className="w-4 h-4 text-rose-400" />
-          <span className="text-sm font-semibold">Avatar Builder</span>
+    <div className="h-full flex flex-col bg-[#050508] text-white overflow-hidden select-none">
+      {/* Studio Header */}
+      <div className="h-14 border-b border-white/5 bg-black/40 backdrop-blur-xl flex items-center justify-between px-6 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-[0_0_15px_rgba(6,182,212,0.5)]">
+            <Sparkles className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <h1 className="text-sm font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-white/60">AURA AVATAR STUDIO</h1>
+            <p className="text-[10px] text-cyan-400/70 font-mono tracking-widest uppercase">Neural Design Pipeline</p>
+          </div>
         </div>
-        <div className="flex gap-1">
-          <button onClick={randomize} title="Randomize" className="p-1.5 rounded text-slate-400 hover:bg-slate-800 hover:text-white"><Shuffle className="w-3.5 h-3.5" /></button>
-          <button onClick={saveAvatar} title="Save" className="p-1.5 rounded text-slate-400 hover:bg-slate-800 hover:text-white"><Save className="w-3.5 h-3.5" /></button>
-          <button onClick={exportAsImage} title="Export PNG" className="p-1.5 rounded text-slate-400 hover:bg-slate-800 hover:text-white"><Download className="w-3.5 h-3.5" /></button>
+        
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setZoom(prev => Math.max(0.5, prev - 0.1))} className="h-7 w-7 p-0"><ChevronRight className="w-3 h-3 rotate-180" /></Button>
+          <span className="text-[10px] font-mono text-white/40">{Math.round(zoom * 100)}%</span>
+          <Button variant="ghost" size="sm" onClick={() => setZoom(prev => Math.min(2, prev + 0.1))} className="h-7 w-7 p-0"><ChevronRight className="w-3 h-3" /></Button>
+          <div className="w-px h-4 bg-white/10 mx-2" />
+          <Button variant="outline" size="sm" onClick={saveAvatar} disabled={!currentImage} className="h-8 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 gap-2">
+            <Save className="w-3.5 h-3.5" /> Save to Vault
+          </Button>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Preview */}
-        <div className="w-44 flex items-center justify-center border-r border-slate-800 shrink-0">
-          <AvatarPreview />
+        {/* Sidebar: Control Panel */}
+        <div className="w-80 border-r border-white/5 bg-black/20 backdrop-blur-md p-5 flex flex-col gap-6 overflow-y-auto">
+          {/* Generation Section */}
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[10px] font-bold text-white/50 uppercase tracking-widest">Genesis</h2>
+              <Zap className="w-3 h-3 text-yellow-400" />
+            </div>
+            <div className="relative group">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Describe your avatar entity..."
+                className="w-full h-24 bg-white/5 border border-white/10 rounded-xl p-3 text-xs resize-none focus:outline-none focus:border-cyan-500/50 transition-all placeholder:text-white/20"
+              />
+              <div className="absolute inset-0 bg-cyan-500/5 opacity-0 group-hover:opacity-100 pointer-events-none rounded-xl transition-opacity" />
+            </div>
+            
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <div 
+                  className={`w-8 h-4 rounded-full p-0.5 cursor-pointer transition-colors ${isAutoRemove ? 'bg-cyan-600' : 'bg-white/10'}`}
+                  onClick={() => setIsAutoRemove(!isAutoRemove)}
+                >
+                  <div className={`w-3 h-3 bg-white rounded-full transition-transform ${isAutoRemove ? 'translate-x-4' : 'translate-x-0'}`} />
+                </div>
+                <span className="text-[10px] text-white/60">Auto-Remove Background</span>
+              </div>
+            </div>
+
+            <Button 
+              onClick={handleGenerate} 
+              disabled={isGenerating || isProcessing}
+              className="w-full h-10 bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white font-bold text-xs shadow-lg shadow-cyan-900/20"
+            >
+              {isGenerating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Wand2 className="w-4 h-4 mr-2" />}
+              {isGenerating ? 'GENESIZING...' : 'GENERATE ENTITY'}
+            </Button>
+          </section>
+
+          {/* Behavior Section */}
+          <section className="space-y-4">
+            <h2 className="text-[10px] font-bold text-white/50 uppercase tracking-widest">Neural Behavior</h2>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(BEHAVIORS).map(([id, info]) => (
+                <button
+                  key={id}
+                  onClick={() => setBehavior(id)}
+                  className={`p-3 rounded-xl border text-left transition-all ${
+                    behavior === id 
+                    ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.1)]' 
+                    : 'bg-white/5 border-white/5 text-white/40 hover:bg-white/10'
+                  }`}
+                >
+                  <div className="text-[10px] font-bold uppercase mb-1">{info.name}</div>
+                  <div className="text-[8px] opacity-60">Ambient Life</div>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Environmental Stage */}
+          <section className="space-y-4">
+            <h2 className="text-[10px] font-bold text-white/50 uppercase tracking-widest">Environment</h2>
+            <div className="grid grid-cols-1 gap-2">
+              {STAGES.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setStage(s.id)}
+                  className={`px-4 py-2 rounded-lg border text-xs flex items-center justify-between transition-all ${
+                    stage === s.id 
+                    ? 'bg-white/10 border-white/20 text-white' 
+                    : 'bg-transparent border-transparent text-white/40 hover:bg-white/5'
+                  }`}
+                >
+                  {s.name}
+                  <div className={`w-2 h-2 rounded-full ${s.bg}`} />
+                </button>
+              ))}
+            </div>
+          </section>
         </div>
 
-        {/* Controls */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Tabs */}
-          <div className="flex gap-1 px-3 py-1.5 border-b border-slate-800/50 shrink-0">
-            {TABS.map(t => {
-              const Icon = t.icon;
-              return (
-                <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] ${tab === t.id ? 'bg-rose-600/30 text-rose-300' : 'text-slate-400 hover:bg-slate-800'}`}>
-                  <Icon className="w-3 h-3" />{t.label}
-                </button>
-              );
-            })}
+        {/* Main View: The Stage */}
+        <div className="flex-1 relative flex flex-col items-center justify-center overflow-hidden">
+          {/* Stage Background */}
+          <div className={`absolute inset-0 transition-colors duration-1000 ${STAGES.find(s => s.id === stage).bg}`}>
+            <div className="absolute inset-0 opacity-20" style={{
+              backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)',
+              backgroundSize: '40px 40px'
+            }} />
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {tab === 'face' && (
-              <>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">SKIN TONE</label>
-                  <div className="flex gap-1.5">
-                    {SKIN_TONES.map(c => (
-                      <button key={c} onClick={() => update('skinTone', c)}
-                        className={`w-7 h-7 rounded-full border-2 ${avatar.skinTone === c ? 'border-white scale-110' : 'border-slate-700'}`} style={{ backgroundColor: c }} />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">EYE COLOR</label>
-                  <div className="flex gap-1.5">
-                    {EYE_COLORS.map(c => (
-                      <button key={c} onClick={() => update('eyeColor', c)}
-                        className={`w-6 h-6 rounded-full border-2 ${avatar.eyeColor === c ? 'border-white scale-110' : 'border-slate-700'}`} style={{ backgroundColor: c }} />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">FACE SHAPE</label>
-                  <div className="flex flex-wrap gap-1">
-                    {FACE_SHAPES.map(f => (
-                      <button key={f} onClick={() => update('faceShape', f)}
-                        className={`px-2 py-1 rounded text-[10px] capitalize ${avatar.faceShape === f ? 'bg-rose-600/30 text-rose-300' : 'bg-slate-800 text-slate-400'}`}>{f}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">EXPRESSION</label>
-                  <div className="flex flex-wrap gap-1">
-                    {EXPRESSIONS.map(e => (
-                      <button key={e} onClick={() => update('expression', e)}
-                        className={`px-2 py-1 rounded text-[10px] capitalize ${avatar.expression === e ? 'bg-rose-600/30 text-rose-300' : 'bg-slate-800 text-slate-400'}`}>
-                        {EMOJI_MAP.expression[e]} {e}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {tab === 'body' && (
-              <div>
-                <label className="text-[9px] text-slate-500 block mb-1">BODY TYPE</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {BODY_TYPES.map(b => (
-                    <button key={b} onClick={() => update('bodyType', b)}
-                      className={`px-3 py-2 rounded-lg text-xs capitalize ${avatar.bodyType === b ? 'bg-rose-600/30 text-rose-300 border border-rose-700' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>{b}</button>
-                  ))}
-                </div>
+          {/* The Avatar Entity */}
+          <div 
+            className="relative z-10 transition-transform duration-300 ease-out flex items-center justify-center"
+            style={{ transform: `scale(${zoom})` }}
+          >
+            {isProcessing && (
+              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm rounded-full aspect-square border border-cyan-500/20">
+                <Loader2 className="w-8 h-8 text-cyan-400 animate-spin mb-2" />
+                <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest">Stripping Background...</span>
               </div>
             )}
 
-            {tab === 'hair' && (
-              <>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">HAIR COLOR</label>
-                  <div className="flex gap-1.5 flex-wrap">
-                    {HAIR_COLORS.map(c => (
-                      <button key={c} onClick={() => update('hairColor', c)}
-                        className={`w-6 h-6 rounded-full border-2 ${avatar.hairColor === c ? 'border-white scale-110' : 'border-slate-700'}`} style={{ backgroundColor: c }} />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">HAIR STYLE</label>
-                  <div className="flex flex-wrap gap-1">
-                    {HAIR_STYLES.map(h => (
-                      <button key={h} onClick={() => update('hairStyle', h)}
-                        className={`px-2 py-1 rounded text-[10px] capitalize ${avatar.hairStyle === h ? 'bg-rose-600/30 text-rose-300' : 'bg-slate-800 text-slate-400'}`}>{h}</button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {tab === 'style' && (
-              <>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">OUTFIT</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {OUTFITS.map(o => (
-                      <button key={o} onClick={() => update('outfit', o)}
-                        className={`px-3 py-2 rounded-lg text-xs capitalize ${avatar.outfit === o ? 'bg-rose-600/30 text-rose-300 border border-rose-700' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>{o}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[9px] text-slate-500 block mb-1">ACCESSORY</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {ACCESSORIES.map(a => (
-                      <button key={a} onClick={() => update('accessory', a)}
-                        className={`px-3 py-2 rounded-lg text-xs capitalize ${avatar.accessory === a ? 'bg-rose-600/30 text-rose-300 border border-rose-700' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>{a}</button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {tab === 'gallery' && (
-              <div>
-                {savedAvatars.length === 0 ? (
-                  <div className="text-center text-slate-500 text-xs py-8">No saved avatars yet</div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2">
-                    {savedAvatars.map(s => (
-                      <div key={s.id} className="bg-slate-900 border border-slate-800 rounded-lg p-2 flex flex-col items-center gap-1.5">
-                        <div className="relative w-16 h-20 rounded-xl border border-slate-700 overflow-hidden"
-                          style={{ background: `linear-gradient(135deg, ${s.skinTone}40, #1a1a2e)` }}>
-                          <div className="absolute top-2 left-1/2 -translate-x-1/2 w-8 h-9 rounded-full"
-                            style={{ backgroundColor: s.skinTone }}>
-                            <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-7 h-2 rounded-t-full" style={{ backgroundColor: s.hairColor }} />
-                            <div className="flex justify-center gap-1.5 mt-2.5">
-                              <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.eyeColor }} />
-                              <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.eyeColor }} />
-                            </div>
-                            <div className="text-center text-[8px]">{EMOJI_MAP.expression[s.expression] || '😐'}</div>
-                          </div>
-                          <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-10 h-8 rounded-t-xl"
-                            style={{ backgroundColor: `${s.skinTone}60` }} />
-                        </div>
-                        <span className="text-[10px] text-slate-300 truncate w-full text-center">{s.name}</span>
-                        <div className="flex gap-1">
-                          <button onClick={() => loadAvatar(s)}
-                            className="px-2 py-0.5 rounded text-[9px] bg-rose-600/30 text-rose-300 hover:bg-rose-600/50">Load</button>
-                          <button onClick={() => deleteAvatar(s.id)}
-                            className="p-0.5 rounded text-slate-500 hover:text-red-400 hover:bg-slate-800"><Trash2 className="w-3 h-3" /></button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+            {(processedImage || currentImage) ? (
+              <div 
+                className="relative"
+                style={{
+                  transform: `translateY(${animState.y}px) scale(${animState.scale})`,
+                  opacity: animState.opacity,
+                  transition: isProcessing ? 'none' : 'transform 0.1s linear'
+                }}
+              >
+                <img 
+                  src={processedImage || currentImage} 
+                  alt="Avatar Entity"
+                  className={`max-w-[400px] max-h-[400px] object-contain drop-shadow-[0_0_50px_rgba(0,255,255,0.2)] ${!processedImage ? 'rounded-3xl border-2 border-white/10' : ''}`}
+                />
+                
+                {/* Visual Glow Layer */}
+                {processedImage && (
+                  <div className="absolute inset-0 bg-cyan-500/10 mix-blend-overlay blur-3xl rounded-full opacity-30 animate-pulse" />
                 )}
               </div>
+            ) : (
+              <div className="w-64 h-80 rounded-[40px] border-2 border-dashed border-white/5 flex flex-col items-center justify-center gap-4 text-white/10">
+                <Ghost className="w-16 h-16" />
+                <span className="text-xs font-mono uppercase tracking-widest">Waiting for Genesis</span>
+              </div>
             )}
+          </div>
+
+          {/* Stage Controls Overlay */}
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-2 bg-black/40 backdrop-blur-xl border border-white/10 rounded-full shadow-2xl">
+            <button onClick={() => setIsAnimating(!isAnimating)} className="p-2 hover:text-cyan-400 transition-colors">
+              {isAnimating ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+            </button>
+            <div className="w-px h-4 bg-white/10" />
+            <button onClick={() => handleRemoveBackground(currentImage)} disabled={!currentImage || isProcessing} className="p-2 hover:text-cyan-400 transition-colors disabled:opacity-30">
+              <Scissors className="w-4 h-4" />
+            </button>
+            <button onClick={() => {
+              const link = document.createElement('a');
+              link.href = processedImage || currentImage;
+              link.download = `avatar-${Date.now()}.png`;
+              link.click();
+            }} disabled={!currentImage} className="p-2 hover:text-cyan-400 transition-colors disabled:opacity-30">
+              <Download className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Right Panel: Vault / History */}
+        <div className="w-64 border-l border-white/5 bg-black/40 backdrop-blur-xl p-4 flex flex-col gap-4 overflow-hidden shrink-0">
+          <h2 className="text-[10px] font-bold text-white/50 uppercase tracking-widest flex items-center gap-2">
+            <Layers className="w-3 h-3" /> Avatar Vault
+          </h2>
+          
+          <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
+            {isVaultLoading ? (
+              <div className="h-40 flex flex-col items-center justify-center text-white/10 gap-2">
+                <Loader2 className="w-8 h-8 animate-spin" />
+                <span className="text-[9px] uppercase font-mono">Syncing Vault...</span>
+              </div>
+            ) : savedAvatars.length === 0 ? (
+              <div className="h-40 flex flex-col items-center justify-center text-white/10 gap-2">
+                <ImageIcon className="w-8 h-8" />
+                <span className="text-[9px] uppercase font-mono">Vault Empty</span>
+              </div>
+            ) : (
+              savedAvatars.map((s) => (
+                <div key={s.id} className="group relative bg-white/5 border border-white/5 rounded-xl overflow-hidden hover:border-cyan-500/30 transition-all cursor-pointer"
+                  onClick={() => {
+                    setProcessedImage(s.image);
+                    setBehavior(s.behavior);
+                    setStage(s.stage);
+                  }}>
+                  <img src={s.image} alt={s.name} className="w-full aspect-square object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
+                  <div className="p-2 bg-black/60 backdrop-blur-md">
+                    <div className="text-[9px] font-bold truncate">{s.name}</div>
+                    <div className="text-[8px] text-white/40">{new Date(s.createdAt).toLocaleDateString()}</div>
+                  </div>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); deleteAvatar(s.id); }}
+                    className="absolute top-1 right-1 p-1.5 bg-black/80 rounded-lg opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          
+          <div className="mt-auto pt-4 border-t border-white/5">
+            <div className="p-3 rounded-xl bg-cyan-500/5 border border-cyan-500/10">
+              <div className="flex items-center gap-2 mb-1">
+                <Wind className="w-3 h-3 text-cyan-400" />
+                <span className="text-[9px] font-bold text-cyan-300 uppercase">Pro Tip</span>
+              </div>
+              <p className="text-[9px] text-white/40 leading-relaxed italic">
+                Use behaviors like "Energetic" for action-based avatars, or "Serene" for peaceful companions.
+              </p>
+            </div>
           </div>
         </div>
       </div>

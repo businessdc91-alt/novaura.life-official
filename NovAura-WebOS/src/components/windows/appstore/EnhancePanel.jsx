@@ -156,7 +156,7 @@ export default function EnhancePanel({ app, onBack, onComplete }) {
         onPhaseComplete: (id) => updatePhase(id, 'done'),
         onPhaseError: (id, msg) => { if (id) updatePhase(id, 'error'); addLog(`ERROR: ${msg}`); },
         onLog: addLog,
-        onCodeUpdate: () => {},
+        onCodeUpdate: () => { },
         onConfusion: handleConfusion,
         onComplete: (blocks) => {
           // Convert blocks back to file array format
@@ -229,11 +229,10 @@ export default function EnhancePanel({ app, onBack, onComplete }) {
                 <button
                   key={m.id}
                   onClick={() => setMode(m.id)}
-                  className={`w-full flex items-start gap-2 p-2 rounded-lg mb-1 border transition-all ${
-                    mode === m.id
+                  className={`w-full flex items-start gap-2 p-2 rounded-lg mb-1 border transition-all ${mode === m.id
                       ? 'border-primary/30 bg-primary/10'
                       : 'border-white/5 bg-black/20 hover:border-white/10'
-                  }`}
+                    }`}
                 >
                   <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${mode === m.id ? 'text-primary' : 'text-gray-600'}`} />
                   <div className="text-left">
@@ -327,12 +326,11 @@ export default function EnhancePanel({ app, onBack, onComplete }) {
             {phases.map(phase => (
               <div
                 key={phase.id}
-                className={`flex items-center gap-2 px-2 py-1.5 rounded text-[11px] transition-colors ${
-                  phase.status === 'running' ? 'bg-primary/10 text-gray-200' :
-                  phase.status === 'done' ? 'text-gray-400' :
-                  phase.status === 'error' ? 'text-red-400 bg-red-500/5' :
-                  'text-gray-500'
-                }`}
+                className={`flex items-center gap-2 px-2 py-1.5 rounded text-[11px] transition-colors ${phase.status === 'running' ? 'bg-primary/10 text-gray-200' :
+                    phase.status === 'done' ? 'text-gray-400' :
+                      phase.status === 'error' ? 'text-red-400 bg-red-500/5' :
+                        'text-gray-500'
+                  }`}
               >
                 <PhaseIcon status={phase.status} />
                 <span className="flex-1 truncate">{phase.name}</span>

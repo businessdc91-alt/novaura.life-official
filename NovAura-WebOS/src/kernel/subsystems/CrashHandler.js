@@ -210,6 +210,8 @@ class CrashHandler {
       );
     };
 
+
+
     this._globalRejectionHandler = (event) => {
       const reason = event.reason;
       const msg = reason?.message || String(reason);
@@ -432,7 +434,7 @@ class CrashHandler {
         uid,
         updatedAt: serverTimestamp(),
       });
-    } catch {} // never let logging break anything
+    } catch { } // never let logging break anything
   }
 
   getLog(n = 20) {

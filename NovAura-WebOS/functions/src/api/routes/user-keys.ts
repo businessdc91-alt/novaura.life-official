@@ -65,9 +65,32 @@ const USER_CONFIGURABLE_SERVICES = [
     keyPrefix: 'pplx-',
     website: 'https://www.perplexity.ai/settings/api'
   },
+  { 
+    id: 'aimlapi', 
+    name: 'AIML API', 
+    description: 'Access 100+ models including Gemma 3, Llama 3.1, and more',
+    keyPrefix: '',
+    website: 'https://aimlapi.com/app/keys'
+  },
+  { 
+    id: 'aws-bedrock', 
+    name: 'AWS Bedrock', 
+    description: 'Connect to Amazon Nova, Titan, and Anthropic via AWS',
+    keyPrefix: '',
+    website: 'https://console.aws.amazon.com/bedrock/'
+  },
+  { 
+    id: 'alibaba', 
+    name: 'Alibaba Cloud', 
+    description: 'Connect to Qwen (Cybeni) for advanced reasoning',
+    keyPrefix: '',
+    website: 'https://dashscope.console.aliyun.com/'
+  },
 ];
 
 // Middleware: Auth + Tier check
+const SUPERUSERS = ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'];
+
 async function requirePremium(req: any, res: any, next: any): Promise<void> {
   try {
     const authHeader = req.headers.authorization;
@@ -79,6 +102,14 @@ async function requirePremium(req: any, res: any, next: any): Promise<void> {
     const token = authHeader.split('Bearer ')[1];
     const decoded = await admin.auth().verifyIdToken(token);
     
+    // Check for superuser status first
+    if (decoded.email && SUPERUSERS.includes(decoded.email)) {
+      req.user = decoded;
+      req.userTier = 4; // Max tier for internal logic
+      next();
+      return;
+    }
+
     // Get user's tier
     const userDoc = await admin.firestore().collection('users').doc(decoded.uid).get();
     const userTier = userDoc.data()?.membershipTier || 'free';
@@ -91,6 +122,7 @@ async function requirePremium(req: any, res: any, next: any): Promise<void> {
         currentTier: userTier,
         upgradeUrl: '/pricing'
       });
+      return;
     }
     
     req.user = decoded;
@@ -120,7 +152,7 @@ router.get('/services', async (req, res) => {
  */
 router.get('/', requirePremium, async (req, res): Promise<void> => {
   try {
-    const userId = req.user.uid;
+    const userId = (req as any).user.uid;
     
     const doc = await admin.firestore().collection('user_api_keys').doc(userId).get();
     const data = doc.data() || {};
@@ -159,7 +191,7 @@ router.post('/:serviceId', requirePremium, async (req, res): Promise<void> => {
   try {
     const { serviceId } = req.params;
     const { apiKey, label } = req.body;
-    const userId = req.user.uid;
+    const userId = (req as any).user.uid;
     
     // Validate service
     const service = USER_CONFIGURABLE_SERVICES.find(s => s.id === serviceId);
@@ -214,7 +246,7 @@ router.post('/:serviceId', requirePremium, async (req, res): Promise<void> => {
 router.delete('/:serviceId', requirePremium, async (req, res) => {
   try {
     const { serviceId } = req.params;
-    const userId = req.user.uid;
+    const userId = (req as any).user.uid;
     
     await admin.firestore().collection('user_api_keys').doc(userId).update({
       [serviceId]: admin.firestore.FieldValue.delete(),
@@ -373,6 +405,19 @@ async function testUserApiKey(serviceId: string, apiKey: string): Promise<boolea
         // Perplexity doesn't have a simple test endpoint, so we just check format
         return apiKey.startsWith('pplx-') && apiKey.length > 20;
         
+      case 'aws-bedrock':
+        // Expect format AccessKey:SecretKey:Region
+        const awsParts = apiKey.split(':');
+        return awsParts.length >= 2;
+        
+      case 'alibaba':
+        const dashResponse = await fetch('https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'qwen-plus', input: { messages: [{ role: 'user', content: 'ping' }] } })
+        });
+        return dashResponse.ok || dashResponse.status === 400; // 400 might be model error but key is ok
+
       default:
         return apiKey.length > 10;
     }

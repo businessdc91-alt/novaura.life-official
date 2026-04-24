@@ -72,7 +72,7 @@ const ONBOARDING_STEPS = [
     id: 'deploy',
     title: 'Deploy Your Creations',
     subtitle: 'Export & publish',
-    description: 'Export projects as ZIP, or deploy to your own subdomain on novaura.life. Desktop & mobile builds coming soon via Tauri.',
+    description: 'Export projects as ZIP, or deploy to our secure hosting on novaura.life. Desktop & mobile builds coming soon via Tauri.',
     icon: Rocket,
     color: '#8b5cf6',
     action: 'First deployment free with subscription!',
@@ -192,8 +192,8 @@ export default function OnboardingWizard({ onComplete, onSkip }) {
       case 'pro':
         return {
           title: 'Pro Path',
-          description: 'Advanced features, custom domains, API access.',
-          recommended: ['api', 'custom-domains', 'advanced-features']
+          description: 'Advanced features and full API access.',
+          recommended: ['api', 'advanced-features']
         };
       default:
         return null;

@@ -20,6 +20,13 @@ export function KernelProvider({ children }) {
   const booted = useRef(false);
 
   useEffect(() => {
+    // Immediate check: if already ready, jump to ready state
+    if (kernel.bootPhase === 'ready') {
+      setBootState(prev => ({ ...prev, progress: 100, label: 'Ready.', ready: true }));
+      booted.current = true;
+      return;
+    }
+
     if (booted.current) return;
     booted.current = true;
 
@@ -27,15 +34,21 @@ export function KernelProvider({ children }) {
       setBootState(prev => ({ ...prev, phase, label, progress }));
     });
 
-    const unsubReady = kernel.ipc.once('system:ready', () => {
+    const unsubReady = kernel.ipc.on('system:ready', () => {
       setBootState(prev => ({ ...prev, progress: 100, label: 'Ready.', ready: true }));
     });
 
-    const unsubError = kernel.ipc.once('system:boot:error', ({ error }) => {
+    const unsubError = kernel.ipc.on('system:boot:error', ({ error }) => {
       setBootState(prev => ({ ...prev, error, ready: false }));
     });
 
-    kernel.boot().catch(e => {
+    // Start boot sequence
+    kernel.boot().then(() => {
+      // Final safety check after boot promise resolves
+      if (kernel.bootPhase === 'ready') {
+        setBootState(prev => ({ ...prev, ready: true, progress: 100 }));
+      }
+    }).catch(e => {
       setBootState(prev => ({ ...prev, error: e.message }));
     });
 
@@ -114,7 +127,7 @@ function BootScreen({ state }) {
           animation: 'novaura-pulse 2s ease-in-out infinite',
         }}>
           <img 
-            src="/logo.png" 
+            src="logo.png" 
             alt="NovAura"
             style={{
               width: '100%',

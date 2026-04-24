@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle } from 'lucide-react';
+import { MessageCircle, Crown, Bot } from 'lucide-react';
 
 // Animated AI avatar with eye tracking, blinking, and expressions
-function AnimatedAvatar({ mood = 'idle', size = 48 }) {
+function AnimatedAvatar({ mood = 'idle', size = 48, isAura = false, isCybeni = false }) {
   const [blinking, setBlinking] = useState(false);
   const [eyeOffset, setEyeOffset] = useState({ x: 0, y: 0 });
   const [expression, setExpression] = useState('neutral');
@@ -96,7 +96,7 @@ function AnimatedAvatar({ mood = 'idle', size = 48 }) {
           cy={22 + eyeOffset.y}
           rx={eyeWidth / 2}
           ry={eyeHeight / 2}
-          fill="hsl(190, 100%, 60%)"
+          fill={isAura ? "hsl(40, 100%, 60%)" : "hsl(190, 100%, 60%)"}
           style={{ transition: 'ry 0.1s ease, rx 0.15s ease' }}
         >
           {!blinking && <animate attributeName="opacity" values="0.8;1;0.8" dur="2s" repeatCount="indefinite" />}
@@ -118,7 +118,7 @@ function AnimatedAvatar({ mood = 'idle', size = 48 }) {
           cy={22 + eyeOffset.y}
           rx={eyeWidth / 2}
           ry={eyeHeight / 2}
-          fill="hsl(190, 100%, 60%)"
+          fill={isAura ? "hsl(40, 100%, 60%)" : isCybeni ? "hsl(280, 100%, 65%)" : "hsl(190, 100%, 60%)"}
           style={{ transition: 'ry 0.1s ease, rx 0.15s ease' }}
         >
           {!blinking && <animate attributeName="opacity" values="0.8;1;0.8" dur="2s" repeatCount="indefinite" />}
@@ -137,7 +137,7 @@ function AnimatedAvatar({ mood = 'idle', size = 48 }) {
         {/* Mouth */}
         <path
           d={mouthCurve}
-          stroke="hsl(190, 80%, 50%)"
+          stroke={isAura ? "hsl(40, 80%, 50%)" : isCybeni ? "hsl(280, 80%, 55%)" : "hsl(190, 80%, 50%)"}
           strokeWidth="1.2"
           strokeLinecap="round"
           fill="none"
@@ -167,11 +167,11 @@ function AnimatedAvatar({ mood = 'idle', size = 48 }) {
             <stop offset="100%" stopColor="transparent" />
           </radialGradient>
           <linearGradient id="faceStroke" x1="0" y1="0" x2="48" y2="48">
-            <stop offset="0%" stopColor="hsl(190, 100%, 50%)" stopOpacity="0.5">
-              <animate attributeName="stop-color" values="hsl(190,100%,50%);hsl(270,100%,65%);hsl(320,100%,55%);hsl(190,100%,50%)" dur="4s" repeatCount="indefinite" />
+            <stop offset="0%" stopColor={isAura ? "hsl(40, 100%, 50%)" : isCybeni ? "hsl(280, 100%, 60%)" : "hsl(190, 100%, 50%)"} stopOpacity="0.5">
+              <animate attributeName="stop-color" values={isAura ? "hsl(40,100%,50%);hsl(30,100%,60%);hsl(50,100%,55%);hsl(40,100%,50%)" : isCybeni ? "hsl(280,100%,60%);hsl(320,100%,55%);hsl(260,100%,65%);hsl(280,100%,60%)" : "hsl(190,100%,50%);hsl(270,100%,65%);hsl(320,100%,55%);hsl(190,100%,50%)"} dur="4s" repeatCount="indefinite" />
             </stop>
-            <stop offset="100%" stopColor="hsl(270, 100%, 65%)" stopOpacity="0.3">
-              <animate attributeName="stop-color" values="hsl(270,100%,65%);hsl(320,100%,55%);hsl(190,100%,50%);hsl(270,100%,65%)" dur="4s" repeatCount="indefinite" />
+            <stop offset="100%" stopColor={isAura ? "hsl(50, 100%, 65%)" : isCybeni ? "hsl(320, 100%, 55%)" : "hsl(270, 100%, 65%)"} stopOpacity="0.3">
+              <animate attributeName="stop-color" values={isAura ? "hsl(50,100%,65%);hsl(40,100%,55%);hsl(30,100%,50%);hsl(50,100%,65%)" : isCybeni ? "hsl(320,100%,55%);hsl(260,100%,65%);hsl(280,100%,60%);hsl(320,100%,55%)" : "hsl(270,100%,65%);hsl(190,100%,50%);hsl(320,100%,55%);hsl(270,100%,65%)"} dur="4s" repeatCount="indefinite" />
             </stop>
           </linearGradient>
           <radialGradient id="faceInner" cx="0.4" cy="0.35">
@@ -184,8 +184,12 @@ function AnimatedAvatar({ mood = 'idle', size = 48 }) {
   );
 }
 
-export default function AvatarButton({ onClick, mood = 'idle', hasUnread = false }) {
+export default function AvatarButton({ onClick, mood = 'idle', hasUnread = false, title, isAura = false, isCybeni = false }) {
   const [hovering, setHovering] = useState(false);
+
+  const themeClass = isAura ? 'aura-glow-border' : isCybeni ? 'cybeni-glow-border' : 'rgb-border';
+  const flowClass = isAura ? 'aura-flow-layer' : isCybeni ? 'cybeni-flow-layer' : 'rgb-flow-layer';
+  const badgeClass = isAura ? 'bg-amber-500 shadow-amber-500/50' : isCybeni ? 'bg-purple-500 shadow-purple-500/50' : 'bg-primary shadow-primary/50';
 
   return (
     <button
@@ -193,22 +197,22 @@ export default function AvatarButton({ onClick, mood = 'idle', hasUnread = false
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
       className="relative group transition-transform duration-200 hover:scale-110 active:scale-95"
-      title="Chat with Nova"
+      title={title || "Chat with AI"}
     >
       {/* Outer glow ring */}
-      <div className="absolute -inset-2 rounded-full rgb-glow opacity-50 group-hover:opacity-100 transition-opacity" />
+      <div className={`absolute -inset-2 rounded-full ${isCybeni ? 'cybeni-glow' : 'rgb-glow'} opacity-50 group-hover:opacity-100 transition-opacity`} />
 
       {/* Avatar container with liquid light border */}
-      <div className="relative z-10 w-14 h-14 rounded-full bg-black border border-white/10 flex items-center justify-center overflow-hidden rgb-border rounded-full">
-        <div className="rgb-flow-layer" />
+      <div className={`relative z-10 w-14 h-14 rounded-full bg-black border border-white/10 flex items-center justify-center overflow-hidden ${themeClass} rounded-full`}>
+        <div className={flowClass} />
         <div className="relative z-10 bg-black rounded-full p-0.5">
-          <AnimatedAvatar mood={hovering ? 'curious' : mood} size={48} />
+          <AnimatedAvatar mood={hovering ? 'curious' : mood} size={48} isAura={isAura} isCybeni={isCybeni} />
         </div>
       </div>
 
       {/* Chat icon badge */}
-      <div className="absolute -bottom-0.5 -right-0.5 z-20 w-5 h-5 rounded-full bg-primary flex items-center justify-center shadow-[0_0_8px_rgba(0,217,255,0.5)]">
-        <MessageCircle className="w-3 h-3 text-black" />
+      <div className={`absolute -bottom-0.5 -right-0.5 z-20 w-5 h-5 rounded-full flex items-center justify-center shadow-lg ${badgeClass}`}>
+        {isAura ? <Crown className="w-3 h-3 text-black" /> : isCybeni ? <Shield className="w-3 h-3 text-black" /> : <Bot className="w-3 h-3 text-black" />}
       </div>
 
       {/* Unread indicator */}

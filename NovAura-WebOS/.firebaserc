@@ -1,5 +1,15 @@
 {
   "projects": {
-    "default": "novaura-systems"
-  }
+    "default": "novaura-life"
+  },
+  "targets": {
+    "novaura-life": {
+      "hosting": {
+        "main": [
+          "novaura-life-8df2f"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

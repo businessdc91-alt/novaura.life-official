@@ -18,6 +18,12 @@ export async function createSubscriptionCheckout(userId, planId) {
     'catalyst': { price: 2999, name: 'Catalyst Membership' },
     'nova': { price: 7500, name: 'Nova Membership' },
     'catalytic-crew': { price: 34999, name: 'Catalytic Crew Membership' },
+    // Founders Tiers (One-time Passes)
+    'founding-spark': { price: 7500, name: 'Founding Spark Pass' },
+    'founding-catalyst': { price: 25000, name: 'Founding Catalyst Pass' },
+    'founding-nova': { price: 50000, name: 'Founding Nova Pass' },
+    'catalyst-crew-founders': { price: 1000000, name: 'Catalyst Crew Founders' },
+    'strategic-investor': { price: 2500000, name: 'Strategic Investor' },
   };
 
   const plan = planToPriceMap[planId];
@@ -143,6 +149,101 @@ export async function updateSubscription(subscriptionId, newPlanId) {
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.message || 'Failed to update subscription');
+  }
+
+  return response.json();
+}
+
+/**
+ * Create a Stripe checkout session for a one-time Founders Pass purchase
+ * @param {string} userId - Firebase user ID (optional for guest, but preferred)
+ * @param {string} tierId - Tier ID (founding-spark, founding-catalyst, founding-nova)
+ * @param {string} email - User email for guest checkout
+ * @returns {Promise<{url: string}>} Stripe checkout URL
+ */
+export async function createOneTimeCheckout(userId, tierId, email = null) {
+  const tierToPriceMap = {
+    'founding-spark': { price: 7500, name: 'Founding Spark Pass', shares: 5, claimDate: 'August 10, 2026' },
+    'founding-catalyst': { price: 25000, name: 'Founding Catalyst Pass', shares: 30, claimDate: 'August 10, 2026' },
+    'founding-nova': { price: 50000, name: 'Founding Nova Pass', shares: 200, claimDate: 'July 15, 2026' },
+    'catalyst-crew-founders': { price: 1000000, name: 'Catalyst Crew Founders', shares: 25000, claimDate: 'June 15, 2026' },
+    'strategic-investor': { price: 2500000, name: 'Strategic Investor', shares: 150000, claimDate: 'June 15, 2026' },
+  };
+
+  const tier = tierToPriceMap[tierId];
+  if (!tier) {
+    throw new Error(`Unknown tier: ${tierId}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/stripe/checkout`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      userId,
+      customerEmail: email,
+      items: [{
+        asset: {
+          id: `founders-${tierId}`,
+          title: tier.name,
+          shortDescription: `NovAura ${tier.name} - Lifetime Membership + ${tier.shares} Company Shares`,
+          price: tier.price,
+          type: 'one-time',
+        },
+      }],
+      metadata: {
+        tier: tierId,
+        type: 'founders_pass',
+        shares: tier.shares.toString(),
+        claimDate: tier.claimDate
+      }
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || 'Failed to create checkout session');
+  }
+
+  return response.json();
+}
+
+/**
+ * Purchase additional company shares (exclusive for Nova Class or special offers)
+ * @param {string} userId - Firebase user ID
+ * @param {number} count - Number of shares to buy ($1 each)
+ * @returns {Promise<{url: string}>} Stripe checkout URL
+ */
+export async function purchaseExtraShares(userId, count) {
+  if (count <= 0 || count > 10000) {
+    throw new Error('Invalid share count. Maximum is 10,000.');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/stripe/checkout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId,
+      items: [{
+        asset: {
+          id: 'extra-shares',
+          title: 'NovAura Company Shares',
+          shortDescription: `Purchase of ${count} additional company shares.`,
+          price: count * 100, // $1.00 each in cents
+          type: 'one-time',
+        },
+      }],
+      metadata: {
+        type: 'extra_shares',
+        count: count.toString(),
+      }
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || 'Failed to create share purchase session');
   }
 
   return response.json();

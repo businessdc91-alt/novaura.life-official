@@ -7,10 +7,19 @@ import {
 } from 'lucide-react';
 
 import { db, auth } from '../../config/firebase';
-import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, orderBy, limit } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, orderBy, limit, collection, query, onSnapshot } from 'firebase/firestore';
 import { kernelStorage } from '../../kernel/kernelStorage.js';
+import { useAuthStore } from '../../../platform/src/stores/authStore';
 
-const OWNER_EMAILS = ['the.lost.catalyst@gmail.com', 'Dillan.Copeland@Novauraverse.com', 'admin@novaura.life'];
+const OWNER_EMAILS = [
+  'dillan.copeland@novaura.xyz',
+  'business.dc91@gmail.com',
+  'the.lost.catalyst@gmail.com',
+  'lostitonce420@gmail.com',
+  'novaura.life@novaura.life',
+  'admin@novaura.life',
+  'dev@novaura.life'
+];
 const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
 
 const ROLES = [
@@ -54,8 +63,13 @@ export default function AdminPanelWindow() {
     try { return JSON.parse(kernelStorage.getItem('user_data') || '{}'); } catch { return {}; }
   }, []);
 
-  const isOwner = OWNER_EMAILS.includes(currentUser?.email);
-  const isAdmin = currentUser?.role === 'admin' || isOwner;
+  const { isOwner: checkIsOwner } = useAuthStore();
+  const isOwner = checkIsOwner();
+  
+  // Allow access to admins, owners, and top-tier founding/investor members
+  const isAdmin = currentUser?.role === 'admin' || 
+                  isOwner || 
+                  ['catalyst-crew-founders', 'strategic-investor', 'founding-catalyst', 'founding-nova'].includes(currentUser?.membershipTier);
 
   const logAction = (action) => {
     const entry = { id: `log-${Date.now()}`, action, by: currentUser?.username || 'Admin', at: new Date().toISOString() };
@@ -203,7 +217,10 @@ export default function AdminPanelWindow() {
       <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-900/30 to-slate-900 border-b border-slate-800 shrink-0">
         <Shield className="w-4 h-4 text-red-400" />
         <span className="text-sm font-semibold">Admin Panel</span>
-        {isOwner && <span className="text-[8px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">Owner</span>}
+        {isOwner && <span className="text-[8px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full border border-amber-500/30">Owner</span>}
+        {!isOwner && ['catalyst-crew-founders', 'strategic-investor', 'founding-catalyst', 'founding-nova'].includes(currentUser?.membershipTier) && (
+          <span className="text-[8px] px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded-full border border-cyan-500/30 shadow-[0_0_10px_rgba(0,255,255,0.2)]">Founding Member</span>
+        )}
         <span className="text-[9px] text-slate-500 ml-auto">{currentUser?.username || 'Admin'}</span>
       </div>
 
@@ -303,7 +320,16 @@ export default function AdminPanelWindow() {
                         {u.status === 'suspended' && <span className="text-[8px] px-1 py-0.5 rounded bg-red-500/20 text-red-400">Banned</span>}
                       </div>
                       <div className="text-[9px] text-slate-500 truncate">{u.email}</div>
-                      <div className="text-[8px] text-slate-600">Joined {new Date(u.created_at).toLocaleDateString()} · {u.consciousness_coins} coins · {u.membership_tier}</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="text-[8px] text-slate-400 font-medium uppercase tracking-wider">
+                          {u.membership_tier || 'Free'} · {u.shares || 0} Shares
+                        </div>
+                        <span className={`text-[7px] px-1.5 py-0.5 rounded-full font-bold ${
+                          (u.shares >= 10000 || u.id === 'owner') ? 'bg-slate-100 text-black' : 'bg-white/5 text-white/40 border border-white/5'
+                        }`}>
+                          {(u.shares >= 10000 || u.id === 'owner') ? 'Series A' : 'Series B'}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex gap-0.5 shrink-0">
                       <button onClick={() => setSelectedUser(selectedUser?.id === u.id ? null : u)}
@@ -334,8 +360,11 @@ export default function AdminPanelWindow() {
                       </div>
                       <div className="text-[9px] text-slate-500 uppercase mt-1">Quick Actions</div>
                       <div className="flex gap-1">
-                        <button className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-[8px] text-slate-400 hover:text-white flex items-center gap-1">
-                          <Mail className="w-2.5 h-2.5" /> Email
+                        <button 
+                          onClick={() => window.openWindow('direct-messenger', { userId: u.id, username: u.username })}
+                          className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-[8px] text-slate-400 hover:text-white flex items-center gap-1"
+                        >
+                          <Send className="w-2.5 h-2.5" /> Message
                         </button>
                         <button className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-[8px] text-slate-400 hover:text-white flex items-center gap-1">
                           <FileText className="w-2.5 h-2.5" /> View Activity

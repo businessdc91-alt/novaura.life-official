@@ -1,22 +1,26 @@
 /**
- * NovAura Unified Firebase Functions
+ * NovAura WebOS — Platform Backend
  * 
- * Includes:
- * - Social Network (notifications, DMs, posts, followers)
- * - Platform API (Auth, AI, Domains) via Express
- * 
- * Initialized with Service Account for God Mode access
+ * Entry point for Firebase Cloud Functions.
+ * Exposes the main Express API and Firebase Auth/Firestore triggers.
  */
 
-// Load environment variables FIRST (before any other imports)
 import * as dotenv from 'dotenv';
 dotenv.config();
 
 // MUST import init first — initializes Firebase Admin before any route modules
 import { admin } from './init';
-import * as functions from 'firebase-functions';
+
+// Gen 2 Imports
+import { onRequest, HttpsError } from 'firebase-functions/v2/https';
+import { onCall } from 'firebase-functions/v2/https';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { setGlobalOptions } from 'firebase-functions/v2';
+import * as v1 from 'firebase-functions/v1';
 import apiApp from './api/app';
 
+// Set global options for all functions
+setGlobalOptions({ maxInstances: 10 });
 
 // Firestore shorthand
 const db = admin.firestore();
@@ -26,25 +30,22 @@ const messaging = admin.messaging();
 // EXPRESS API (Auth, AI, Domains)
 // ═══════════════════════════════════════════════════════════════
 
-// Export as Firebase HTTP Function — with access to Stripe secrets
-export const api = functions.runWith({
-  timeoutSeconds: 120,
-  memory: '512MB'
-}).https.onRequest(apiApp);
+export const api = onRequest({ timeoutSeconds: 120, memory: '512MiB', cors: false }, apiApp);
 
 // ═══════════════════════════════════════════════════════════════
 // SOCIAL NETWORK FUNCTIONS
 // ═══════════════════════════════════════════════════════════════
 
 // Push Notifications
-export const sendPushNotification = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+export const sendPushNotification = onCall({ memory: '256MiB' }, async (request) => {
+  const { auth, data } = request;
+  if (!auth) {
+    throw new HttpsError('unauthenticated', 'User must be authenticated');
   }
 
   const { userId, title, body, data: payloadData = {} } = data;
   if (!userId || !title || !body) {
-    throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+    throw new HttpsError('invalid-argument', 'Missing required fields');
   }
 
   try {
@@ -81,87 +82,89 @@ export const sendPushNotification = functions.https.onCall(async (data, context)
     return { success: true, sent: response.successCount, failed: response.failureCount };
   } catch (error) {
     console.error('Error sending notification:', error);
-    throw new functions.https.HttpsError('internal', 'Failed to send notification');
+    throw new HttpsError('internal', 'Failed to send notification');
   }
 });
 
-export const registerFCMToken = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
+export const registerFCMToken = onCall({ memory: '256MiB' }, async (request) => {
+  const { auth, data } = request;
+  if (!auth) throw new HttpsError('unauthenticated', 'Auth required');
   const { token, platform = 'web' } = data;
-  if (!token) throw new functions.https.HttpsError('invalid-argument', 'Token required');
+  if (!token) throw new HttpsError('invalid-argument', 'Token required');
   
-  await db.collection('user_fcm_tokens').doc(context.auth.uid).collection('tokens').doc(token).set({
+  await db.collection('user_fcm_tokens').doc(auth.uid).collection('tokens').doc(token).set({
     platform, createdAt: admin.firestore.FieldValue.serverTimestamp(), lastUsed: admin.firestore.FieldValue.serverTimestamp()
   });
   return { success: true };
 });
 
-export const unregisterFCMToken = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
+export const unregisterFCMToken = onCall({ memory: '256MiB' }, async (request) => {
+  const { auth, data } = request;
+  if (!auth) throw new HttpsError('unauthenticated', 'Auth required');
   const { token } = data;
-  if (!token) throw new functions.https.HttpsError('invalid-argument', 'Token required');
+  if (!token) throw new HttpsError('invalid-argument', 'Token required');
   
-  await db.collection('user_fcm_tokens').doc(context.auth.uid).collection('tokens').doc(token).delete();
+  await db.collection('user_fcm_tokens').doc(auth.uid).collection('tokens').doc(token).delete();
   return { success: true };
 });
 
 // Social Triggers
-export const onDirectMessageCreated = functions.firestore
-  .document('social_dm_threads/{threadId}/messages/{messageId}')
-  .onCreate(async (snap, context) => {
-    const message = snap.data();
-    const threadDoc = await db.collection('social_dm_threads').doc(context.params.threadId).get();
-    if (!threadDoc.exists) return;
-    
-    const recipientId = threadDoc.data()?.participants?.find((id: string) => id !== message.senderId);
-    if (!recipientId) return;
+export const onDirectMessageCreated = onDocumentCreated('social_dm_threads/{threadId}/messages/{messageId}', async (event) => {
+  const message = event.data?.data();
+  if (!message) return;
 
-    const senderDoc = await db.collection('social_profiles').doc(message.senderId).get();
-    const senderName = senderDoc.exists ? senderDoc.data()?.displayName || 'Someone' : 'Someone';
+  const threadDoc = await db.collection('social_dm_threads').doc(event.params.threadId).get();
+  if (!threadDoc.exists) return;
+  
+  const recipientId = threadDoc.data()?.participants?.find((id: string) => id !== message.senderId);
+  if (!recipientId) return;
 
-    const tokensSnapshot = await db.collection('user_fcm_tokens').doc(recipientId).collection('tokens').get();
-    if (tokensSnapshot.empty) return;
+  const senderDoc = await db.collection('social_profiles').doc(message.senderId).get();
+  const senderName = senderDoc.exists ? senderDoc.data()?.displayName || 'Someone' : 'Someone';
 
-    const tokens = tokensSnapshot.docs.map(doc => doc.id);
-    await messaging.sendEachForMulticast({
-      notification: { title: senderName, body: message.text?.slice(0, 100) + (message.text?.length > 100 ? '...' : '') },
-      data: { type: 'direct_message', threadId: context.params.threadId, senderId: message.senderId },
-      tokens
+  const tokensSnapshot = await db.collection('user_fcm_tokens').doc(recipientId).collection('tokens').get();
+  if (tokensSnapshot.empty) return;
+
+  const tokens = tokensSnapshot.docs.map(doc => doc.id);
+  await messaging.sendEachForMulticast({
+    notification: { title: senderName, body: message.text?.slice(0, 100) + (message.text?.length > 100 ? '...' : '') },
+    data: { type: 'direct_message', threadId: event.params.threadId, senderId: message.senderId },
+    tokens
+  });
+});
+
+export const onPostCreated = onDocumentCreated('social_posts/{postId}', async (event) => {
+  const post = event.data?.data();
+  if (!post) return;
+
+  const followersDoc = await db.collection('social_followers').doc(post.authorId).get();
+  if (!followersDoc.exists) return;
+  
+  const followers: string[] = followersDoc.data()?.followers || [];
+  if (followers.length === 0) return;
+
+  const authorDoc = await db.collection('social_profiles').doc(post.authorId).get();
+  const authorName = authorDoc.exists ? authorDoc.data()?.displayName || 'Someone' : 'Someone';
+
+  for (let i = 0; i < followers.length; i += 500) {
+    const batch = followers.slice(i, i + 500);
+    const tokenPromises = batch.map(async (followerId) => {
+      const snap = await db.collection('user_fcm_tokens').doc(followerId).collection('tokens').limit(3).get();
+      return snap.docs.map(d => d.id);
     });
-  });
-
-export const onPostCreated = functions.firestore
-  .document('social_posts/{postId}')
-  .onCreate(async (snap, context) => {
-    const post = snap.data();
-    const followersDoc = await db.collection('social_followers').doc(post.authorId).get();
-    if (!followersDoc.exists) return;
     
-    const followers: string[] = followersDoc.data()?.followers || [];
-    if (followers.length === 0) return;
+    const allTokens = (await Promise.all(tokenPromises)).flat();
+    if (allTokens.length === 0) continue;
 
-    const authorDoc = await db.collection('social_profiles').doc(post.authorId).get();
-    const authorName = authorDoc.exists ? authorDoc.data()?.displayName || 'Someone' : 'Someone';
+    await messaging.sendEachForMulticast({
+      notification: { title: `${authorName} posted`, body: post.text?.slice(0, 100) },
+      data: { type: 'new_post', postId: event.params.postId, authorId: post.authorId },
+      tokens: allTokens
+    });
+  }
+});
 
-    for (let i = 0; i < followers.length; i += 500) {
-      const batch = followers.slice(i, i + 500);
-      const tokenPromises = batch.map(async (followerId) => {
-        const snap = await db.collection('user_fcm_tokens').doc(followerId).collection('tokens').limit(3).get();
-        return snap.docs.map(d => d.id);
-      });
-      
-      const allTokens = (await Promise.all(tokenPromises)).flat();
-      if (allTokens.length === 0) continue;
-
-      await messaging.sendEachForMulticast({
-        notification: { title: `${authorName} posted`, body: post.text?.slice(0, 100) },
-        data: { type: 'new_post', postId: context.params.postId, authorId: post.authorId },
-        tokens: allTokens
-      });
-    }
-  });
-
-export const onUserCreated = functions.auth.user().onCreate(async (user) => {
+export const onUserCreated = v1.auth.user().onCreate(async (user) => {
   await db.collection('social_profiles').doc(user.uid).set({
     id: user.uid, displayName: user.displayName || user.email?.split('@')[0] || 'User',
     email: user.email || '', avatar: user.photoURL || '', bio: '', status: 'online',
@@ -169,7 +172,9 @@ export const onUserCreated = functions.auth.user().onCreate(async (user) => {
   });
 });
 
-export const onUserDeleted = functions.auth.user().onDelete(async (user) => {
+// Keep onDelete as v1 since there is no beforeUserDeleted blocking trigger yet.
+
+export const onUserDeleted = v1.auth.user().onDelete(async (user) => {
   const batch = db.batch();
   batch.delete(db.collection('social_profiles').doc(user.uid));
   const tokens = await db.collection('user_fcm_tokens').doc(user.uid).collection('tokens').get();

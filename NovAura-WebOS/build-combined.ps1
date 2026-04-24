@@ -8,24 +8,32 @@ Write-Host "══════════════════════�
 Write-Host "  NovAura.life - Combined Build (WebOS + Platform)" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
 
-# Step 1: Build WebOS (Landing page + OS)
-Write-Host "`n[1/4] Building WebOS (Landing + OS)..." -ForegroundColor Yellow
+# Step 1: Build Functions (Backend)
+Write-Host "`n[1/5] Building Cloud Functions..." -ForegroundColor Yellow
+cd "$PSScriptRoot\functions"
+npm run build
+if ($LASTEXITCODE -ne 0) { throw "Functions build failed" }
+
+# Step 2: Build All Components (OS, Landing, Platform)
+Write-Host "`n[2/4] Building All Components (OS, Landing, Platform)..." -ForegroundColor Yellow
 cd $PSScriptRoot
 npm run build
-if ($LASTEXITCODE -ne 0) { throw "WebOS build failed" }
+if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 
-# Step 2: Build Platform (Marketplace)
-Write-Host "`n[2/4] Building Platform (Marketplace)..." -ForegroundColor Yellow
-cd "$PSScriptRoot\platform"
-npm run build
-if ($LASTEXITCODE -ne 0) { throw "Platform build failed" }
+# Step 3: Merge platform and standardize OS entry point
+Write-Host "`n[3/4] Standardizing Directory Structure..." -ForegroundColor Yellow
 
-# Step 3: Merge platform into dist/platform
-Write-Host "`n[3/4] Merging Platform into dist/platform..." -ForegroundColor Yellow
+# Move platform
 if (Test-Path "$PSScriptRoot\dist\platform") {
     Remove-Item -Recurse -Force "$PSScriptRoot\dist\platform"
 }
 Copy-Item -Recurse "$PSScriptRoot\platform\dist" "$PSScriptRoot\dist\platform"
+
+# Standardize OS entry point (rename os.html to index.html for standard hosting)
+if (Test-Path "$PSScriptRoot\dist\os\os.html") {
+    Write-Host "   Renaming dist/os/os.html to dist/os/index.html..." -ForegroundColor Gray
+    Rename-Item "$PSScriptRoot\dist\os\os.html" "index.html" -Force
+}
 
 # Step 4: Create _redirects for combined routing
 Write-Host "`n[4/4] Setting up routing rules..." -ForegroundColor Yellow
@@ -38,11 +46,13 @@ $redirects = @"
 /domains     /platform/index.html  200
 /market      /platform/index.html  200
 
-# WebOS routes
-/system      /index.html           200
-/os          /index.html           200
+# WebOS routes (ensure wildcard support for deep links)
+/system/*    /os/index.html        200
+/os/*        /os/index.html        200
+/system      /os/index.html        200
+/os          /os/index.html        200
 
-# Catch-all (Landing page)
+# Catch-all (Landing page - ROOT)
 /*           /index.html           200
 "@
 

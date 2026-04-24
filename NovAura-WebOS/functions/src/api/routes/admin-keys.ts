@@ -47,6 +47,7 @@ const AI_SERVICES = [
   { id: 'openai', name: 'OpenAI', description: 'GPT-4, DALL-E fallback' },
   { id: 'anthropic', name: 'Anthropic', description: 'Claude models' },
   { id: 'stability', name: 'Stability AI', description: 'Stable Diffusion' },
+  { id: 'aiml', name: 'AIML API', description: 'Unified gateway for 100+ models' },
 ];
 
 /**
@@ -103,7 +104,7 @@ router.post('/:serviceId', async (req, res): Promise<void> => {
         key: encryptKey(apiKey), // Encrypt before storing
         enabled,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedBy: req.user.uid
+        updatedBy: (req as any).user.uid
       }
     }, { merge: true });
     
@@ -111,7 +112,7 @@ router.post('/:serviceId', async (req, res): Promise<void> => {
     await admin.firestore().collection('admin_logs').add({
       action: 'api_key_updated',
       serviceId,
-      adminId: req.user.uid,
+      adminId: (req as any).user.uid,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
     
@@ -280,6 +281,12 @@ async function testApiKey(serviceId: string, apiKey: string): Promise<boolean> {
           headers: { 'Authorization': `Bearer ${apiKey}` }
         });
         return pixaiResponse.ok;
+        
+      case 'aiml':
+        const aimlRes = await fetch('https://api.aimlapi.com/v1/models', {
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        return aimlRes.ok;
         
       default:
         // For services we can't easily test, just check key format

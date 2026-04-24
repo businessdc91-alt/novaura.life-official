@@ -1,4 +1,5 @@
 import { kernelStorage } from '../kernel/kernelStorage.js';
+import { useAuthStore } from '../../platform/src/stores/authStore';
 /**
  * NovAura AI Service — Centralized API layer
  *
@@ -46,16 +47,221 @@ export async function checkHealth() {
 
 // ─── Cloud AI (via backend proxy) ──────────────────────────────────────
 
+/** Helper to check membership and deduct tokens for IDE usage */
+async function ensureActionTokens(isIDE = false) {
+  const { user } = useAuthStore.getState();
+  const isPremium = user?.membershipTier === 'catalyst' ||
+    user?.membershipTier === 'nova' ||
+    user?.membershipTier === 'catalytic-crew' ||
+    user?.membershipTier === 'spark' ||
+    user?.membershipTier === 'emergent' ||
+    user?.membershipTier === 'founding-spark' ||
+    user?.membershipTier === 'founding-catalyst' ||
+    user?.membershipTier === 'founding-nova' ||
+    user?.membershipTier === 'catalyst-crew-founders' ||
+    user?.membershipTier === 'strategic-investor' ||
+    user?.email?.endsWith('@novaura.life');
+
+  if (!isPremium && isIDE) {
+    const { useActionTokens } = useAuthStore.getState();
+    const success = await useActionTokens(0.25);
+    if (!success) {
+      throw new Error('Action tokens required for IDE usage (0.25/action). Please upgrade to Spark or purchase tokens.');
+    }
+  }
+  return isPremium;
+}
+
 /**
  * Chat with a cloud AI provider through the backend
  * @param {string} prompt - User message
- * @param {object} options - { provider, model, maxTokens, temperature, conversation }
+ * @param {object} options - { provider, model, maxTokens, temperature, conversation, isIDE }
  */
 export async function chatCloud(prompt, options = {}) {
-  // SECURITY: API keys are NOT loaded from localStorage
-  // Backend uses platform-owned keys for Tier 1-2 users
-  // Tier 3+ BYOK users have keys stored securely on backend (not client-side)
-  
+  const { user } = useAuthStore.getState();
+  const isPremium = await ensureActionTokens(options.isIDE);
+
+  // Azure OpenAI (Kimi) BYOK / System Fallback
+  const userKimiData = kernelStorage.getItem('kimi_key');
+  const userAzureData = kernelStorage.getItem('azure_key') || kernelStorage.getItem('user_azure_key');
+
+  let azureOpenAIKey = 'l1EbAyY4Y8xoQiTr6cdCUgmRX23TqEqpJ0pMZJ4y6RXEDAwR0a8yJQQJ99CCACHYHv6XJ3w3AAAAACOG1UQ9';
+  let azureEndpoint = 'https://livenovaura-resource.openai.azure.com/';
+
+  // Priority: 1. Specific provider key, 2. Generic azure key, 3. System fallback
+  const effectiveData = (options.provider === 'kimi' && userKimiData) ? userKimiData : (userAzureData || userKimiData);
+
+  if (effectiveData && effectiveData.includes('|')) {
+    const [savedKey, savedEndpoint] = effectiveData.split('|');
+    azureOpenAIKey = savedKey;
+    azureEndpoint = savedEndpoint;
+  }
+
+  if (options.provider === 'kimi' || options.provider === 'azure') {
+    const deployment = options.model || (options.provider === 'kimi' ? 'kimi' : 'gpt-4o');
+    const apiVersion = '2024-05-01-preview';
+    const baseUrl = azureEndpoint.endsWith('/') ? azureEndpoint : `${azureEndpoint}/`;
+
+    // Intelligent URL construction based on Azure service type
+    let url;
+    if (baseUrl.includes('/openai/deployments/')) {
+      // User pasted a full deployment-specific URL
+      url = baseUrl.includes('api-version=') ? baseUrl : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api-version=${apiVersion}`;
+    } else if (baseUrl.includes('.services.ai.azure.com')) {
+      // Azure AI Foundry / MaaS (Kimi, Llama, etc.)
+      url = `${baseUrl}models/chat/completions?api-version=${apiVersion}`;
+    } else {
+      // Standard Azure OpenAI Base URL
+      url = `${baseUrl}openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': azureOpenAIKey,
+      },
+      body: JSON.stringify({
+        messages: [
+          ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: options.maxTokens || 1024,
+        temperature: options.temperature || 0.7,
+      }),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(`Azure OpenAI Error: ${res.status} - ${errorData.error?.message || 'Unknown Error'}`);
+    }
+
+    const data = await res.json();
+    return {
+      response: data.choices[0].message.content,
+      source: userAzureData ? 'azure (BYOK)' : 'azure (system)',
+      model: deployment,
+    };
+  }
+
+  const userOpenAIKey = kernelStorage.getItem('openai_api_key') || kernelStorage.getItem('user_openai_key');
+
+  if (userOpenAIKey && (options.provider === 'openai' || !options.provider)) {
+    if (!isPremium) {
+      throw new Error('Catalyst Membership ($29.99) required for BYOK access.');
+    }
+    // Direct call to OpenAI bypasses backend if user has a key
+    const openAIRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userOpenAIKey}`,
+      },
+      body: JSON.stringify({
+        model: options.model || 'gpt-4o',
+        messages: [
+          ...options.conversation.map(m => ({ role: m.role, content: m.text || m.content })),
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: options.maxTokens || 1024,
+        temperature: options.temperature ?? 0.7,
+      }),
+    });
+
+    const openAIData = await openAIRes.json();
+    if (!openAIRes.ok) throw new Error(openAIData.error?.message || 'OpenAI request failed');
+
+    return {
+      response: openAIData.choices[0].message.content,
+      source: 'openai (BYOK)',
+      model: openAIData.model,
+    };
+  }
+
+  const userAIMLKey = kernelStorage.getItem('aimlapi_key') || kernelStorage.getItem('user_aimlapi_key');
+  if (userAIMLKey && (options.provider === 'aimlapi' || (options.model && options.model.toLowerCase().includes('gemma')))) {
+    const aimlRes = await fetch('https://api.aimlapi.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userAIMLKey}`,
+      },
+      body: JSON.stringify({
+        model: options.model || 'google/gemma-7b-it',
+        messages: [
+          ...(options.conversation || []).map(m => ({
+            role: m.role === 'assistant' ? 'assistant' : m.role,
+            content: m.text || m.content || ''
+          })),
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: options.maxTokens || 1024,
+        temperature: options.temperature ?? 0.7,
+      }),
+    });
+
+    const aimlData = await aimlRes.json();
+    if (!aimlRes.ok) throw new Error(aimlData.error?.message || aimlData.error || 'AIML API request failed');
+
+    return {
+      response: aimlData.choices[0].message.content,
+      source: 'aimlapi (BYOK)',
+      model: aimlData.model,
+    };
+  }
+
+  const userAWSKey = kernelStorage.getItem('aws-bedrock_key') || kernelStorage.getItem('user_aws-bedrock_key');
+  if (userAWSKey && (options.provider === 'aws-bedrock' || options.provider === 'nova')) {
+    // AWS Bedrock key format: "AccessKey:SecretKey:Region"
+    const [accessKey, secretKey, region] = userAWSKey.split(':');
+    const res = await fetch(`${BACKEND_URL}/ai/aws/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({
+        prompt,
+        accessKey,
+        secretKey,
+        region: region || 'us-east-1',
+        model: options.model || 'amazon.nova-pro-v1:0',
+        conversation: options.conversation || [],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'AWS Bedrock request failed');
+    return {
+      response: data.response,
+      source: 'aws-bedrock (BYOK)',
+      model: data.model,
+    };
+  }
+
+  const userAlibabaKey = kernelStorage.getItem('alibaba_key') || kernelStorage.getItem('user_alibaba_key');
+  if (userAlibabaKey && (options.provider === 'alibaba' || options.provider === 'qwen')) {
+    const res = await fetch(`${BACKEND_URL}/ai/alibaba/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({
+        prompt,
+        apiKey: userAlibabaKey,
+        model: options.model || 'qwen-max',
+        conversation: options.conversation || [],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Alibaba Cloud request failed');
+    return {
+      response: data.response,
+      source: 'alibaba (BYOK)',
+      model: data.model,
+    };
+  }
+
   const res = await fetch(`${BACKEND_URL}/ai/chat`, {
     method: 'POST',
     headers: {
@@ -92,6 +298,7 @@ export async function chatCloud(prompt, options = {}) {
  * @param {object} options - { provider, model, mode, template, files, maxTokens }
  */
 export async function generateCode(prompt, options = {}) {
+  await ensureActionTokens(true);
   const res = await fetch(`${BACKEND_URL}/ai/builder`, {
     method: 'POST',
     headers: {
@@ -132,6 +339,7 @@ export async function generateCode(prompt, options = {}) {
  * @param {object} requirements - { responsive, modern, framework }
  */
 export async function generateWebsite(prompt, template, requirements = {}) {
+  await ensureActionTokens(true);
   const res = await fetch(`${BACKEND_URL}/ai/website/generate`, {
     method: 'POST',
     headers: {
@@ -192,8 +400,8 @@ export async function generateVideo(prompt, options = {}) {
       'Content-Type': 'application/json',
       ...getAuthHeaders(),
     },
-    body: JSON.stringify({ 
-      prompt, 
+    body: JSON.stringify({
+      prompt,
       duration: options.duration || 8,
       aspectRatio: options.aspectRatio || '16:9',
     }),
@@ -304,9 +512,34 @@ async function discoverLocalModel(baseUrl, type) {
  * @param {object} config - { url, type, model, systemPrompt, conversation }
  */
 export async function chatLocal(message, config) {
+  const { user } = useAuthStore.getState();
+  const isPremium = user?.membershipTier === 'catalyst' ||
+    user?.membershipTier === 'nova' ||
+    user?.membershipTier === 'catalytic-crew' ||
+    user?.membershipTier === 'spark' ||
+    user?.membershipTier === 'emergent' ||
+    user?.membershipTier === 'founding-spark' ||
+    user?.membershipTier === 'founding-catalyst' ||
+    user?.membershipTier === 'founding-nova' ||
+    user?.membershipTier === 'catalyst-crew-founders' ||
+    user?.membershipTier === 'strategic-investor' ||
+    user?.email?.endsWith('@novaura.life');
+
+  // IDE usage charge for Free tier: 0.25 action tokens per action
+  if (!isPremium && config.isIDE) {
+    const { useActionTokens } = useAuthStore.getState();
+    const success = await useActionTokens(0.25);
+    if (!success) {
+      throw new Error('Action tokens required for IDE usage (0.25/action). Please upgrade to Spark or purchase tokens.');
+    }
+  } else if (!isPremium && !config.isIDE) {
+    // Regular local chat is free for everyone, but we still verify access exists
+    // (Local AI Chat is permitted for free users as long as it's not IDE)
+  }
+
   const target = resolveLocalTarget(config.url, config.type);
   const discoveredModel = await discoverLocalModel(target.baseUrl, config.type);
-  const selectedModel = config.model || discoveredModel || (config.type === 'ollama' ? 'llama3.1:8b' : 'local-model');
+  const selectedModel = config.model || discoveredModel || (config.type === 'ollama' ? 'llama4:latest' : 'local-model');
 
   if (config.type === 'ollama') {
     const messages = [];
@@ -321,27 +554,27 @@ export async function chatLocal(message, config) {
 
     const body = target.mode === 'ollama-generate'
       ? {
-          model: selectedModel,
-          prompt: [
-            config.systemPrompt ? `System: ${config.systemPrompt}` : '',
-            config.conversation?.length ? config.conversation.map((m) => `${m.role}: ${m.content}`).join('\n') : '',
-            `User: ${message}`,
-          ].filter(Boolean).join('\n\n'),
-          stream: false,
-          options: {
-            temperature: config.temperature ?? 0.7,
-            num_predict: config.maxTokens || 1024,
-          },
-        }
+        model: selectedModel,
+        prompt: [
+          config.systemPrompt ? `System: ${config.systemPrompt}` : '',
+          config.conversation?.length ? config.conversation.map((m) => `${m.role}: ${m.content}`).join('\n') : '',
+          `User: ${message}`,
+        ].filter(Boolean).join('\n\n'),
+        stream: false,
+        options: {
+          temperature: config.temperature ?? 0.7,
+          num_predict: config.maxTokens || 1024,
+        },
+      }
       : {
-          model: selectedModel,
-          messages,
-          stream: false,
-          options: {
-            temperature: config.temperature ?? 0.7,
-            num_predict: config.maxTokens || 1024,
-          },
-        };
+        model: selectedModel,
+        messages,
+        stream: false,
+        options: {
+          temperature: config.temperature ?? 0.7,
+          num_predict: config.maxTokens || 1024,
+        },
+      };
 
     const res = await fetch(target.requestUrl, {
       method: 'POST',
@@ -419,21 +652,17 @@ export async function probeOllama(url = 'http://localhost:11434') {
 export function buildTaskRouting(models = []) {
   const has = (q) => models.some(m => m.toLowerCase().includes(q));
 
-  // Pick best model per category from what's available
-  const codingModel = has('qwen3-coder') ? models.find(m => m.includes('qwen3-coder'))
-    : has('qwen3:4b') ? 'qwen3:4b'
-    : has('qwen3') ? models.find(m => m.includes('qwen3'))
-    : has('llama3') ? models.find(m => m.includes('llama3'))
-    : models[0];
-
-  const chatModel = has('llama3.1:8b') ? 'llama3.1:8b'
-    : has('llama3') ? models.find(m => m.includes('llama3'))
-    : has('gemma3:4b') ? 'gemma3:4b'
+  // Pick best model per category from what's available (2026 Standard)
+  const codingModel = has('llama4') ? models.find(m => m.includes('llama4'))
     : has('gemma3') ? models.find(m => m.includes('gemma3'))
-    : models[0];
+      : models[0];
 
-  const fastModel = has('gemma3:1b') ? 'gemma3:1b'
-    : has('functiongemma') ? models.find(m => m.includes('functiongemma'))
+  const chatModel = has('llama4:latest') ? 'llama4:latest'
+    : has('llama4') ? models.find(m => m.includes('llama4'))
+      : has('gemma3') ? models.find(m => m.includes('gemma3'))
+        : models[0];
+
+  const fastModel = has('gemma3:2b') ? 'gemma3:2b'
     : models[0];
 
   return {
@@ -476,7 +705,7 @@ export function resolveProvider(taskCategory = 'general', llmConfig = {}) {
       model: routing.model || llmConfig.lmstudioModels?.[0] || 'local-model',
     };
   }
-  if (['gemini', 'claude', 'openai', 'kimi', 'qwen'].includes(routing.provider)) {
+  if (['gemini', 'vertex'].includes(routing.provider)) {
     return { type: 'cloud', provider: routing.provider, model: routing.model };
   }
   if (routing.provider === 'huggingface') {
@@ -511,12 +740,24 @@ export function resolveProvider(taskCategory = 'general', llmConfig = {}) {
 export async function smartChat(message, taskCategory = 'general', llmConfig = {}) {
   const resolved = resolveProvider(taskCategory, llmConfig);
 
+  // Specialized Persona Routing
+  if (taskCategory === 'nova') {
+    return await chatCloud(message, { provider: 'aws-bedrock', model: 'amazon.nova-pro-v1:0', conversation: llmConfig.conversation });
+  }
+  if (taskCategory === 'cybeni') {
+    return await chatCloud(message, { provider: 'alibaba', model: 'qwen-max', conversation: llmConfig.conversation });
+  }
+  if (taskCategory === 'aura') {
+    return await chatCloud(message, { provider: 'gemini', model: 'gemini-2.0-flash', conversation: llmConfig.conversation });
+  }
+
   if (resolved.type === 'local') {
     try {
       return await chatLocal(message, {
         url: resolved.url,
         type: resolved.localType,
         model: resolved.model,
+        isIDE: taskCategory === 'coding' || taskCategory === 'literature',
       });
     } catch (localError) {
       console.warn('Local LLM failed, falling back to cloud:', localError);
@@ -525,7 +766,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
   }
 
   return await chatCloud(message, {
-    provider: resolved.provider,
-    model: resolved.model,
+    provider: 'gemini',
+    model: resolved.model || 'gemini-2.5-flash',
   });
 }

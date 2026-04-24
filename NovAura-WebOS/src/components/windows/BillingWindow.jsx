@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { CreditCard, Check, Zap, Sparkles, Flame, Star, Users, Loader2, AlertCircle } from 'lucide-react';
+import { CreditCard, Check, Zap, Sparkles, Flame, Star, Users, Loader2, AlertCircle, TrendingUp, Award } from 'lucide-react';
 import { auth } from '../../config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { createSubscriptionCheckout, getSubscriptionStatus } from '../../services/stripeService';
@@ -18,8 +18,7 @@ const PLANS = [
     subtitle: 'The Beginning',
     price: 0,
     description: 'Start your journey',
-    features: ['7 builder calls/month', '3 projects', 'Community support', 'Core WebOS access'],
-    limits: { calls: 7, projects: 3 },
+    features: ['7 credits/day', '20 credits/month cap', 'Core WebOS access', 'Local AI Support'],
     color: 'gray',
     icon: Zap,
   },
@@ -29,8 +28,7 @@ const PLANS = [
     subtitle: 'Wonder Into',
     price: 9.99,
     description: 'Ignite your curiosity',
-    features: ['30 builder calls/month', '10 projects', '1 custom domain', 'Priority support'],
-    limits: { calls: 30, projects: 10 },
+    features: ['30 credits/day', '100 credits/month cap', 'BYOK Support', 'Standard Support'],
     color: 'cyan',
     icon: Sparkles,
   },
@@ -40,8 +38,7 @@ const PLANS = [
     subtitle: 'Discovering',
     price: 17.99,
     description: 'Find your flow',
-    features: ['100 builder calls/month', 'Unlimited projects', '3 custom domains', 'BYOK ready'],
-    limits: { calls: 100, projects: '∞' },
+    features: ['100 credits/day', '250 credits/month cap', 'Full WebOS access', 'BYOK Support'],
     color: 'purple',
     icon: Star,
   },
@@ -51,8 +48,7 @@ const PLANS = [
     subtitle: 'Biggest Bang for Your Buck',
     price: 29.99,
     description: 'Accelerate everything',
-    features: ['250 builder calls/month', 'Unlimited projects', '10 custom domains', 'Full BYOK support', 'Priority queue'],
-    limits: { calls: 250, projects: '∞' },
+    features: ['250 credits/day', '500 credits/month cap', 'Priority Inference', 'Live Support'],
     color: 'amber',
     icon: Flame,
     popular: true,
@@ -62,11 +58,10 @@ const PLANS = [
     name: 'Nova',
     subtitle: 'Ultimate',
     price: 75.00,
-    description: 'Unlimited power',
-    features: ['Unlimited with BYOK', 'Unlimited projects', 'Unlimited domains', 'Advanced analytics', 'Secrets manager'],
-    limits: { calls: '∞', projects: '∞' },
+    description: 'Maximum power',
+    features: ['500 credits/day', '750 credits/month cap', 'Advanced Analytics', 'Secrets Manager'],
     color: 'pink',
-    icon: Star,
+    icon: Crown,
   },
   {
     id: 'catalytic-crew',
@@ -74,8 +69,7 @@ const PLANS = [
     subtitle: 'Enterprise',
     price: 349.99,
     description: 'For teams and organizations',
-    features: ['Everything in Nova', 'Unlimited team seats', 'SSO & SAML', 'Dedicated support', 'Custom contracts', 'On-premise option'],
-    limits: { calls: '∞', projects: '∞' },
+    features: ['1000 credits/day', '5000 credits/month cap', 'Dedicated Support', 'SSO/SAML Ready'],
     color: 'indigo',
     icon: Users,
   },
@@ -145,7 +139,7 @@ export default function BillingWindow() {
       )}
 
       <div className="p-6 max-w-7xl mx-auto">
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {PLANS.map((plan) => {
             const Icon = plan.icon;
             const isCurrent = currentPlan === plan.id;
@@ -170,7 +164,15 @@ export default function BillingWindow() {
 
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-1">
-                    <Icon className="w-5 h-5" style={{ color: plan.color === 'amber' ? '#f59e0b' : plan.color === 'purple' ? '#a855f7' : plan.color === 'pink' ? '#ec4899' : plan.color === 'indigo' ? '#6366f1' : '#6b7280' }} />
+                    <Icon className="w-5 h-5" style={{ 
+                      color: plan.color === 'amber' ? '#f59e0b' 
+                           : plan.color === 'purple' ? '#a855f7' 
+                           : plan.color === 'pink' ? '#ec4899' 
+                           : plan.color === 'indigo' ? '#6366f1' 
+                           : plan.color === 'cyan' ? '#00ffff'
+                           : plan.color === 'lime' ? '#39ff14'
+                           : '#6b7280' 
+                    }} />
                     <h3 className="text-lg font-bold">{plan.name}</h3>
                   </div>
                   <p className="text-xs text-white/40 italic">{plan.subtitle}</p>

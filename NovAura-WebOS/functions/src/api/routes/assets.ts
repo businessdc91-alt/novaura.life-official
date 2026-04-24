@@ -46,8 +46,8 @@ router.post('/upload', async (req: Request, res: Response) => {
       previewFilesData,  // [{ name, type, base64 }]
     } = req.body;
 
-    if (!creatorId || !title || !mainFileData) {
-      return res.status(400).json({ error: 'Missing required fields: creatorId, title, mainFileData' });
+    if (!creatorId || !title || (!mainFileData && !req.body.mainFilePath)) {
+      return res.status(400).json({ error: 'Missing required fields: creatorId, title, and file data' });
     }
 
     // Verify creator exists
@@ -60,13 +60,32 @@ router.post('/upload', async (req: Request, res: Response) => {
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const now = admin.firestore.FieldValue.serverTimestamp();
 
-    // Upload main file
-    const mainExt = path.extname(mainFileData.name) || '';
-    const mainPath = `assets/${assetId}/main${mainExt}`;
-    const mainBuffer = Buffer.from(mainFileData.base64, 'base64');
-    await bucket.file(mainPath).save(mainBuffer, {
-      metadata: { contentType: mainFileData.type, metadata: { assetId, creatorId } }
-    });
+    // Upload main file or use existing path
+    let mainPath = '';
+    let mainFileSize = 0;
+    let mainFileName = '';
+    let mainFileType = '';
+
+    if (req.body.mainFilePath) {
+      // File was uploaded directly to storage by client
+      mainPath = req.body.mainFilePath;
+      mainFileSize = req.body.mainFileSize || 0;
+      mainFileName = req.body.mainFileName || 'asset.zip';
+      mainFileType = req.body.mainFileType || 'application/octet-stream';
+    } else if (mainFileData) {
+      // Fallback for smaller files / legacy
+      const mainExt = path.extname(mainFileData.name) || '';
+      mainPath = `assets/${assetId}/main${mainExt}`;
+      const mainBuffer = Buffer.from(mainFileData.base64, 'base64');
+      await bucket.file(mainPath).save(mainBuffer, {
+        metadata: { contentType: mainFileData.type, metadata: { assetId, creatorId } }
+      });
+      mainFileSize = mainBuffer.length;
+      mainFileName = mainFileData.name;
+      mainFileType = mainFileData.type;
+    } else {
+      return res.status(400).json({ error: 'No main file provided' });
+    }
 
     // Upload thumbnail if provided
     let thumbnailUrl = '';
@@ -118,9 +137,9 @@ router.post('/upload', async (req: Request, res: Response) => {
       creatorId,
       // Storage paths (private)
       mainFilePath: mainPath,
-      mainFileName: mainFileData.name,
-      mainFileSize: mainBuffer.length,
-      mainFileType: mainFileData.type,
+      mainFileName,
+      mainFileSize,
+      mainFileType,
       // Public URLs
       thumbnailUrl,
       previewUrls,

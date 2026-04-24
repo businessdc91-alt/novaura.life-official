@@ -9,7 +9,7 @@ import { KernelProvider } from './kernel/KernelProvider.jsx';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter basename="/os">
+    <BrowserRouter>
       <KernelProvider>
         <AuthProvider>
           <GraphicsProvider>

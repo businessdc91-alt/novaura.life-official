@@ -140,7 +140,6 @@ export function showLocalNotification(title, body, options = {}) {
  * Stores intent locally; backend subscribes token to topic.
  */
 export function subscribeToTopic(topic) {
-  // Call Cloud Function to subscribe token to topic
   const token = getFCMToken();
   if (token) {
     const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');

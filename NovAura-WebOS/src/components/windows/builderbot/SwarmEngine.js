@@ -10,8 +10,7 @@
  * - Agent fatigue detection (orchestrator takeover)
  */
 
-import { BACKEND_URL } from '../../../services/aiService';
-import axios from 'axios';
+import { smartChat } from '../../../services/aiService';
 
 export const AGENT_TYPES = {
   FRONTEND: {
@@ -171,20 +170,9 @@ export class Agent {
   }
 
   async callAI(task, vfs, context) {
-    const token = localStorage.getItem('auth_token');
-    
     const prompt = this.buildPrompt(task, vfs, context);
-
-    const res = await axios.post(`${BACKEND_URL}/ai/chat`, {
-      provider: 'gemini',
-      prompt: prompt,
-      maxTokens: 4096,
-      temperature: 0.3,
-    }, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    return this.parseResponse(res.data.content || res.data.response);
+    const result = await smartChat(prompt, 'coding');
+    return this.parseResponse(result.response || result.code || '');
   }
 
   buildPrompt(task, vfs, context) {
@@ -272,6 +260,16 @@ export class OrchestratorAgent {
     this.failed = false;
     this.failReason = null;
     this.isPlanning = false;
+    this.eventLog = []; // Detailed trace of project activity
+  }
+
+  logEvent(message, type = 'info') {
+    this.eventLog.push({
+      timestamp: Date.now(),
+      message,
+      type
+    });
+    console.log(`[SwarmEvent] ${message}`);
   }
 
   async createProject(prompt, options = {}) {
@@ -285,8 +283,10 @@ export class OrchestratorAgent {
     try {
       // Step 1: Plan the project
       this.isPlanning = true;
+      this.logEvent(`🧠 Planning project: ${prompt}`, 'system');
       const plan = await this.createPlan(prompt);
       this.isPlanning = false;
+      this.logEvent(`📝 Plan generated with ${plan.tasks?.length || 0} tasks.`, 'success');
 
       // Step 2: Create tasks from plan
       this.taskQueue = this.createTasks(plan);
@@ -341,20 +341,16 @@ Respond in JSON format:
   "complexity": "simple|medium|complex"
 }`;
 
-    const res = await axios.post(`${BACKEND_URL}/ai/chat`, {
-      provider: 'gemini',
-      prompt: planPrompt,
-      maxTokens: 4096,
-      temperature: 0.3,
-    }, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    const content = res.data.content || res.data.response;
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    try {
+      const result = await smartChat(planPrompt, 'coding');
+      const content = result.response || result.code || '';
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+    } catch (e) {
+      console.error('Plan generation failed:', e);
     }
 
     // Fallback plan
@@ -427,26 +423,29 @@ Respond in JSON format:
     task.assignedAgent = agent.id;
 
     try {
+      this.logEvent(`🤖 Agent ${agent.id} starting: ${task.description}`, 'info');
       const result = await agent.execute(task, this.vfs, this.projectContext);
       
       // Write files to VFS
       result.files.forEach(file => {
         this.vfs.write(file.path, file.content, agent.id);
+        this.logEvent(`📁 File written: ${file.path} (${file.content.length} bytes)`, 'success');
       });
 
       task.status = 'completed';
       task.result = result;
       this.completedTasks.push(task);
+      this.logEvent(`✅ Task completed by ${agent.type} agent`, 'success');
       
       agent.reset();
     } catch (err) {
       console.error(`Task ${task.id} failed:`, err);
       
       if (agent.attempts < agent.maxAttempts) {
-        // Retry
+        this.logEvent(`⚠️ Task ${task.id} failed, retrying (Attempt ${agent.attempts}/${agent.maxAttempts})`, 'warn');
         task.status = 'pending';
       } else {
-        // Orchestrator takes over
+        this.logEvent(`🚨 Agent ${agent.id} exhausted. Orchestrator taking over...`, 'error');
         await this.orchestratorTakeover(task);
       }
     }
@@ -484,16 +483,8 @@ ${this.vfs.getAll().map(f => `- ${f.path}`).join('\n')}
 Write complete, working code.`;
 
     try {
-      const res = await axios.post(`${BACKEND_URL}/ai/chat`, {
-        provider: 'gemini',
-        prompt: prompt,
-        maxTokens: 4096,
-        temperature: 0.3,
-      }, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-
-      const content = res.data.content || res.data.response;
+      const result = await smartChat(prompt, 'coding');
+      const content = result.response || result.code || '';
       const fileRegex = /FILE:\s*(.+?)\n```(\w+)?\n([\s\S]*?)```/g;
       
       let match;
@@ -514,7 +505,7 @@ Write complete, working code.`;
   async qaReview() {
     const qaAgent = new Agent('qa', 'qa-master');
     
-    const files = this.vfs.getAll();
+    this.logEvent('🔍 Starting QA review of all generated files...', 'system');
     const review = await qaAgent.execute(
       { description: 'Review all code for bugs and issues' },
       this.vfs,
@@ -523,6 +514,7 @@ Write complete, working code.`;
 
     // Parse QA feedback
     const issues = this.parseQAReview(review.raw);
+    this.logEvent(`🧐 QA found ${issues.length} issues.`, issues.length > 0 ? 'warn' : 'success');
     
     // Fix critical issues
     for (const issue of issues.filter(i => i.severity === 'critical')) {
@@ -572,7 +564,8 @@ Write complete, working code.`;
       files: this.vfs.files.size,
       isPlanning: this.isPlanning,
       failed: this.failed,
-      failReason: this.failReason
+      failReason: this.failReason,
+      eventLog: this.eventLog
     };
   }
 }

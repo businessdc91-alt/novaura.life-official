@@ -5,68 +5,50 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Key, Crown, CheckCircle, XCircle, Eye, EyeOff, 
+import {
+  Key, Crown, CheckCircle, XCircle, Eye, EyeOff,
   Save, RefreshCw, ExternalLink, Trash2, Sparkles,
   Lock, AlertCircle, Zap
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 const USER_SERVICES = [
-  { 
-    id: 'openai', 
-    name: 'OpenAI', 
-    icon: '🤖',
-    description: 'Use your own GPT-4, DALL-E, and OpenAI credits',
+  {
+    id: 'gemini',
+    name: 'Google Gemini',
+    icon: '💎',
+    description: 'Use your own Gemini 1.5, 2.0, or 3.0 credits from Google AI Studio',
+    keyPlaceholder: 'AIza...',
+    website: 'https://aistudio.google.com/app/apikey',
+    benefits: ['Gemini 1.5 Pro/Flash', '1M+ context window', 'Native multimodal support']
+  },
+  {
+    id: 'kimi',
+    name: 'Kimi / Moonshot',
+    icon: '🎋',
+    description: 'Use your own Kimi/Moonshot AI credits for advanced linguistic reasoning',
     keyPlaceholder: 'sk-...',
-    website: 'https://platform.openai.com/api-keys',
-    benefits: ['No credit limits from Novaura', 'Use GPT-4 Turbo', 'Access to latest models']
+    website: 'https://platform.moonshot.cn/',
+    benefits: ['Kimi k2.6 model support', 'Superior Chinese/English logic', 'Long-form reasoning']
   },
-  { 
-    id: 'anthropic', 
-    name: 'Anthropic', 
+  {
+    id: 'anthropic',
+    name: 'Anthropic Claude',
     icon: '🧠',
-    description: 'Use your own Claude API credits for advanced reasoning',
+    description: 'Use your own Claude 3.5 Sonnet or Opus credits',
     keyPlaceholder: 'sk-ant-...',
-    website: 'https://console.anthropic.com/settings/keys',
-    benefits: ['Claude 3 Opus access', '200K context window', 'Superior reasoning']
+    website: 'https://console.anthropic.com/',
+    benefits: ['Claude 3.5 Sonnet', 'Top-tier coding performance', 'Human-like reasoning']
   },
-  { 
-    id: 'stability', 
-    name: 'Stability AI', 
-    icon: '🖼️',
-    description: 'Use your own Stable Diffusion credits',
-    keyPlaceholder: 'Enter your API key',
-    website: 'https://platform.stability.ai/account/keys',
-    benefits: ['Stable Diffusion XL', 'Custom model training', 'Higher resolution']
-  },
-  { 
-    id: 'pixai', 
-    name: 'PixAI', 
-    icon: '🎨',
-    description: 'Use your own PixAI credits for anime generation',
-    keyPlaceholder: 'Enter your API key',
-    website: 'https://pixai.art/account',
-    benefits: ['Anime specialist models', 'No generation limits', 'Priority queue']
-  },
-  { 
-    id: 'elevenlabs', 
-    name: 'ElevenLabs', 
+  {
+    id: 'elevenlabs',
+    name: 'ElevenLabs',
     icon: '🎙️',
     description: 'Use your own voice synthesis credits',
     keyPlaceholder: 'Enter your API key',
     website: 'https://elevenlabs.io/app/settings/api-keys',
-    benefits: ['Voice cloning', '28 languages', 'Professional quality']
-  },
-  { 
-    id: 'perplexity', 
-    name: 'Perplexity', 
-    icon: '🔍',
-    description: 'Use your own Perplexity search API',
-    keyPlaceholder: 'pplx-...',
-    website: 'https://www.perplexity.ai/settings/api',
-    benefits: ['Real-time search', 'Cited sources', 'Web grounding']
-  },
+    benefits: ['Professional voice cloning', 'Ultra-realistic synthesis', 'Multi-language support']
+  }
 ];
 
 export default function UserKeyHubWindow() {
@@ -74,6 +56,7 @@ export default function UserKeyHubWindow() {
   const [services, setServices] = useState([]);
   const [selectedService, setSelectedService] = useState(null);
   const [apiKey, setApiKey] = useState('');
+  const [endpoint, setEndpoint] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -83,7 +66,7 @@ export default function UserKeyHubWindow() {
   const [userTier, setUserTier] = useState(null);
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api';
-  const MIN_TIER_LEVEL = 2; // Catalyst = $29.99
+  const MIN_TIER_LEVEL = 3; // Catalyst = $29.99 (0:free, 1:spark, 2:emergent, 3:catalyst)
 
   useEffect(() => {
     checkTier();
@@ -95,10 +78,10 @@ export default function UserKeyHubWindow() {
       const response = await fetch(`${BACKEND_URL}/user/keys/services`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       const data = await response.json();
       setUserTier(data.minTierName);
-      
+
       // Initialize services
       const initialized = USER_SERVICES.map(s => ({
         ...s,
@@ -106,7 +89,7 @@ export default function UserKeyHubWindow() {
         masked: null
       }));
       setServices(initialized);
-      
+
       // If premium, fetch their keys
       if (tier && ['catalyst', 'nova', 'catalytic-crew'].includes(tier)) {
         fetchUserKeys();
@@ -122,11 +105,11 @@ export default function UserKeyHubWindow() {
       const response = await fetch(`${BACKEND_URL}/user/keys`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       if (!response.ok) throw new Error('Failed to fetch keys');
-      
+
       const data = await response.json();
-      
+
       // Update services with user key status
       setServices(prev => prev.map(s => ({
         ...s,
@@ -141,11 +124,11 @@ export default function UserKeyHubWindow() {
 
   const testKey = async () => {
     if (!apiKey || !selectedService) return;
-    
+
     setTesting(true);
     setError(null);
     setSuccess(null);
-    
+
     try {
       const token = await user.getIdToken();
       const response = await fetch(`${BACKEND_URL}/user/keys/${selectedService.id}/test`, {
@@ -156,9 +139,9 @@ export default function UserKeyHubWindow() {
         },
         body: JSON.stringify({ apiKey })
       });
-      
+
       const data = await response.json();
-      
+
       if (data.valid) {
         setSuccess(`${selectedService.name} API key is valid and working!`);
       } else {
@@ -173,24 +156,28 @@ export default function UserKeyHubWindow() {
 
   const saveKey = async () => {
     if (!apiKey || !selectedService) return;
-    
+
     setLoading(true);
     setError(null);
     setSuccess(null);
-    
+
     try {
       const token = await user.getIdToken();
+      const payload = selectedService.hasEndpoint
+        ? { apiKey: `${apiKey}|${endpoint}`, provider: selectedService.id }
+        : { apiKey };
+
       const response = await fetch(`${BACKEND_URL}/user/keys/${selectedService.id}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ apiKey })
+        body: JSON.stringify(payload)
       });
-      
+
       const data = await response.json();
-      
+
       if (data.success) {
         setSuccess(data.message);
         setApiKey('');
@@ -207,21 +194,21 @@ export default function UserKeyHubWindow() {
 
   const deleteKey = async () => {
     if (!selectedService) return;
-    
+
     if (!window.confirm(`Remove your ${selectedService.name} API key?`)) return;
-    
+
     setDeleting(true);
     setError(null);
-    
+
     try {
       const token = await user.getIdToken();
       const response = await fetch(`${BACKEND_URL}/user/keys/${selectedService.id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       const data = await response.json();
-      
+
       if (data.success) {
         setSuccess(data.message);
         fetchUserKeys();
@@ -237,7 +224,8 @@ export default function UserKeyHubWindow() {
   };
 
   // Check if user has required tier
-  const hasRequiredTier = ['catalyst', 'nova', 'catalytic-crew'].includes(tier);
+  const hasRequiredTier = ['catalyst', 'nova', 'catalytic-crew', 'catalyst-crew-founders', 'strategic-investor', 'founding-catalyst', 'founding-nova'].includes(tier) ||
+    ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'].includes(user?.email);
 
   if (!hasRequiredTier) {
     return (
@@ -292,9 +280,16 @@ export default function UserKeyHubWindow() {
           <h1 className="text-xl font-bold">Your API Keys</h1>
           <p className="text-sm text-white/50">Connect your own AI service accounts</p>
         </div>
-        <div className="ml-auto flex items-center gap-2 px-3 py-1 bg-amber-500/20 text-amber-400 rounded-full text-xs font-medium">
-          <Crown size={12} />
-          {tier?.charAt(0).toUpperCase() + tier?.slice(1)} Tier
+        <div className="ml-auto flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/20 text-amber-400 rounded-full text-xs font-medium">
+            <Crown size={12} />
+            {tier?.charAt(0).toUpperCase() + tier?.slice(1)} Tier
+          </div>
+          {['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'].includes(user?.email) && (
+            <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 animate-pulse">
+              <Zap className="w-2.5 h-2.5" /> Unlimited Credits
+            </span>
+          )}
         </div>
       </div>
 
@@ -308,14 +303,14 @@ export default function UserKeyHubWindow() {
               onClick={() => {
                 setSelectedService(service);
                 setApiKey('');
+                setEndpoint('');
                 setError(null);
                 setSuccess(null);
               }}
-              className={`w-full p-4 rounded-xl border transition-all text-left ${
-                selectedService?.id === service.id
+              className={`w-full p-4 rounded-xl border transition-all text-left ${selectedService?.id === service.id
                   ? 'bg-amber-500/10 border-amber-500/50'
                   : 'bg-white/5 border-white/10 hover:border-white/20'
-              }`}
+                }`}
             >
               <div className="flex items-start gap-3">
                 <span className="text-2xl">{service.icon}</span>
@@ -346,7 +341,7 @@ export default function UserKeyHubWindow() {
                 <span className="text-3xl">{selectedService.icon}</span>
                 <div>
                   <h2 className="text-lg font-medium">{selectedService.name}</h2>
-                  <a 
+                  <a
                     href={selectedService.website}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -392,6 +387,21 @@ export default function UserKeyHubWindow() {
                     </button>
                   </div>
                 </div>
+
+                {selectedService.hasEndpoint && (
+                  <div>
+                    <label className="text-sm font-medium text-white/70 mb-2 block">
+                      Endpoint URL
+                    </label>
+                    <input
+                      type="text"
+                      value={endpoint}
+                      onChange={(e) => setEndpoint(e.target.value)}
+                      placeholder={selectedService.endpointPlaceholder}
+                      className="w-full bg-black/20 border border-white/10 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="flex gap-3">

@@ -130,8 +130,13 @@ service cloud.firestore {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ADMIN USERS
+    // FOUNDERS / HALL OF FAME
     // ═══════════════════════════════════════════════════════════════
+    match /founders/{document=**} {
+      allow read: if true; // Publicly visible
+      allow write: if isAdmin();
+    }
+
     match /admin_users/{userId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();

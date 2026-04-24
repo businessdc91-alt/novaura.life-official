@@ -511,6 +511,7 @@ export default function AIPanel() {
           conversation,
           temperature,
           maxTokens: 4096,
+          isIDE: true,
         });
       } else {
         result = await chatCloud(msg, {
@@ -518,6 +519,7 @@ export default function AIPanel() {
           model: resolved.model,
           maxTokens: 4096,
           temperature,
+          isIDE: true,
           conversation: [
             { role: 'system', content: systemPrompt },
             ...conversation,

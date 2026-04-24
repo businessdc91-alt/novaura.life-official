@@ -154,14 +154,39 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
   const [taskbarApps, setTaskbarApps] = useState([]);
   const [llmConfig, setLlmConfig] = useState({
     useLocalLLM: false,
+    useWebGPU: false,
     localLLMUrl: 'http://localhost:11434/api/generate',
     localLLMModel: 'llama3',
     apiKey: ''
+  });
+
+  const [localStatus, setLocalStatus] = useState({
+    state: 'idle',
+    label: '',
+    progress: 0,
+    modelId: ''
   });
   const [draggedItem, setDraggedItem] = useState(null);
   const [hasChanges, setHasChanges] = useState(false);
 
   // Load saved preferences
+  useEffect(() => {
+    if (!kernel) return;
+    
+    const unsubStatus = kernel.ipc.on('localmodel:status', (status) => {
+      setLocalStatus(prev => ({ ...prev, ...status }));
+    });
+    
+    const unsubProgress = kernel.ipc.on('localmodel:progress', (progress) => {
+      setLocalStatus(prev => ({ ...prev, ...progress, state: 'downloading' }));
+    });
+
+    return () => {
+      unsubStatus();
+      unsubProgress();
+    };
+  }, [kernel]);
+
   useEffect(() => {
     const savedTheme = kernelStorage.getItem('novaura-theme') || 'cosmic';
     const savedApps = kernelStorage.getItem('novaura-taskbar-apps');
@@ -227,9 +252,10 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
   };
 
   const saveSettings = () => {
-    kernelStorage.setItem('novaura-theme', selectedTheme);
-    kernelStorage.setItem('novaura-taskbar-apps', JSON.stringify(taskbarApps));
-    kernelStorage.setItem('llm_config', JSON.stringify(llmConfig));
+    kernel.settings.set('theme', selectedTheme);
+    kernel.settings.set('taskbar_apps', taskbarApps);
+    kernel.settings.set('llm_config', llmConfig);
+    kernel.settings.set('webgpu_local_model', llmConfig.useWebGPU);
 
     // Apply theme
     document.documentElement.setAttribute('data-theme', selectedTheme);
@@ -541,7 +567,24 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
               <Switch 
                 checked={llmConfig.useLocalLLM} 
                 onCheckedChange={(val) => {
-                  setLlmConfig(prev => ({ ...prev, useLocalLLM: val }));
+                  setLlmConfig(prev => ({ ...prev, useLocalLLM: val, useWebGPU: val ? false : prev.useWebGPU }));
+                  setHasChanges(true);
+                }} 
+              />
+            </div>
+
+            <div className="flex items-center justify-between mb-4 pt-4 border-t border-border">
+              <div>
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-cyan-400" />
+                  WebLLM (WebGPU)
+                </h3>
+                <p className="text-sm text-muted-foreground">Run models natively in browser using your GPU</p>
+              </div>
+              <Switch 
+                checked={llmConfig.useWebGPU} 
+                onCheckedChange={(val) => {
+                  setLlmConfig(prev => ({ ...prev, useWebGPU: val, useLocalLLM: val ? false : prev.useLocalLLM }));
                   setHasChanges(true);
                 }} 
               />
@@ -577,6 +620,27 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
                       />
                     </div>
                   </div>
+                </div>
+              ) : llmConfig.useWebGPU ? (
+                <div className="space-y-3">
+                  <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-lg text-[11px] text-cyan-400 mb-2">
+                    {localStatus.label || 'Browser-native AI using WebGPU. First load will download ~2GB of weights.'}
+                  </div>
+                  {localStatus.state !== 'ready' && localStatus.state !== 'idle' && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-[10px] uppercase font-bold text-cyan-400/60">
+                        <span>{localStatus.state} {localStatus.modelId}</span>
+                        <span>{localStatus.progress}%</span>
+                      </div>
+                      <div className="h-1 w-full bg-cyan-500/10 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${localStatus.progress}%` }}
+                          className="h-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.5)]"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-3">

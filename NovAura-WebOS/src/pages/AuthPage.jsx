@@ -465,7 +465,7 @@ export default function AuthPage({ onAuthComplete }) {
         {import.meta.env.DEV && (
           <Button
             onClick={() => {
-              const devUser = { name: 'Dillan', email: 'dev@novaura.life', id: 'dev-1' };
+              const devUser = { name: 'Dillan', email: 'the.lost.catalyst@gmail.com', id: 'dev-owner' };
               kernelStorage.setItem('auth_token', 'dev-token');
               kernelStorage.setItem('user_data', JSON.stringify(devUser));
               onAuthComplete(devUser);

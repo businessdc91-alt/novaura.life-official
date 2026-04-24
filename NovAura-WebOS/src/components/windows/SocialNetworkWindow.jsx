@@ -701,6 +701,7 @@ export default function SocialNetworkWindow() {
     );
   };
 
+
   // ── Notifications View ──────────────────────────────────────────────────────
   const NotificationsView = () => {
     const [notifications, setNotifications] = useState([]);
