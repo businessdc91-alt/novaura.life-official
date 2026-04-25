@@ -69,7 +69,7 @@ async function ensureActionTokens(isIDE = false) {
       throw new Error('Action tokens required for IDE usage (0.25/action). Please upgrade to Spark or purchase tokens.');
     }
   }
-  return isPremium;
+  return isPremium || user?.email?.endsWith('@novaura.xyz') || user?.email?.endsWith('@novaura.life');
 }
 
 /**
@@ -86,7 +86,7 @@ export async function chatCloud(prompt, options = {}) {
   const userAzureData = kernelStorage.getItem('azure_key') || kernelStorage.getItem('user_azure_key');
 
   let azureOpenAIKey = 'l1EbAyY4Y8xoQiTr6cdCUgmRX23TqEqpJ0pMZJ4y6RXEDAwR0a8yJQQJ99CCACHYHv6XJ3w3AAAAACOG1UQ9';
-  let azureEndpoint = 'https://livenovaura-resource.openai.azure.com/';
+  let azureEndpoint = 'https://livenovaura-resource.services.ai.azure.com/';
 
   // Priority: 1. Specific provider key, 2. Generic azure key, 3. System fallback
   const effectiveData = (options.provider === 'kimi' && userKimiData) ? userKimiData : (userAzureData || userKimiData);
@@ -748,7 +748,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
     return await chatCloud(message, { provider: 'alibaba', model: 'qwen-max', conversation: llmConfig.conversation });
   }
   if (taskCategory === 'aura') {
-    return await chatCloud(message, { provider: 'gemini', model: 'gemini-2.0-flash', conversation: llmConfig.conversation });
+    return await chatCloud(message, { provider: 'gemini', model: 'gemini-3.1-flash', conversation: llmConfig.conversation });
   }
 
   if (resolved.type === 'local') {
@@ -767,6 +767,6 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
 
   return await chatCloud(message, {
     provider: 'gemini',
-    model: resolved.model || 'gemini-2.5-flash',
+    model: resolved.model || 'gemini-3.1-flash',
   });
 }

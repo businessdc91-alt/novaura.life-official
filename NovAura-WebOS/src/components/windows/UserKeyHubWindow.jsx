@@ -224,7 +224,7 @@ export default function UserKeyHubWindow() {
   };
 
   // Check if user has required tier
-  const hasRequiredTier = ['catalyst', 'nova', 'catalytic-crew', 'catalyst-crew-founders', 'strategic-investor', 'founding-catalyst', 'founding-nova'].includes(tier) ||
+  const hasRequiredTier = ['catalyst', 'nova', 'catalytic-crew', 'catalyst-crew-founders', 'founding-father', 'council-member', 'strategic-investor', 'founding-catalyst', 'founding-nova'].includes(tier) ||
     ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'].includes(user?.email);
 
   if (!hasRequiredTier) {

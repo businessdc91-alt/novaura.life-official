@@ -267,7 +267,7 @@ function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen, status })
 }
 
 // ─── LEFT SIDEBAR: App Launcher ───
-export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, windowCount, telemetry }) {
+export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, windowCount, telemetry, userTier }) {
   const [collapsed, setCollapsed] = useState(true);
   const [time, setTime] = useState(new Date());
   const [search, setSearch] = useState('');
@@ -291,7 +291,7 @@ export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, wind
 
   const toggleCat = (id) => setExpandedCats(prev => ({ ...prev, [id]: !prev[id] }));
 
-  const { isOwner } = useAuthStore();
+  const { user, isOwner } = useAuthStore();
   const ownerMode = isOwner();
 
   const intentResult = useMemo(() => {
@@ -301,8 +301,24 @@ export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, wind
 
   const filteredCategories = useMemo(() => {
     // Determine access levels
-    const isFounder = ['catalyst-crew-founders', 'strategic-investor', 'founding-catalyst', 'founding-nova', 'founding-spark'].includes(userTier);
-    const isAdminEligible = ['catalyst-crew-founders', 'strategic-investor', 'founding-catalyst'].includes(userTier) || ownerMode;
+    const isOwnerDomain = user?.email?.endsWith('@novaura.xyz') || user?.email?.endsWith('@novaura.life');
+    const isFounder = [
+      'catalyst-crew-founders', 
+      'catalyst-crew',
+      'catalytic-crew',
+      'strategic-investor', 
+      'founding-catalyst', 
+      'founding-nova', 
+      'founding-spark'
+    ].includes(userTier) || ownerMode || isOwnerDomain;
+    
+    const isAdminEligible = [
+      'catalyst-crew-founders', 
+      'catalyst-crew',
+      'catalytic-crew',
+      'strategic-investor', 
+      'founding-catalyst'
+    ].includes(userTier) || ownerMode || isOwnerDomain;
 
     let categories = APP_CATEGORIES;
 

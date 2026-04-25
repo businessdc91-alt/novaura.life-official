@@ -102,7 +102,7 @@ export default class GeminiLiveClient {
   // ── connect / disconnect ─────────────────────────
 
   connect(apiKey, opts = {}) {
-    const model = opts.model || 'gemini-2.0-flash-live-001';
+    const model = opts.model || 'gemini-3.1-flash';
     const voice = opts.voice || 'Puck';
     const sysPrompt =
       opts.systemInstruction ||

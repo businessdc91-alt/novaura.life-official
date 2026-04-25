@@ -180,8 +180,8 @@ function QuickActions({ onAction }) {
 // ─── Model Selector ───────────────────────────────────────────────────────────
 function ModelSelector({ currentModel, onSelect }) {
   const models = [
-    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', desc: 'Experimental Speed', color: 'text-cyan-400' },
-    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', desc: 'Ultimate Intelligence', color: 'text-purple-400' },
+    { id: 'gemini-3.1-flash', name: 'Gemini 3.1 Flash', desc: 'Optimized Speed', color: 'text-cyan-400' },
+    { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', desc: 'Ultimate Intelligence', color: 'text-purple-400' },
     { id: 'amazon.nova-pro-v1:0', name: 'Amazon Nova Pro', desc: 'Multimodal / AWS Nova', color: 'text-orange-400' },
     { id: 'qwen-max', name: 'Qwen Max (Cybeni)', desc: 'Reasoning Specialist', color: 'text-red-400' },
     { id: 'webgpu-local', name: 'WebLLM (Local GPU)', desc: 'Privacy-First / Browser-Native', color: 'text-cyan-400' },
@@ -239,7 +239,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
-  const [model, setModel] = useState('gemini-2.0-flash-exp'); // Nova defaults to Flash 2.0
+  const [model, setModel] = useState('gemini-3.1-flash'); // Nova defaults to Flash 3.1
   const [context, setContext] = useState(null);
   const [showContext, setShowContext] = useState(true);
   const [isOpen, setIsOpen] = useState(false);

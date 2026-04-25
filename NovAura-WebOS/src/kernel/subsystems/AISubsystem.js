@@ -29,7 +29,7 @@ const PROVIDER_CHAIN = ['gemini', 'aws', 'alibaba', 'qwen', 'claude', 'openai', 
 
 const PERSONA_CHAINS = {
   nova:  ['aws', 'webgpu-local', 'gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'],
-  aura:  ['gemini-2.5-pro', 'gemini-3.1-flash', 'claude', 'qwen', 'openai'],
+  aura:  ['gemini-3.1-pro', 'gemini-3.1-flash', 'claude', 'qwen', 'openai'],
   cybeni: ['alibaba', 'qwen', 'gemini', 'claude'], // Cybeni prefers Qwen/Alibaba
   default: PROVIDER_CHAIN,
 };

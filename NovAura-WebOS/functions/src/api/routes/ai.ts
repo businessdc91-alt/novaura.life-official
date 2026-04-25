@@ -22,7 +22,7 @@ const PROVIDERS: Record<string, any> = {
     parseResponse: (data: any) => data.choices?.[0]?.message?.content || ''
   },
   gemini: {
-    url: () => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+    url: () => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash:generateContent',
     headers: (key: string) => ({
       'Content-Type': 'application/json',
       'X-goog-api-key': key
@@ -80,14 +80,12 @@ const PROVIDERS: Record<string, any> = {
   },
   // Azure AI Foundry (Primary)
   azure: {
-    url: () => process.env.AZURE_OPENAI_ENDPOINT || 'https://novauralife-resource.openai.azure.com/openai/v1/chat/completions',
+    url: () => process.env.AZURE_OPENAI_ENDPOINT || 'https://livenovaura-resource.services.ai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-02-15-preview',
     headers: (key: string) => ({
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`,
       'api-key': key
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'gpt-4o',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: maxTokens,
       temperature: temp

@@ -218,7 +218,7 @@ router.post('/tts', verifyAuth, async (req: Request, res: Response): Promise<voi
     const ai = new GoogleGenAI({ apiKey: apiKeyData.key });
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-preview-tts',
+      model: 'gemini-3.1-flash',
       contents: [{ parts: [{ text }] }],
       config: {
         responseModalities: [Modality.AUDIO],

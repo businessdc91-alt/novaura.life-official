@@ -64,7 +64,7 @@ router.post('/chat', async (req, res) => {
       responseMimeType = 'text/plain',
       responseSchema,
       seed,
-      model = 'gemini-2.0-flash'
+      model = 'gemini-3.1-flash'
     } = req.body;
     
     if (!contents && !prompt) {
@@ -165,7 +165,7 @@ router.post('/chat', async (req, res) => {
 // Streaming endpoint (for real-time responses)
 router.post('/chat/stream', async (req, res) => {
   try {
-    const { prompt, model = 'gemini-2.0-flash', ...params } = req.body;
+    const { prompt, model = 'gemini-3.1-flash', ...params } = req.body;
     
     if (!prompt) {
       res.status(400).json({ error: 'prompt required' });
@@ -400,9 +400,9 @@ router.post('/claude', async (req, res) => {
 router.get('/models', (req, res) => {
   res.json({
     chat: [
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Fast, versatile multimodal model' },
-      { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', description: 'Cost-efficient version' },
-      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Complex reasoning tasks' },
+      { id: 'gemini-3.1-flash', name: 'Gemini 3.1 Flash', description: 'Fast, versatile multimodal model' },
+      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Cost-efficient version' },
+      { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', description: 'Complex reasoning tasks' },
       { id: 'claude-3-haiku', name: 'Claude 3 Haiku', description: 'Via Vertex Model Garden' },
       { id: 'claude-3-sonnet', name: 'Claude 3 Sonnet', description: 'Via Vertex Model Garden' },
       { id: 'claude-3-opus', name: 'Claude 3 Opus', description: 'Via Vertex Model Garden' }
@@ -426,7 +426,7 @@ router.get('/status', async (req, res) => {
     projectId,
     authenticated: !!accessToken,
     safetySettings: 'permissive (blocks: hate speech, dangerous content only)',
-    models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'imagen-3', 'claude-3-haiku']
+    models: ['gemini-3.1-flash', 'gemini-3.1-flash-lite', 'imagen-3', 'claude-3-haiku']
   });
 });
 

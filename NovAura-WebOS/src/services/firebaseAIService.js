@@ -11,12 +11,12 @@ import { ai, isFirebaseConfigured } from '../config/firebase';
 
 // Available models
 export const GENERATIVE_MODELS = {
-  FLASH: 'gemini-2.5-flash',           // Default: fast, free for conversation
-  FLASH_LITE: 'gemini-2.5-flash-lite', // Ultra-fast, lowest latency
-  FLASH_EXP: 'gemini-2.0-flash-exp',
-  FLASH_25: 'gemini-2.5-flash',
-  PRO: 'gemini-2.5-pro',               // Most capable
-  PRO_EXP: 'gemini-2.0-pro-exp',
+  FLASH: 'gemini-3.1-flash',           // Default: fast, free for conversation
+  FLASH_LITE: 'gemini-3.1-flash-lite', // Ultra-fast, lowest latency
+  FLASH_EXP: 'gemini-3.1-flash-exp',
+  FLASH_31: 'gemini-3.1-flash',
+  PRO: 'gemini-3.1-pro',               // Most capable
+  PRO_EXP: 'gemini-3.1-pro-exp',
 };
 
 export const IMAGEN_MODELS = {
@@ -236,7 +236,7 @@ export async function initLiveSession(params = {}) {
     const aiInstance = await getAIInstance();
     
     const liveConfig = {
-      model: params.model || 'gemini-2.5-flash-native-audio-preview',
+      model: params.model || 'gemini-3.1-flash-native-audio-preview',
       generationConfig: {
         speechConfig: {
           voiceConfig: {
