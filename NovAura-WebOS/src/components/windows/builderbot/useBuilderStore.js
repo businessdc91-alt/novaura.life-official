@@ -9,6 +9,7 @@ const STORAGE_AI_CONFIG = 'novaura_builder_ai_config';
 const STORAGE_PROMPT_LIBRARY = 'novaura_prompt_library';
 const STORAGE_AURA_HISTORY = 'novaura_aura_history';
 const STORAGE_CODE_LIBRARIES = 'novaura_code_libraries';
+const STORAGE_PIPELINE_AGENTS = 'novaura_builder_pipeline_agents';
 
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -138,6 +139,76 @@ function defaultPersonas() {
   ];
 }
 
+// ── Default Pipeline Agents ──────────────────────────────────
+function defaultPipelineAgents() {
+  return {
+    PLANNER: {
+      id: 'planner',
+      name: 'Orchestrator',
+      role: 'Project Architect',
+      model: 'inclusionai/ling-2.6-1t:free',
+      systemPrompt: 'You are the Lead Architect (1T Powerhouse). Plan the project structure, trace dependencies, and ensure logical consistency across all files. No placeholders.',
+      temperature: 0.1,
+    },
+    DEVELOPER: {
+      id: 'developer',
+      name: 'DevAgent',
+      role: 'Frontend & Logic Developer',
+      model: 'qwen/qwen3-coder-480b-a35b:free',
+      systemPrompt: 'You are a Senior Developer (480B Giant). Write production-ready, clean code. Ensure every feature is fully implemented and bug-free.',
+      temperature: 0.4,
+    },
+    DESIGNER: {
+      id: 'designer',
+      name: 'Nova',
+      role: 'Aesthetic & UX Designer',
+      model: 'google/gemma-4-31b-it:free',
+      systemPrompt: 'You are Nova, the Digital Designer. Your goal is to add WOW factor, flare, and premium aesthetics. Focus on glassmorphism, animations, gradients, and modern UI depth. Make it look stunning.',
+      temperature: 0.8,
+    },
+    DATA_ARCHITECT: {
+      id: 'data_architect',
+      name: 'Aura-DB',
+      role: 'Backend & Data Specialist',
+      model: 'inclusionai/ling-2.6-1t:free',
+      systemPrompt: 'You are the Data Architect (1T). Model the database schema, write Firestore/Supabase rules, and create CRUD services. Support serverless DBs like Supabase, Neon, and Convex. Ensure data persistence is robust.',
+      temperature: 0.1,
+    },
+    OPTIMIZER: {
+      id: 'optimizer',
+      name: 'Aura-Edge',
+      role: 'Performance & Edge Specialist',
+      model: 'qwen/qwen3-coder-480b-a35b:free',
+      systemPrompt: 'You are the Edge Optimizer (480B). Refine code for Vercel/Vite performance. Use React Server Components where possible, optimize images, and ensure Edge-Runtime compliance. Maximize lighthouse scores.',
+      temperature: 0.2,
+    },
+    AUDITOR: {
+      id: 'auditor',
+      name: 'Validator',
+      role: 'Quality & Logic Auditor',
+      model: 'nousresearch/hermes-3-llama-3.1-405b:free',
+      systemPrompt: 'You are a QA Engineer (405B Powerhouse). Audit the code for security, performance, and compliance with the user vision. Identify missing edge cases.',
+      temperature: 0.2,
+    },
+    DEBUGGER: {
+      id: 'debugger',
+      name: 'BugHunter',
+      role: 'Deep Debugging Specialist',
+      model: 'nvidia/nemotron-3-super:free',
+      systemPrompt: 'You are a Debugging Specialist (Nemotron Super). Analyze error logs, trace the root cause across files, and provide absolute fixes. No partial patches.',
+      temperature: 0.1,
+    }
+  };
+}
+
+function loadPipelineAgents() {
+  try {
+    const raw = kernel.memory.get(STORAGE_PIPELINE_AGENTS);
+    if (raw) return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch { /* ignore */ }
+  return defaultPipelineAgents();
+}
+
 // ── Default rules ───────────────────────────────────────────
 function defaultRules() {
   return [
@@ -228,6 +299,15 @@ function loadRules() {
   return defaultRules();
 }
 
+  // ── Collaboration State ─────────────────────────────────────
+  const collab = {
+    sessionId: null,
+    isLive: false,
+    participants: [],
+    lastSync: null,
+    owner: null,
+  };
+
 // ── Store ───────────────────────────────────────────────────
 const useBuilderStore = create((set, get) => {
   const project = loadProject();
@@ -255,6 +335,10 @@ const useBuilderStore = create((set, get) => {
     promptLibrary: loadPromptLibrary(),
     codeLibraries: loadCodeLibraries(),
     activeCodeLibraryId: 'lib-ui',
+    pipelineAgents: loadPipelineAgents(),
+    
+    // ── Collaboration State ──
+    collab,
 
 
     // ── Terminal state ──
@@ -437,6 +521,168 @@ const useBuilderStore = create((set, get) => {
     setAIConfig(config) {
       set({ aiConfig: config });
       kernelStorage.setItem(STORAGE_AI_CONFIG, JSON.stringify(config));
+    },
+
+    updatePipelineAgent(type, updates) {
+      set((s) => {
+        const newAgents = {
+          ...s.pipelineAgents,
+          [type]: { ...s.pipelineAgents[type], ...updates }
+        };
+        kernel.memory.set(STORAGE_PIPELINE_AGENTS, newAgents);
+        return { pipelineAgents: newAgents };
+      });
+    },
+
+    resetPipelineAgents() {
+      const defaults = defaultPipelineAgents();
+      set({ pipelineAgents: defaults });
+      kernel.memory.set(STORAGE_PIPELINE_AGENTS, defaults);
+    },
+
+    // ── Persistence ────────────────────────────────────────────
+    load: () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_PROJECT);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          // Ensure tree is valid
+          if (parsed.tree && parsed.tree.id) {
+            set({ project: parsed });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load project from storage', e);
+      }
+    },
+
+    save: () => {
+      const { project, collab } = get();
+      localStorage.setItem(STORAGE_PROJECT, JSON.stringify(project));
+      
+      // If live, sync to Firestore
+      if (collab.isLive && collab.sessionId) {
+        get().syncToCloud();
+      }
+    },
+
+    syncToCloud: async () => {
+      const { project, collab } = get();
+      if (!collab.sessionId) return;
+
+      try {
+        const { db } = await import('../../../config/firebase.js');
+        const { doc, updateDoc, serverTimestamp } = await import('firebase/firestore');
+        
+        const sessionRef = doc(db, 'builder_sessions', collab.sessionId);
+        await updateDoc(sessionRef, {
+          project,
+          lastUpdated: serverTimestamp(),
+        });
+        
+        set(state => ({ collab: { ...state.collab, lastSync: Date.now() } }));
+      } catch (e) {
+        console.error('Cloud sync failed:', e);
+      }
+    },
+
+    shareProject: async () => {
+      const { project } = get();
+      const user = kernel.auth.currentUser;
+      if (!user) {
+        kernel.notifications.notify('Login Required', 'You must be logged in to share projects.', 'error');
+        return;
+      }
+
+      try {
+        const { db } = await import('../../../config/firebase.js');
+        const { collection, doc, setDoc, serverTimestamp } = await import('firebase/firestore');
+        
+        // Generate a short 6-character code
+        const sessionCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const sessionRef = doc(db, 'builder_sessions', sessionCode);
+        
+        const sessionData = {
+          id: sessionCode,
+          owner: user.uid,
+          project,
+          createdAt: serverTimestamp(),
+          lastUpdated: serverTimestamp(),
+          participants: [{ uid: user.uid, name: user.name, photoURL: user.photoURL }],
+        };
+
+        await setDoc(sessionRef, sessionData);
+        
+        set({ 
+          collab: { 
+            sessionId: sessionCode, 
+            isLive: true, 
+            participants: sessionData.participants,
+            lastSync: Date.now(),
+            owner: user.uid
+          } 
+        });
+
+        kernel.notifications.notify('Project Shared', `Session Code: ${sessionCode}`, 'success');
+        return sessionCode;
+      } catch (e) {
+        console.error('Sharing failed:', e);
+        kernel.notifications.notify('Sharing Error', 'Could not create live session.', 'error');
+      }
+    },
+
+    joinProject: async (sessionCode) => {
+      if (!sessionCode) return;
+      
+      try {
+        const { db } = await import('../../../config/firebase.js');
+        const { doc, getDoc, onSnapshot, updateDoc, arrayUnion } = await import('firebase/firestore');
+        
+        const sessionRef = doc(db, 'builder_sessions', sessionCode.toUpperCase());
+        const snap = await getDoc(sessionRef);
+        
+        if (!snap.exists()) {
+          kernel.notifications.notify('Invalid Session', 'Could not find that project.', 'error');
+          return;
+        }
+
+        const data = snap.data();
+        const user = kernel.auth.currentUser;
+
+        // Update project state
+        set({ project: data.project });
+
+        // Add user to participants if logged in
+        if (user) {
+          await updateDoc(sessionRef, {
+            participants: arrayUnion({ uid: user.uid, name: user.name, photoURL: user.photoURL })
+          });
+        }
+
+        // Initialize live listener
+        const unsubscribe = onSnapshot(sessionRef, (doc) => {
+          const updatedData = doc.data();
+          if (!updatedData) return;
+
+          // Merge logic (simplified: last cloud write wins)
+          // In a real scenario, we'd check timestamps
+          set(state => ({
+            project: updatedData.project,
+            collab: {
+              ...state.collab,
+              sessionId: sessionCode,
+              isLive: true,
+              participants: updatedData.participants,
+              lastSync: Date.now(),
+            }
+          }));
+        });
+
+        return unsubscribe;
+      } catch (e) {
+        console.error('Joining failed:', e);
+        kernel.notifications.notify('Connection Error', 'Could not join live session.', 'error');
+      }
     },
 
     // ── Aura History & Prompt Library ──

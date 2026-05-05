@@ -294,6 +294,13 @@
         @apply bg-background text-foreground antialiased;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
+
+    /* === RECAPTCHA FRONTIER FIX === */
+    /* Hide the intrusive Google reCAPTCHA badge for a sovereign UI experience */
+    .grecaptcha-badge { 
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }
 }
 
 @layer utilities {
@@ -567,12 +574,23 @@
     initial-value: 180deg;
     inherits: false;
 }
+@property --rainbow-angle {
+    syntax: '<angle>';
+    initial-value: 0deg;
+    inherits: false;
+}
+
 
 /* ── Keyframes ─────────────────────────────────────────────── */
 
 /* Primary rotation — slow full spin */
 @keyframes cybeni-spin {
     to { --cybeni-angle: 360deg; }
+@keyframes rainbow-spin {
+    from { --rainbow-angle: 0deg; }
+    to { --rainbow-angle: 360deg; }
+}
+
 }
 
 /* Counter-rotation for paint-mixing feel */
@@ -910,7 +928,7 @@
     inset: -2px;
     border-radius: inherit;
     background: conic-gradient(
-        from 0deg,
+        from var(--rainbow-angle),
         #ff0000 0deg,
         #ff4500 15deg,
         #ff8c00 30deg,
@@ -941,10 +959,7 @@
     filter: blur(1px);
 }
 
-@keyframes rainbow-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
+
 
 /* --- Hot RGB - Reds, Oranges, Hot Pinks --- */
 .rgb-border-hot {

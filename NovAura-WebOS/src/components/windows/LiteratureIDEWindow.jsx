@@ -3,7 +3,8 @@ import { LiteratureProvider, useLiterature } from './literature/LiteratureContex
 import LiteratureLibrary from './literature/LiteratureLibrary';
 import ManuscriptEditor from './literature/ManuscriptEditor';
 import MuseSidebar from './literature/MuseSidebar';
-import { PanelLeft, PanelRight, Library, Sparkles } from 'lucide-react';
+import { PanelLeft, PanelRight, Library, Sparkles, BookOpen } from 'lucide-react';
+import EbookPublisherModal from './literature/EbookPublisherModal';
 
 /**
  * NovAura Literature IDE — Unified Production Workspace
@@ -16,6 +17,8 @@ function LiteratureIDEContent() {
     isMuseOpen, setIsMuseOpen,
     activeSidebarTab, setActiveSidebarTab
   } = useLiterature();
+
+  const [isEbookModalOpen, setIsEbookModalOpen] = React.useState(false);
 
   return (
     <div className="flex flex-col h-full bg-[#050508] text-gray-300 font-sans selection:bg-primary/30 overflow-hidden relative">
@@ -51,6 +54,13 @@ function LiteratureIDEContent() {
             <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">Unified State: Active</span>
           </div>
           <div className="h-4 w-px bg-white/10" />
+          <button 
+            onClick={() => setIsEbookModalOpen(true)}
+            className="flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition-all text-gray-300"
+          >
+            <BookOpen className="w-3 h-3" />
+            <span className="text-[9px] font-bold uppercase">Publish eBook</span>
+          </button>
           <button className="flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/20 rounded-full hover:bg-primary/20 transition-all">
             <Sparkles className="w-3 h-3 text-primary" />
             <span className="text-[9px] font-bold text-primary uppercase">Ghostwriter Beta</span>
@@ -82,6 +92,9 @@ function LiteratureIDEContent() {
       {/* Atmospheric Glows */}
       <div className="absolute -top-32 -left-32 w-96 h-96 bg-primary/5 rounded-full blur-[120px] pointer-events-none z-0" />
       <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-accent/5 rounded-full blur-[120px] pointer-events-none z-0" />
+
+      {/* Modals */}
+      <EbookPublisherModal isOpen={isEbookModalOpen} onClose={() => setIsEbookModalOpen(false)} />
     </div>
   );
 }

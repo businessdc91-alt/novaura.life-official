@@ -9,7 +9,7 @@ import {
 import { db, auth } from '../../config/firebase';
 import { doc, updateDoc, deleteDoc, orderBy, limit, collection, query, onSnapshot } from 'firebase/firestore';
 import { kernelStorage } from '../../kernel/kernelStorage.js';
-import { useAuthStore } from '../../../platform/src/stores/authStore';
+import { useAuth } from '../../hooks/useAuth';
 
 const OWNER_EMAILS = [
   'dillan.copeland@novaura.xyz',
@@ -20,7 +20,7 @@ const OWNER_EMAILS = [
   'admin@novaura.life',
   'dev@novaura.life'
 ];
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
 
 const ROLES = [
   { id: 'admin', label: 'Admin', color: 'text-red-400 bg-red-500/20', desc: 'Full platform control' },
@@ -36,6 +36,7 @@ const TABS = [
   { id: 'content', label: 'Content Review', icon: Image },
   { id: 'staff', label: 'Staff', icon: Crown },
   { id: 'reports', label: 'Reports', icon: Flag },
+  { id: 'broker', label: 'AI Broker', icon: Key },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -58,13 +59,14 @@ export default function AdminPanelWindow() {
   const [actionLog, setActionLog] = useState(() => {
     try { return JSON.parse(kernelStorage.getItem('admin_action_log') || '[]'); } catch { return []; }
   });
+  const [brokerData, setBrokerData] = useState({ credits: null, workspaces: [], guardrails: [] });
+  const [isBrokerLoading, setIsBrokerLoading] = useState(false);
 
   const currentUser = useMemo(() => {
     try { return JSON.parse(kernelStorage.getItem('user_data') || '{}'); } catch { return {}; }
   }, []);
 
-  const { isOwner: checkIsOwner } = useAuthStore();
-  const isOwner = checkIsOwner();
+  const { isOwner } = useAuth();
   
   // Allow access to admins, owners, and top-tier founding/investor members
   const isAdmin = currentUser?.role === 'admin' || 
@@ -109,6 +111,37 @@ export default function AdminPanelWindow() {
       unsubReports();
     };
   }, []);
+
+  // Fetch Broker Data
+  useEffect(() => {
+    if (tab !== 'broker') return;
+    
+    const fetchBroker = async () => {
+      setIsBrokerLoading(true);
+      try {
+        const token = kernelStorage.getItem('novaura-auth-token');
+        const headers = { Authorization: `Bearer ${token}` };
+
+        const [credRes, workRes, guardRes] = await Promise.all([
+          fetch(`${BACKEND_URL}/ai/credits`, { headers }).then(r => r.json()),
+          fetch(`${BACKEND_URL}/ai/workspaces`, { headers }).then(r => r.json()),
+          fetch(`${BACKEND_URL}/ai/guardrails`, { headers }).then(r => r.json())
+        ]);
+
+        setBrokerData({
+          credits: credRes.success ? credRes : null,
+          workspaces: workRes.workspaces || [],
+          guardrails: guardRes.guardrails || []
+        });
+      } catch (err) {
+        console.error('Broker fetch failed:', err);
+      } finally {
+        setIsBrokerLoading(false);
+      }
+    };
+
+    fetchBroker();
+  }, [tab]);
 
   // Staff list from legacy backend (optional)
   useEffect(() => {
@@ -540,6 +573,103 @@ export default function AdminPanelWindow() {
               </div>
             ))}
           </>
+        )}
+
+        {/* AI Broker Management */}
+        {tab === 'broker' && (
+          <div className="space-y-4">
+            {/* Platform Credits */}
+            <div className="p-4 bg-slate-900/50 border border-slate-800 rounded-xl">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-cyan-400" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">Platform Liquidity</span>
+                </div>
+                <button onClick={() => setTab('broker')} className="p-1 hover:bg-slate-800 rounded text-slate-500">
+                  <RefreshCw className={`w-3 h-3 ${isBrokerLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+              
+              {brokerData.credits ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-black/30 rounded-lg border border-slate-800/50">
+                    <div className="text-[9px] text-slate-500 uppercase mb-1">Available Credits</div>
+                    <div className="text-xl font-bold text-emerald-400">
+                      ${(brokerData.credits.total_credits - brokerData.credits.total_usage).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-black/30 rounded-lg border border-slate-800/50">
+                    <div className="text-[9px] text-slate-500 uppercase mb-1">Total Usage</div>
+                    <div className="text-xl font-bold text-slate-300">
+                      ${brokerData.credits.total_usage.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-8 text-center text-[10px] text-slate-600">
+                  {isBrokerLoading ? 'Loading metrics...' : 'Connect OpenRouter Management Key to view credits'}
+                </div>
+              )}
+            </div>
+
+            {/* Managed Workspaces */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[9px] text-slate-500 uppercase font-bold">Managed Workspaces ({brokerData.workspaces.length})</span>
+                <button className="flex items-center gap-1 text-[8px] text-cyan-400 hover:text-cyan-300 transition-colors">
+                  <Plus className="w-2.5 h-2.5" /> Provision New
+                </button>
+              </div>
+              
+              {brokerData.workspaces.length === 0 && !isBrokerLoading ? (
+                <div className="py-10 bg-slate-900/20 border border-dashed border-slate-800 rounded-lg text-center text-[10px] text-slate-600">
+                  No managed workspaces found. Start by provisioning a workspace for a Catalyst user.
+                </div>
+              ) : (
+                brokerData.workspaces.map(w => (
+                  <div key={w.id} className="p-3 bg-slate-900/40 border border-slate-800 rounded-lg flex items-center justify-between hover:border-slate-700 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded bg-cyan-500/10 flex items-center justify-center text-cyan-400">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-medium text-slate-200">{w.name}</div>
+                        <div className="text-[8px] text-slate-500 font-mono uppercase">{w.id}</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      <button className="p-1.5 hover:bg-slate-800 rounded text-slate-500 hover:text-white"><Eye className="w-3 h-3" /></button>
+                      <button className="p-1.5 hover:bg-slate-800 rounded text-slate-500 hover:text-white"><Settings className="w-3 h-3" /></button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Cost Guardrails */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[9px] text-slate-500 uppercase font-bold">Enforced Guardrails ({brokerData.guardrails.length})</span>
+              </div>
+              
+              {brokerData.guardrails.map(g => (
+                <div key={g.id} className="p-3 bg-slate-900/40 border border-slate-800 rounded-lg flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Shield className="w-4 h-4 text-amber-500" />
+                    <div>
+                      <div className="text-[10px] font-medium text-slate-200">{g.name}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[8px] text-emerald-400 font-bold uppercase tracking-tighter">LIMIT: ${g.limitUsd}</span>
+                        <span className="text-[8px] text-slate-600">|</span>
+                        <span className="text-[8px] text-slate-500 capitalize">{g.resetInterval} Reset</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button className="p-1 text-slate-600 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* Settings */}

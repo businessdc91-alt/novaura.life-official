@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React from 'react';
+const { useState, useRef, useEffect, useCallback } = React;
 import { Paintbrush, Eraser, Square, Circle, Minus, Download, Trash2, Palette, Undo2, Redo2, Pipette, Move, Save } from 'lucide-react';
 import { kernelStorage } from '../../kernel/kernelStorage.js';
 
@@ -20,7 +21,7 @@ export default function ArtStudioWindow() {
   const shapeStart = useRef(null);
 
   // Init canvas
-  useEffect(() => {
+  React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -202,7 +203,7 @@ export default function ArtStudioWindow() {
   ];
 
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-white overflow-hidden">
+    <div className="h-full flex flex-col bg-[#0f0f1a] text-white overflow-hidden relative">
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-2 py-1.5 bg-black/40 border-b border-slate-800 shrink-0 flex-wrap">
         {tools.map(t => {

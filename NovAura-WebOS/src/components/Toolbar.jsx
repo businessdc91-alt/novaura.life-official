@@ -6,7 +6,7 @@ import {
   Wand2, Blocks, Shuffle, Briefcase, Swords, Image, Shirt,
   Sparkles, UserCircle, Users, Bot, Radio, PenTool, Library,
   CreditCard, FileText, Bell, Trophy, PieChart, Layers, Shield,
-  Mic, Guitar, Crown, ShoppingBag
+  Mic, Guitar, Crown, ShoppingBag, Mail, Info
 } from 'lucide-react';
 import { kernelStorage } from '../kernel/kernelStorage.js';
 
@@ -57,9 +57,10 @@ const APP_REGISTRY = {
   'tax-filing':        { icon: FileText,       label: 'Tax',      color: 'var(--app-files)' },
   'notifications':     { icon: Bell,           label: 'Alerts',   color: 'var(--app-chat)' },
   'profile':           { icon: User,           label: 'Profile',  color: 'var(--app-profile)' },
-  'appstore':          { icon: Store,          label: 'Repo Station', color: 'var(--app-store)' },
-  'platform':          { icon: ShoppingBag,    label: 'NovAura Platform', color: 'var(--app-store)' },
+  'appstore':          { icon: Store,          label: 'Repo',     color: 'var(--app-store)' },
+  'platform':          { icon: ShoppingBag,    label: 'Platform', color: 'var(--app-store)' },
   'personalization':   { icon: Settings,       label: 'Settings', color: 'var(--app-chat)' },
+  'aura-mail':         { icon: Mail,           label: 'AuraMail',  color: '#7000ff' },
   // Games & Learn
   'games-arena':       { icon: Gamepad2,       label: 'Games',    color: 'var(--app-store)' },
   'aetherium-tcg':     { icon: Gamepad2,       label: 'TCG',      color: 'var(--app-store)' },
@@ -73,6 +74,8 @@ const APP_REGISTRY = {
   'secrets':           { icon: Shield,         label: 'Secrets',  color: 'var(--app-terminal)' },
   'billing':           { icon: CreditCard,     label: 'Billing',  color: 'var(--app-store)' },
   'pricing':           { icon: CreditCard,     label: 'Pricing',  color: 'var(--app-store)' },
+  'about':             { icon: Info,           label: 'About',    color: '#00d0ff' },
+  'catalyst':          { icon: Cpu,            label: 'Catalyst', color: '#ff00ff' },
 };
 
 // Default toolbar apps (used when no saved config exists)
@@ -81,7 +84,7 @@ const DEFAULT_APPS = [
   'media', 'media-library', 'chat', 'voice', 'terminal',
   'ai-assistant', 'literature-ide', 'art-studio', 'music-composer',
   'vibe-coding', 'games-arena', 'profile', 'personalization',
-  'voice-studio', 'music-studio', 'practice-tools',
+  'voice-studio', 'music-studio', 'practice-tools', 'aura-mail', 'about', 'catalyst',
 ];
 
 export default function Toolbar({ onOpenWindow }) {
@@ -150,7 +153,7 @@ export default function Toolbar({ onOpenWindow }) {
                 className="rgb-icon-glow transition-all duration-300"
                 style={{ animationDelay: delay }}
               />
-              <span className="text-[9px] font-medium text-white/40 group-hover:text-white/80 transition-colors leading-none">
+              <span className="text-[9px] font-medium text-white/40 group-hover:text-white/80 transition-colors leading-none truncate max-w-[48px]">
                 {tool.label}
               </span>
               

@@ -34,7 +34,7 @@ export default function AdminKeyHubWindow() {
   const [usage, setUsage] = useState(null);
   const [activeTab, setActiveTab] = useState('keys');
 
-  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api';
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api';
 
   useEffect(() => {
     fetchServices();

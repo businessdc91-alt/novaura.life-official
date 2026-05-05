@@ -34,6 +34,7 @@ export default function PipelinePanel() {
   const [logs, setLogs] = useState([]);
   const [fileCount, setFileCount] = useState(0);
   const [showConfig, setShowConfig] = useState(false);
+  const [showFleet, setShowFleet] = useState(false);
   const [confusion, setConfusion] = useState(null); // { message, resolve }
   const cancelledRef = useRef(false);
   const logRef = useRef(null);
@@ -120,11 +121,12 @@ export default function PipelinePanel() {
     setConfusion(null);
     setPhases(PIPELINE_PHASES.map(p => ({ ...p, status: 'pending' })));
 
-    const projectFiles = useBuilderStore.getState().flattenFiles()
+    const store = useBuilderStore.getState();
+    const projectFiles = store.flattenFiles()
       .map(f => ({ path: f.path || f.name, content: f.content || '' }));
 
     try {
-      await runPipeline(prompt, projectFiles, config, {
+      await runPipeline(prompt, projectFiles, { ...config, pipelineAgents: store.pipelineAgents }, {
         onPhaseStart: (id) => updatePhase(id, 'running'),
         onPhaseComplete: (id) => updatePhase(id, 'done'),
         onPhaseError: (id, msg) => { if (id) updatePhase(id, 'error'); addLog(`ERROR: ${msg}`); },
@@ -153,6 +155,20 @@ export default function PipelinePanel() {
 
   // ── Config setters ───────────────────────────────────────
 
+  const handleJoin = async () => {
+    const code = prompt('Enter 6-digit Session Code:');
+    if (code) {
+      const unsub = await useBuilderStore.getState().joinProject(code);
+      // Store unsub to cleanup on unmount
+    }
+  };
+
+  const handleShare = async () => {
+    await useBuilderStore.getState().shareProject();
+  };
+
+  const { collab } = useBuilderStore();
+
   const setTrait = (key, val) => setConfig(c => ({ ...c, traits: { ...c.traits, [key]: val } }));
   const setRestriction = (key, val) => setConfig(c => ({ ...c, restrictions: { ...c.restrictions, [key]: val } }));
 
@@ -163,16 +179,47 @@ export default function PipelinePanel() {
   const progressPercent = phases.length > 0 ? Math.round((doneCount / phases.length) * 100) : 0;
 
   return (
-    <div className="flex flex-col h-full bg-[#12121e] text-gray-300">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
+    <div className="flex flex-col h-full bg-[#0a0a0f] text-white font-sans overflow-hidden border-l border-white/10 select-none">
+      {/* ── Header ── */}
+      <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-primary/20">
+            <Zap className="w-5 h-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold tracking-tight">FRONTIER TEAM</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-white/40 uppercase tracking-widest font-medium">Cybeni Pipeline</span>
+              {collab.isLive && (
+                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-[8px] text-green-500 font-bold animate-pulse">
+                  LIVE: {collab.sessionId}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        
         <div className="flex items-center gap-2">
-          <Zap className="w-4 h-4 text-amber-400" />
-          <span className={`text-xs font-semibold ${running ? 'text-amber-300 animate-pulse' : ''}`}>Cascading Pipeline</span>
-          {running && (
-            <span className="text-[9px] text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-              {doneCount}/{phases.length}
-            </span>
+          {!collab.isLive ? (
+            <button 
+              onClick={handleShare}
+              className="p-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors title='Share Session'"
+            >
+              <Sparkles className="w-4 h-4 text-primary" />
+            </button>
+          ) : (
+            <div className="flex -space-x-2 mr-2">
+              {collab.participants.slice(0, 3).map((p, i) => (
+                <div key={i} className="w-6 h-6 rounded-full border-2 border-[#0a0a0f] bg-primary/20 overflow-hidden" title={p.name}>
+                  {p.photoURL ? <img src={p.photoURL} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-[8px]">{p.name[0]}</div>}
+                </div>
+              ))}
+              {collab.participants.length > 3 && (
+                <div className="w-6 h-6 rounded-full border-2 border-[#0a0a0f] bg-white/10 flex items-center justify-center text-[8px]">
+                  +{collab.participants.length - 3}
+                </div>
+              )}
+            </div>
           )}
         </div>
         <button
@@ -273,10 +320,107 @@ export default function PipelinePanel() {
               </select>
             </div>
 
-            <p className="text-[9px] text-gray-600 mt-1">
-              Orchestrator supervises all passes and can REDIRECT or TAKEOVER.
-              Gemini handles generation passes 1-4. Kimi handles QA inspection.
+            <p className="text-[9px] text-gray-600 mt-1 italic">
+              Frontier-1.0 (Orchestrator) supervises all passes. Aura-Prime (DevAgent) generates logic. 
+              CyberCore (Validator) performs audit. BugHunter (Super) handles repair.
             </p>
+          </div>
+
+          {/* Fleet Configuration Toggle */}
+          <div className="pt-2 border-t border-white/5">
+            <button
+              onClick={() => setShowFleet(!showFleet)}
+              className="w-full flex items-center justify-between text-[10px] text-primary hover:text-primary/80 uppercase tracking-wider font-semibold py-1"
+            >
+              <div className="flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5" /> Fleet Configuration
+              </div>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showFleet ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showFleet && (
+              <div className="mt-2 space-y-4">
+                {['PLANNER', 'DEVELOPER', 'DESIGNER', 'DATA_ARCHITECT', 'OPTIMIZER', 'AUDITOR', 'DEBUGGER'].map(type => {
+                  const agent = useBuilderStore.getState().pipelineAgents[type];
+                  if (!agent) return null;
+                  return (
+                    <div key={type} className="bg-black/40 rounded p-2 border border-white/5 group hover:border-amber-500/30 transition-colors">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-bold text-amber-400/80 leading-tight">{type} — {agent.name}</span>
+                          <span className="text-[8px] text-gray-500 uppercase tracking-widest">{agent.role}</span>
+                        </div>
+                        {type === 'PLANNER' && (
+                          <div className="px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[8px] text-amber-500 font-bold animate-pulse">
+                            FRONTIER-1.0
+                          </div>
+                        )}
+                        {type === 'DEVELOPER' && (
+                          <div className="px-1.5 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[8px] text-blue-500 font-bold">
+                            AURA-PRIME
+                          </div>
+                        )}
+                        {type === 'DESIGNER' && (
+                          <div className="px-1.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-[8px] text-purple-500 font-bold">
+                            AURA-DESIGN
+                          </div>
+                        )}
+                        {type === 'DATA_ARCHITECT' && (
+                          <div className="px-1.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-[8px] text-cyan-500 font-bold">
+                            AURA-DB
+                          </div>
+                        )}
+                        {type === 'OPTIMIZER' && (
+                          <div className="px-1.5 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-[8px] text-green-500 font-bold">
+                            AURA-EDGE
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] w-12 text-gray-500">Instance</span>
+                          <input
+                            type="text"
+                            value={agent.model.replace(':free', '')}
+                            onChange={e => useBuilderStore.getState().updatePipelineAgent(type, { model: e.target.value.includes(':free') ? e.target.value : e.target.value + ':free' })}
+                            className="flex-1 bg-black/50 border border-white/10 rounded px-1.5 py-0.5 text-[10px] text-gray-300 outline-none"
+                            placeholder="Frontier Slug"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] w-12 text-gray-500">Temp</span>
+                          <input
+                            type="range" min="0" max="1" step="0.05"
+                            value={agent.temperature}
+                            onChange={e => useBuilderStore.getState().updatePipelineAgent(type, { temperature: parseFloat(e.target.value) })}
+                            className="flex-1 h-1 accent-amber-500"
+                          />
+                          <span className="text-[9px] text-amber-500 w-6 text-right">{agent.temperature}</span>
+                        </div>
+
+                        <div>
+                          <span className="text-[9px] text-gray-500 block mb-1">System Prompt / Rules</span>
+                          <textarea
+                            value={agent.systemPrompt}
+                            onChange={e => useBuilderStore.getState().updatePipelineAgent(type, { systemPrompt: e.target.value })}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-[10px] text-gray-300 outline-none h-16 resize-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                
+                <button
+                  onClick={() => useBuilderStore.getState().resetPipelineAgents()}
+                  className="w-full py-1.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 text-[9px] uppercase tracking-tighter font-semibold transition-colors border border-red-500/20"
+                >
+                  Reset Fleet to Defaults
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

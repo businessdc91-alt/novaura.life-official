@@ -62,7 +62,6 @@ const LivingAvatarCreator = lazy(() => import('./windows/LivingAvatarCreator'));
     const ImagenWindow = lazy(() => import('./windows/ImagenWindow'));
     const LiveAIWindow = lazy(() => import('./windows/LiveAIWindow'));
     const WeatherWindow = lazy(() => import('./windows/WeatherWindow'));
-    const GildedCageGame = lazy(() => import('./games/GildedCageGame'));
     const CryptoWindow = lazy(() => import('./windows/CryptoWindow'));
     const CalculatorWindow = lazy(() => import('./windows/CalculatorWindow'));
 const VoiceStudioWindow = lazy(() => import('./windows/VoiceStudioWindow'));
@@ -144,7 +143,6 @@ const windowComponents = {
     'weather': WeatherWindow,
     'crypto': CryptoWindow,
     'calculator': CalculatorWindow,
-    'gilded-cage': GildedCageGame,
   'voice-studio': VoiceStudioWindow,
   'music-studio': MusicStudioWindow,
   'practice-tools': PracticeToolsWindow,
@@ -225,7 +223,6 @@ const defaultSizes = {
   'practice-tools': { width: 600, height: 800 },
   'crypto': { width: 720, height: 600 },
   'calculator': { width: 360, height: 520 },
-  'gilded-cage': { width: 720, height: 580 },
   'glb-game': { width: 900, height: 700 },
   'nova-chat': { width: 500, height: 600 },
   'security-monitor': { width: 800, height: 600 },

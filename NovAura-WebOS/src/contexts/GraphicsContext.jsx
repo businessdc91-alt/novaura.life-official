@@ -37,8 +37,8 @@ export const GRAPHICS_PRESETS = {
     description: 'Balanced visuals for most devices',
     particles: {
       enabled: true,
-      count: 140,
-      microCount: 80,
+      count: 168,
+      microCount: 96,
       links: true,
       mouseInteraction: true,
       colorCycling: true

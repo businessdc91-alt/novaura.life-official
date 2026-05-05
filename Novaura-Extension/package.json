@@ -1,0 +1,80 @@
+{
+  "name": "novaura-companion",
+  "displayName": "NovAura Code Companion",
+  "description": "Your Frontier-tier engineering partner, synchronized with the NovAura Command Station.",
+  "version": "1.0.0",
+  "publisher": "Aura-Nova",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "AI",
+    "Machine Learning"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "novaura-explorer",
+          "title": "NovAura",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "novaura-explorer": [
+        {
+          "type": "webview",
+          "id": "novaura.chatView",
+          "title": "Aura Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "novaura.askFrontier",
+        "title": "Ask the Frontier Team",
+        "category": "NovAura"
+      },
+      {
+        "command": "novaura.syncWorkspace",
+        "title": "Sync Workspace to Command Station",
+        "category": "NovAura"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "novaura.askFrontier",
+          "group": "navigation",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "NovAura",
+      "properties": {
+        "novaura.hubUrl": {
+          "type": "string",
+          "default": "http://localhost:5178",
+          "description": "URL of the local NovAura Command Station Hub."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "18.x",
+    "typescript": "^5.1.3"
+  }
+}

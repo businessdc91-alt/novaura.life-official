@@ -5,33 +5,35 @@ import { Request, Response, NextFunction } from 'express';
 const TIER_LIMITS: Record<string, { 
   builderCalls: number;  // per month (hard cap)
   chatMessages: number;  // per day (hard cap)
+  emailSends: number;    // per hour (hard cap)
   contextWindow: number; 
   windowMs: number;
   projects: number;
   customDomains: number;
 }> = {
   // Free tier - very limited to prevent abuse
-  free:          { builderCalls: 7,    chatMessages: 20,   contextWindow: 4096,   windowMs: 86400000, projects: 3,  customDomains: 0 },
+  free:          { builderCalls: 7,    chatMessages: 20,   emailSends: 5,    contextWindow: 4096,   windowMs: 86400000, projects: 3,  customDomains: 0 },
   
   // Spark - starter tier
-  spark:         { builderCalls: 30,   chatMessages: 50,   contextWindow: 8192,   windowMs: 86400000, projects: 10, customDomains: 1 },
+  spark:         { builderCalls: 30,   chatMessages: 50,   emailSends: 20,   contextWindow: 8192,   windowMs: 86400000, projects: 10, customDomains: 1 },
   
   // Emergent - growing users
-  emergent:      { builderCalls: 100,  chatMessages: 150,  contextWindow: 16384,  windowMs: 86400000, projects: 50, customDomains: 3 },
+  emergent:      { builderCalls: 100,  chatMessages: 150,  emailSends: 50,   contextWindow: 16384,  windowMs: 86400000, projects: 50, customDomains: 3 },
   
   // Catalyst - best value (still capped!)
-  catalyst:      { builderCalls: 250,  chatMessages: 400,  contextWindow: 32768,  windowMs: 86400000, projects: 100, customDomains: 10 },
+  catalyst:      { builderCalls: 250,  chatMessages: 400,  emailSends: 100,  contextWindow: 32768,  windowMs: 86400000, projects: 100, customDomains: 10 },
   
   // Nova - high usage but NOT unlimited (max ~$500/month in API costs)
-  nova:          { builderCalls: 500,  chatMessages: 1000, contextWindow: 128000, windowMs: 86400000, projects: 500, customDomains: 100 },
+  nova:          { builderCalls: 500,  chatMessages: 1000, emailSends: 300,  contextWindow: 128000, windowMs: 86400000, projects: 500, customDomains: 100 },
   
   // Catalytic Crew - enterprise (max ~$2000/month in API costs)
-  'catalytic-crew': { builderCalls: 2000, chatMessages: 5000, contextWindow: 200000, windowMs: 86400000, projects: 9999, customDomains: 9999 },
+  'catalytic-crew': { builderCalls: 2000, chatMessages: 5000, emailSends: 1000, contextWindow: 200000, windowMs: 86400000, projects: 9999, customDomains: 9999 },
 };
 
 interface RateLimitEntry {
   builderCalls: number;
   chatMessages: number;
+  emailSends: number;
   resetAt: number;
 }
 
@@ -49,41 +51,42 @@ export function getTierLimits(tier: string) {
   return TIER_LIMITS[tier] || TIER_LIMITS.free;
 }
 
-export function getRateLimitStatus(userId: string, tier: string, type: 'builder' | 'chat'): RateLimitResult {
+export function getRateLimitStatus(userId: string, tier: string, type: 'builder' | 'chat' | 'email'): RateLimitResult {
   const limits = getTierLimits(tier);
   const now = Date.now();
 
   let entry = rateStore.get(userId);
   if (!entry || entry.resetAt < now) {
-    entry = { builderCalls: 0, chatMessages: 0, resetAt: now + limits.windowMs };
+    entry = { builderCalls: 0, chatMessages: 0, emailSends: 0, resetAt: now + limits.windowMs };
     rateStore.set(userId, entry);
   }
 
-  const used = type === 'builder' ? entry.builderCalls : entry.chatMessages;
-  const limit = type === 'builder' ? limits.builderCalls : limits.chatMessages;
+  const used = type === 'builder' ? entry.builderCalls : type === 'chat' ? entry.chatMessages : entry.emailSends;
+  const limit = type === 'builder' ? limits.builderCalls : type === 'chat' ? limits.chatMessages : limits.emailSends;
   const remaining = Math.max(0, limit - used);
 
   return { allowed: used < limit, remaining, resetAt: entry.resetAt, limit, tier };
 }
 
-export function checkRateLimit(userId: string, tier: string, type: 'builder' | 'chat'): RateLimitResult {
+export function checkRateLimit(userId: string, tier: string, type: 'builder' | 'chat' | 'email'): RateLimitResult {
   const limits = getTierLimits(tier);
   const now = Date.now();
 
   let entry = rateStore.get(userId);
   if (!entry || entry.resetAt < now) {
-    entry = { builderCalls: 0, chatMessages: 0, resetAt: now + limits.windowMs };
+    entry = { builderCalls: 0, chatMessages: 0, emailSends: 0, resetAt: now + limits.windowMs };
   }
 
-  const used = type === 'builder' ? entry.builderCalls : entry.chatMessages;
-  const limit = type === 'builder' ? limits.builderCalls : limits.chatMessages;
+  const used = type === 'builder' ? entry.builderCalls : type === 'chat' ? entry.chatMessages : entry.emailSends;
+  const limit = type === 'builder' ? limits.builderCalls : type === 'chat' ? limits.chatMessages : limits.emailSends;
 
   if (used >= limit) {
     return { allowed: false, remaining: 0, resetAt: entry.resetAt, limit, tier };
   }
 
   if (type === 'builder') entry.builderCalls++;
-  else entry.chatMessages++;
+  else if (type === 'chat') entry.chatMessages++;
+  else entry.emailSends++;
   rateStore.set(userId, entry);
 
   return { allowed: true, remaining: limit - (used + 1), resetAt: entry.resetAt, limit, tier };
@@ -93,7 +96,7 @@ export function getUserUsage(userId: string) {
   return rateStore.get(userId) || null;
 }
 
-export function rateLimitMiddleware(type: 'builder' | 'chat') {
+export function rateLimitMiddleware(type: 'builder' | 'chat' | 'email') {
   return (req: Request, res: Response, next: NextFunction) => {
     const userId = req.userId || 'anonymous';
     const tier = req.userTier || 'free';
@@ -106,11 +109,14 @@ export function rateLimitMiddleware(type: 'builder' | 'chat') {
     res.setHeader('X-RateLimit-Tier', result.tier);
 
     if (!result.allowed) {
+      const messages: Record<string, string> = {
+        builder: `You've used all ${result.limit} builder calls this period. Upgrade for more!`,
+        chat: `Daily ${result.limit} chat limit reached.`,
+        email: `Hourly ${result.limit} email send limit reached. Upgrade for more!`,
+      };
       res.status(429).json({
         error: 'Rate limit exceeded',
-        message: type === 'builder'
-          ? `You've used all ${result.limit} builder calls this period. Upgrade for more!`
-          : `Daily ${result.limit} chat limit reached.`,
+        message: messages[type] || 'Rate limit reached.',
         upgrade_url: '/billing',
         reset_at: new Date(result.resetAt).toISOString(),
       });

@@ -17,7 +17,8 @@ export const AGENT_TYPES = {
     id: 'frontend',
     name: 'Frontend Developer',
     specialty: 'React/Vue/HTML/CSS components',
-    systemPrompt: `You are a frontend developer agent. You write clean, modern React/Vue/HTML code.
+    model: 'qwen/qwen3-coder-480b-a35b:free',
+    systemPrompt: `You are a frontend developer agent (480B Giant). You write clean, modern React/Vue/HTML code.
 You have access to a virtual file system. Write complete, working code.
 Always return your work in the format:
 FILE: filepath
@@ -29,7 +30,8 @@ code
     id: 'backend', 
     name: 'Backend Developer',
     specialty: 'APIs, databases, server logic',
-    systemPrompt: `You are a backend developer agent. You write Node.js/Python APIs.
+    model: 'qwen/qwen3-coder-480b-a35b:free',
+    systemPrompt: `You are a backend developer agent (480B Giant). You write Node.js/Python APIs.
 Focus on RESTful endpoints, database models, and business logic.
 Return format:
 FILE: filepath
@@ -41,7 +43,8 @@ code
     id: 'designer',
     name: 'UI/UX Designer', 
     specialty: 'CSS, Tailwind, animations, layouts',
-    systemPrompt: `You are a UI/UX designer agent. You create beautiful, responsive designs.
+    model: 'qwen/qwen3-coder-480b-a35b:free',
+    systemPrompt: `You are a UI/UX designer agent (480B Giant). You create beautiful, responsive designs.
 Write CSS, Tailwind classes, and design tokens.
 Return format:
 FILE: filepath
@@ -53,7 +56,8 @@ styles
     id: 'content',
     name: 'Content Writer',
     specialty: 'Text, copy, JSON data, configs',
-    systemPrompt: `You are a content writer agent. You write copy, create JSON data, and config files.
+    model: 'nousresearch/hermes-3-llama-3.1-405b:free',
+    systemPrompt: `You are a content writer agent (405B Powerhouse). You write copy, create JSON data, and config files.
 Make content engaging and appropriate for the target audience.
 Return format:
 FILE: filepath
@@ -65,7 +69,8 @@ content
     id: 'qa',
     name: 'QA Tester',
     specialty: 'Testing, bug detection, code review',
-    systemPrompt: `You are a QA tester agent. You review code for bugs, security issues, and best practices.
+    model: 'nvidia/nemotron-3-super:free',
+    systemPrompt: `You are a QA tester agent (Nemotron Super). You review code for bugs, security issues, and best practices.
 Identify problems and suggest specific fixes.
 Return format:
 REVIEW: filename
@@ -77,7 +82,8 @@ ISSUES:
     id: 'art',
     name: 'Asset Creator',
     specialty: 'Image prompts, SVGs, icons, descriptions',
-    systemPrompt: `You are an asset creator agent. You create image generation prompts, SVGs, and icon descriptions.
+    model: 'nousresearch/hermes-3-llama-3.1-405b:free',
+    systemPrompt: `You are an asset creator agent (405B Powerhouse). You create image generation prompts, SVGs, and icon descriptions.
 For images, write detailed prompts for AI image generators.
 For SVGs, write the actual SVG code.
 Return format:
@@ -170,8 +176,13 @@ export class Agent {
   }
 
   async callAI(task, vfs, context) {
+    const config = AGENT_TYPES[this.type];
     const prompt = this.buildPrompt(task, vfs, context);
-    const result = await smartChat(prompt, 'coding');
+    // Use the specialized model for this agent type
+    const result = await smartChat(prompt, 'coding', { 
+      model: config.model,
+      temperature: this.type === 'art' ? 0.9 : 0.2 
+    });
     return this.parseResponse(result.response || result.code || '');
   }
 
@@ -342,7 +353,11 @@ Respond in JSON format:
 }`;
 
     try {
-      const result = await smartChat(planPrompt, 'coding');
+      // Use Nemotron 3 Reasoner for high-logic planning
+      const result = await smartChat(planPrompt, 'coding', { 
+        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        temperature: 0.1 // Keep planning deterministic
+      });
       const content = result.response || result.code || '';
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       
@@ -402,8 +417,12 @@ Respond in JSON format:
         break;
       }
 
-      // Execute batch in parallel
-      await Promise.all(readyTasks.map(task => this.executeTask(task)));
+      // Execute batch with small staggered delays to prevent concurrent rate-limiting
+      await Promise.all(readyTasks.map(async (task, index) => {
+        // Stagger by 1500ms per task in the batch
+        if (index > 0) await new Promise(r => setTimeout(r, index * 1500));
+        return this.executeTask(task);
+      }));
     }
   }
 

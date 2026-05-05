@@ -99,7 +99,7 @@ router.post('/:serviceId', async (req, res): Promise<void> => {
     }
     
     // Store in Firestore (secure, only admins can read)
-    await admin.firestore().collection('admin_config').doc('api_keys').set({
+    await admin.firestore().collection('vault_admin_config').doc('api_keys').set({
       [serviceId]: {
         key: encryptKey(apiKey), // Encrypt before storing
         enabled,
@@ -237,7 +237,7 @@ async function getServiceKey(serviceId: string): Promise<string | null> {
   if (envKey) return envKey;
   
   // Check Firestore
-  const configDoc = await admin.firestore().collection('admin_config').doc('api_keys').get();
+  const configDoc = await admin.firestore().collection('vault_admin_config').doc('api_keys').get();
   const keyData = configDoc.data()?.[serviceId];
   if (keyData?.key) {
     return decryptKey(keyData.key);
@@ -248,7 +248,7 @@ async function getServiceKey(serviceId: string): Promise<string | null> {
 
 // Helper: Get decrypted key from Firestore
 async function getDecryptedKey(serviceId: string): Promise<string | null> {
-  const doc = await admin.firestore().collection('admin_config').doc('api_keys').get();
+  const doc = await admin.firestore().collection('vault_admin_config').doc('api_keys').get();
   const data = doc.data()?.[serviceId];
   
   if (!data?.key) return null;
@@ -298,26 +298,74 @@ async function testApiKey(serviceId: string, apiKey: string): Promise<boolean> {
   }
 }
 
-// Helper: Simple encryption (in production, use KMS)
-function encryptKey(key: string): string {
-  // XOR with a static key (not secure, but better than plaintext)
-  // In production, use Google Cloud KMS
-  const xorKey = process.env.KEY_ENCRYPTION_SECRET || 'novaura-secret';
-  let result = '';
-  for (let i = 0; i < key.length; i++) {
-    result += String.fromCharCode(key.charCodeAt(i) ^ xorKey.charCodeAt(i % xorKey.length));
-  }
-  return Buffer.from(result).toString('base64');
+import * as crypto from 'crypto';
+
+const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12;
+const KEY_LENGTH = 32;
+const ITERATIONS = 100000;
+
+// Helper: Get or derive a encryption key from environment secret
+function getVaultKey(): Buffer {
+  const secret = process.env.VAULT_ENCRYPTION_SECRET || 'novaura-default-vault-secret-do-not-use-in-prod';
+  return crypto.pbkdf2Sync(secret, 'novaura-salt-admin', ITERATIONS, KEY_LENGTH, 'sha256');
 }
 
-function decryptKey(encrypted: string): string {
-  const xorKey = process.env.KEY_ENCRYPTION_SECRET || 'novaura-secret';
-  const buffer = Buffer.from(encrypted, 'base64');
-  let result = '';
-  for (let i = 0; i < buffer.length; i++) {
-    result += String.fromCharCode(buffer[i] ^ xorKey.charCodeAt(i % xorKey.length));
+// Helper: Encrypt key using AES-256-GCM
+function encryptKey(key: string): string {
+  try {
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const vaultKey = getVaultKey();
+    const cipher = crypto.createCipheriv(ALGORITHM, vaultKey, iv);
+    
+    let encrypted = cipher.update(key, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    
+    const authTag = cipher.getAuthTag();
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  } catch (err) {
+    console.error('[Vault Admin] Encryption failed:', err);
+    throw new Error('Encryption failed');
   }
-  return result;
+}
+
+// Helper: Decrypt key
+function decryptKey(encryptedData: string): string {
+  try {
+    if (!encryptedData.includes(':')) {
+      return decryptKeyLegacy(encryptedData);
+    }
+
+    const [ivHex, authTagHex, encryptedText] = encryptedData.split(':');
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const vaultKey = getVaultKey();
+    
+    const decipher = crypto.createDecipheriv(ALGORITHM, vaultKey, iv);
+    decipher.setAuthTag(authTag);
+    
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    console.error('[Vault Admin] Decryption failed:', err);
+    return encryptedData;
+  }
+}
+
+// Legacy XOR decryption (for migration compatibility)
+function decryptKeyLegacy(encrypted: string): string {
+  const xorKey = process.env.KEY_ENCRYPTION_SECRET || 'novaura-secret';
+  try {
+    const buffer = Buffer.from(encrypted, 'base64');
+    let result = '';
+    for (let i = 0; i < buffer.length; i++) {
+      result += String.fromCharCode(buffer[i] ^ xorKey.charCodeAt(i % xorKey.length));
+    }
+    return result;
+  } catch {
+    return encrypted;
+  }
 }
 
 export default router;

@@ -19,6 +19,18 @@
       "**/node_modules/**"
     ],
     "trailingSlash": true,
+    "redirects": [
+      {
+        "source": "/webmail",
+        "destination": "https://webmail.novaura.life",
+        "type": 301
+      },
+      {
+        "source": "/webmail/**",
+        "destination": "https://webmail.novaura.life",
+        "type": 301
+      }
+    ],
     "rewrites": [
       {
         "source": "/api/**",
@@ -50,19 +62,19 @@
       },
       {
         "source": "/os",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/os/**",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/system",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/system/**",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "**",

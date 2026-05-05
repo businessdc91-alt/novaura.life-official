@@ -6,13 +6,15 @@ import {
   Key, BookOpen, Bot, ExternalLink, Mail, History, Crown
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAuthStore } from '../../platform/src/stores/authStore';
-import { checkAndSpendExhaustiveResearch } from '../../platform/src/services/creditService';
-import { researchService } from '../../platform/src/services/researchService';
-import { auth } from '../../platform/src/config/firebase';
+import { useAuth } from '../hooks/useAuth';
+import { checkAndSpendExhaustiveResearch } from '../services/creditService';
+import { researchService } from '../services/researchService';
+import { auth } from '../config/firebase';
 import FoundersSection from '../components/landing/FoundersSection';
 import MembershipSection from '../components/landing/MembershipSection';
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+const NECHQ = React.lazy(() => import('../components/enterprise/NECHQ'));
+import ArkOnboarding from '../components/staff/ArkOnboarding';
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
 
 const STAFF_GATE_CODE = '<catalyst>';
 
@@ -175,7 +177,7 @@ function ParticleConstellation() {
   );
 }
 
-export default function LandingPage({ onLaunchOS }) {
+export default function LandingPage({ onLaunchOS, showOS }) {
   const [query, setQuery] = useState('');
   const [searchType, setSearchType] = useState('web');
   const [isSearching, setIsSearching] = useState(false);
@@ -189,7 +191,9 @@ export default function LandingPage({ onLaunchOS }) {
   const [liveCrawl, setLiveCrawl] = useState(false);
   const [resultCount, setResultCount] = useState(20);
   const [showOperators, setShowOperators] = useState(false);
-  const { user, isAuthenticated } = useAuthStore();
+  const [showNECHQ, setShowNECHQ] = useState(false);
+  const [showArkOnboarding, setShowArkOnboarding] = useState(false);
+  const { user, isAuthenticated } = useAuth();
   const searchInputRef = useRef(null);
 
   useEffect(() => {
@@ -314,7 +318,9 @@ export default function LandingPage({ onLaunchOS }) {
   const handleStaffVerify = async (e) => {
     e.preventDefault();
     if (staffCode.trim() === STAFF_GATE_CODE) {
-      window.location.href = 'https://www.novaura.life';
+      setShowStaffModal(false);
+      setShowArkOnboarding(true);
+      setStaffCode('');
     } else {
       toast.error('Invalid access code');
     }
@@ -330,8 +336,20 @@ export default function LandingPage({ onLaunchOS }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // NECHQ Enterprise View
+  if (showNECHQ) {
+    return (
+      <React.Suspense fallback={<div className="min-h-screen bg-[#020205] flex items-center justify-center text-white"><Loader2 className="w-8 h-8 animate-spin text-cyan-400" /><span className="ml-3">Loading NECHQ...</span></div>}>
+        <NECHQ />
+        <Toaster position="top-right" />
+      </React.Suspense>
+    );
+  }
+
+  if (showOS) return null;
+
   return (
-    <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col relative overflow-hidden">
+    <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col relative overflow-x-hidden">
       {/* Particle Constellation Background */}
       <ParticleConstellation />
 
@@ -390,7 +408,7 @@ export default function LandingPage({ onLaunchOS }) {
           </a>
 
           <a
-            href="/platform/domains"
+            href="/platform/novalow"
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
             title="NovaLow Domains & Hosting"
           >
@@ -428,13 +446,22 @@ export default function LandingPage({ onLaunchOS }) {
               </a>
             </div>
           ) : (
-            <a
-              href="/platform/login"
-              className="flex items-center gap-2 px-4 py-2 ml-2 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
-            >
-              <Shield className="w-4 h-4" />
-              <span className="hidden sm:inline">Login</span>
-            </a>
+            <div className="flex items-center gap-2">
+              <a
+                href="/platform/login"
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+              >
+                <Shield className="w-4 h-4" />
+                <span className="hidden sm:inline">Login</span>
+              </a>
+              <a
+                href="/platform/login?tab=signup"
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:scale-105 transition-all shadow-[0_0_15px_rgba(6,182,212,0.4)] font-bold"
+              >
+                <Mail className="w-4 h-4" />
+                <span>Get @novaura.life Email</span>
+              </a>
+            </div>
           )}
 
           <a
@@ -449,6 +476,16 @@ export default function LandingPage({ onLaunchOS }) {
             <Crown className="w-4 h-4" />
             <span className="hidden sm:inline">Investors</span>
           </a>
+
+          <button
+            onClick={() => setShowStaffModal(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-cyan-400/70 hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors font-bold group"
+            title="Builders of the ARK - Staff & Partner Portal"
+          >
+            <Shield className="w-4 h-4 group-hover:scale-110 transition-transform" />
+            <span className="hidden sm:inline">Builders of the ARK</span>
+            <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse ml-1" />
+          </button>
 
           <a
             href="/os/"
@@ -909,6 +946,7 @@ export default function LandingPage({ onLaunchOS }) {
       <footer className="px-6 py-4 border-t border-white/5 flex justify-between items-center text-xs text-white/40">
         <div className="flex items-center gap-4">
           <span>© 2026 NovAura Systems</span>
+          <a href="/about" className="hover:text-white/70 transition-colors">About NovAura</a>
           <a href="/privacy-policy.html" className="hover:text-white/70 transition-colors">Privacy Policy</a>
           <a href="/terms-of-service.html" className="hover:text-white/70 transition-colors">Terms of Service</a>
         </div>
@@ -975,6 +1013,19 @@ export default function LandingPage({ onLaunchOS }) {
               </form>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ARK Onboarding Overlay */}
+      <AnimatePresence>
+        {showArkOnboarding && (
+          <ArkOnboarding 
+            onComplete={(data) => {
+              setShowArkOnboarding(false);
+              setShowNECHQ(true);
+              toast.success("Identity Confirmed. Redirection to NECHQ...");
+            }}
+          />
         )}
       </AnimatePresence>
     </div>

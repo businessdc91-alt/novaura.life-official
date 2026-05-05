@@ -61,6 +61,7 @@ router.get('/my', async (req: Request, res: Response) => {
         assetTitle: data.assetTitle || '',
         assetThumbnail: data.assetThumbnailUrl || '',
         downloadUrl,
+        backupDownloadUrl: data.backupFilePath ? 'available' : null, // Indicate backup exists
         creatorUsername: data.creatorUsername || '',
       };
     }));
@@ -107,10 +108,12 @@ router.get('/:orderId/download', async (req: Request, res: Response) => {
 
     if (data.buyerId !== userId) return res.status(403).json({ error: 'Forbidden' });
     if (data.paymentStatus !== 'completed') return res.status(402).json({ error: 'Payment not confirmed' });
-    if (!data.mainFilePath) return res.status(404).json({ error: 'File not available' });
+    
+    const filePath = data.mainFilePath || data.backupFilePath;
+    if (!filePath) return res.status(404).json({ error: 'File not available' });
 
     const bucket = admin.storage().bucket();
-    const [url] = await bucket.file(data.mainFilePath).getSignedUrl({
+    const [url] = await bucket.file(filePath).getSignedUrl({
       action: 'read',
       expires: Date.now() + 2 * 60 * 60 * 1000, // 2hr
     });
@@ -120,6 +123,7 @@ router.get('/:orderId/download', async (req: Request, res: Response) => {
       userId,
       orderId: doc.id,
       assetId: data.assetId,
+      filePath, // Log which path was used
       downloadedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -158,6 +162,7 @@ export async function createOrderFromSession(
     assetTitle: asset.title,
     assetThumbnailUrl: asset.thumbnailUrl || '',
     mainFilePath: asset.mainFilePath,
+    backupFilePath: asset.backupFilePath || null, // Redundant persistence
     mainFileName: asset.mainFileName,
     creatorId: asset.creatorId,
     creatorUsername: creatorData?.username || creatorData?.displayName || '',

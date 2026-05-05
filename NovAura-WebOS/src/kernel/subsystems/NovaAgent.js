@@ -417,8 +417,12 @@ export default class NovaAgent {
       this._log('Chat error: ' + err.message);
       
       const errorResponse = "I hit a snag — " + err.message + ". Let me try a different approach.";
-      await this._persistMessage('assistant', errorResponse);
-      return { response: errorResponse, toolResults: [] };
+      await this._persistMessage('assistant', errorResponse, { 
+        isError: true, 
+        errorType: err.name === 'AbortError' ? 'timeout' : 'generic',
+        originalError: err.message 
+      });
+      return { response: errorResponse, toolResults: [], isError: true };
     }
   }
 

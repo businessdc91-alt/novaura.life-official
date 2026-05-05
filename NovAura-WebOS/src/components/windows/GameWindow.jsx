@@ -83,7 +83,6 @@ export default function GameWindow({ gameId, title, url, description }) {
 // Game registry
 function getGameUrl(id) {
   const games = {
-    'gilded-cage': 'https://the-gilded-cage--lostitonce420.replit.app',
     'aetherium': 'http://localhost:3101',
     'galactica': 'http://localhost:3102',
   };
@@ -92,7 +91,6 @@ function getGameUrl(id) {
 
 function getGameTitle(id) {
   const titles = {
-    'gilded-cage': 'The Gilded Cage',
     'aetherium': 'Aetherium TCG',
     'galactica': 'Galactica',
   };
@@ -101,7 +99,6 @@ function getGameTitle(id) {
 
 function getGameDescription(id) {
   const descs = {
-    'gilded-cage': 'Steampunk RPG Adventure',
     'aetherium': 'Strategic Trading Card Game',
     'galactica': 'Space Exploration',
   };

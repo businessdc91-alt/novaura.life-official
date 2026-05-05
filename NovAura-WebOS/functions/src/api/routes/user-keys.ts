@@ -7,6 +7,9 @@
 
 import { Router } from 'express';
 import * as admin from 'firebase-admin';
+import { OpenRouter } from '@openrouter/sdk';
+import * as nodemailer from 'nodemailer';
+import { secretService } from '../../services/secretService';
 
 const router = Router();
 
@@ -86,7 +89,24 @@ const USER_CONFIGURABLE_SERVICES = [
     keyPrefix: '',
     website: 'https://dashscope.console.aliyun.com/'
   },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    description: 'Unified access to 1500+ models with user-controlled billing',
+    keyPrefix: 'sk-or-',
+    website: 'https://openrouter.ai/keys',
+    hasOAuth: true
+  },
+  {
+    id: 'gemini',
+    name: 'Google Gemini',
+    description: 'Multimodal AI with text, image, audio, video, and code capabilities',
+    keyPrefix: '',
+    website: 'https://aistudio.google.com/app/apikey'
+  }
 ];
+
+// Middleware: Auth + Tier check
 
 // Middleware: Auth + Tier check
 const SUPERUSERS = ['lostitonce420@gmail.com', 'dillan.copeland@novaura.xyz'];
@@ -105,6 +125,12 @@ async function requirePremium(req: any, res: any, next: any): Promise<void> {
     // Check for superuser status first
     if (decoded.email && SUPERUSERS.includes(decoded.email)) {
       req.user = decoded;
+      (req as any).platformTransport = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT),
+        secure: Number(process.env.SMTP_PORT) === 465,
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      } as nodemailer.TransportOptions);
       req.userTier = 4; // Max tier for internal logic
       next();
       return;
@@ -154,7 +180,7 @@ router.get('/', requirePremium, async (req, res): Promise<void> => {
   try {
     const userId = (req as any).user.uid;
     
-    const doc = await admin.firestore().collection('user_api_keys').doc(userId).get();
+    const doc = await admin.firestore().collection('vault_user_api_keys').doc(userId).get();
     const data = doc.data() || {};
     
     // Return masked versions
@@ -162,7 +188,7 @@ router.get('/', requirePremium, async (req, res): Promise<void> => {
       if (serviceId === '_lastUpdated') return acc;
       acc[serviceId] = {
         configured: true,
-        masked: maskKey(decryptKey(value.key)),
+        masked: secretService.maskKey(secretService.decrypt(value.key)),
         addedAt: value.addedAt
       };
       return acc;
@@ -216,9 +242,9 @@ router.post('/:serviceId', requirePremium, async (req, res): Promise<void> => {
     }
     
     // Encrypt and store
-    await admin.firestore().collection('user_api_keys').doc(userId).set({
+    await admin.firestore().collection('vault_user_api_keys').doc(userId).set({
       [serviceId]: {
-        key: encryptKey(apiKey),
+        key: secretService.encrypt(apiKey),
         label: label || 'My Key',
         addedAt: admin.firestore.FieldValue.serverTimestamp(),
         lastValidated: admin.firestore.FieldValue.serverTimestamp()
@@ -229,7 +255,7 @@ router.post('/:serviceId', requirePremium, async (req, res): Promise<void> => {
     res.json({
       success: true,
       serviceId,
-      masked: maskKey(apiKey),
+      masked: secretService.maskKey(apiKey),
       message: `${service.name} API key saved successfully`
     });
     
@@ -248,7 +274,7 @@ router.delete('/:serviceId', requirePremium, async (req, res) => {
     const { serviceId } = req.params;
     const userId = (req as any).user.uid;
     
-    await admin.firestore().collection('user_api_keys').doc(userId).update({
+    await admin.firestore().collection('vault_user_api_keys').doc(userId).update({
       [serviceId]: admin.firestore.FieldValue.delete(),
       _lastUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -264,6 +290,91 @@ router.delete('/:serviceId', requirePremium, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── OpenRouter OAuth (PKCE) ───────────────────────────────────────────────
+
+/**
+ * GET /user/keys/oauth/init
+ * Starts the OpenRouter OAuth flow
+ */
+router.get('/oauth/init', requirePremium, async (req, res) => {
+  try {
+    const userId = (req as any).user.uid;
+    const { verifier, challenge } = secretService.generatePKCE();
+    const state = secretService.encrypt(userId).slice(0, 16); // Derived state
+
+    // Store verifier for later exchange (10 min expiry)
+    await admin.firestore().collection('oauth_states').doc(state).set({
+      userId,
+      verifier,
+      provider: 'openrouter',
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 600000),
+    });
+
+    const callbackUrl = `${process.env.BACKEND_URL || 'https://api.novaura.life'}/user/keys/oauth/callback`;
+    const oauthUrl = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callbackUrl)}&code_challenge=${challenge}&code_challenge_method=S256&state=${state}`;
+
+    res.json({ url: oauthUrl });
+  } catch (err: any) {
+    res.status(500).json({ error: 'OAuth initialization failed', detail: err.message });
+  }
+});
+
+/**
+ * GET /user/keys/oauth/callback
+ * Finishes the OpenRouter OAuth flow
+ */
+router.get('/oauth/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error) {
+    res.redirect(`https://novaura.life/settings?oauth_error=${encodeURIComponent(error as string)}`);
+    return;
+  }
+
+  try {
+    const stateDoc = await admin.firestore().collection('oauth_states').doc(state as string).get();
+    if (!stateDoc.exists) {
+      res.status(400).send('Invalid or expired state');
+      return;
+    }
+
+    const { userId, verifier } = stateDoc.data()!;
+    
+    // Create temporary SDK client for exchange
+    const client = new OpenRouter({ apiKey: '' });
+    const result = await client.oAuth.exchangeAuthCodeForAPIKey({
+      requestBody: {
+        code: code as string,
+        codeChallengeMethod: 'S256',
+        codeVerifier: verifier,
+      },
+    });
+
+    const apiKey = (result as any).key || (result as any).apiKey;
+    if (!apiKey) throw new Error('No API key returned from OpenRouter');
+
+    // Encrypt and store in vault
+    await admin.firestore().collection('vault_user_api_keys').doc(userId).set({
+      ['openrouter']: {
+        key: secretService.encrypt(apiKey),
+        label: 'OpenRouter OAuth Key',
+        addedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastValidated: admin.firestore.FieldValue.serverTimestamp()
+      },
+      _lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Clean up state
+    await stateDoc.ref.delete();
+
+    res.redirect('https://novaura.life/settings?oauth=success&provider=openrouter');
+  } catch (err: any) {
+    console.error('[OAuth Callback] Error:', err.message);
+    res.redirect(`https://novaura.life/settings?oauth_error=${encodeURIComponent(err.message)}`);
+  }
+});
+
 
 /**
  * POST /user/keys/:serviceId/test
@@ -332,7 +443,7 @@ router.get('/:serviceId/decrypted', async (req, res): Promise<void> => {
       return;
     }
     
-    const doc = await admin.firestore().collection('user_api_keys').doc(userId as string).get();
+    const doc = await admin.firestore().collection('vault_user_api_keys').doc(userId as string).get();
     const data = doc.data()?.[serviceId];
     
     if (!data?.key) {
@@ -342,7 +453,7 @@ router.get('/:serviceId/decrypted', async (req, res): Promise<void> => {
     
     res.json({
       configured: true,
-      key: decryptKey(data.key)
+      key: secretService.decrypt(data.key)
     });
     return;
     
@@ -418,39 +529,20 @@ async function testUserApiKey(serviceId: string, apiKey: string): Promise<boolea
         });
         return dashResponse.ok || dashResponse.status === 400; // 400 might be model error but key is ok
 
+      case 'gemini':
+        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: 'ping' }] }] })
+        });
+        return geminiRes.ok;
+
       default:
         return apiKey.length > 10;
     }
   } catch (error) {
     return false;
   }
-}
-
-// Helper: Mask key for display
-function maskKey(key: string): string {
-  if (key.length <= 8) return '****';
-  return key.substring(0, 4) + '****' + key.substring(key.length - 4);
-}
-
-// Helper: Encrypt key
-function encryptKey(key: string): string {
-  const xorKey = process.env.USER_KEY_ENCRYPTION_SECRET || 'novaura-user-secret';
-  let result = '';
-  for (let i = 0; i < key.length; i++) {
-    result += String.fromCharCode(key.charCodeAt(i) ^ xorKey.charCodeAt(i % xorKey.length));
-  }
-  return Buffer.from(result).toString('base64');
-}
-
-// Helper: Decrypt key
-function decryptKey(encrypted: string): string {
-  const xorKey = process.env.USER_KEY_ENCRYPTION_SECRET || 'novaura-user-secret';
-  const buffer = Buffer.from(encrypted, 'base64');
-  let result = '';
-  for (let i = 0; i < buffer.length; i++) {
-    result += String.fromCharCode(buffer[i] ^ xorKey.charCodeAt(i % xorKey.length));
-  }
-  return result;
 }
 
 export default router;

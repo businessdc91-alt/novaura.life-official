@@ -164,7 +164,7 @@ export default function SystemDiagnosticsWindow({ onClose }) {
         const headers = { 'Content-Type': 'application/json' };
         if (token) headers['Authorization'] = 'Bearer ' + token;
 
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api';
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api';
         const res = await fetch(backendUrl + '/ai/health-check', { headers });
         const data = await res.json();
         setReport({

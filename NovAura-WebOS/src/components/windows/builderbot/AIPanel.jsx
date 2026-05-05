@@ -11,6 +11,9 @@ import PipelinePanel from './PipelinePanel';
 import AIAdjusters from './AIAdjusters';
 import { kernelStorage } from '../../../kernel/kernelStorage.js';
 import { runAgentLoop } from './AgentLoop';
+import { reconstructionService } from './ReconstructionService';
+import { Factory, GitBranch, History, Globe2 } from 'lucide-react';
+import DiscoveryDashboard from './DiscoveryDashboard';
 
 // ── Code block renderer with copy + apply ───────────────────
 function CodeBlock({ code, filename, language, onApply }) {
@@ -99,6 +102,7 @@ const MODES = [
   { id: 'creative', name: 'Creative', icon: '🎨', color: 'text-pink-400' },
   { id: 'debugger', name: 'Debugger', icon: '🔍', color: 'text-red-400' },
   { id: 'rapid', name: 'Rapid', icon: '🚀', color: 'text-green-400' },
+  { id: 'reconstruct', name: 'Reconstruct', icon: '🛠️', color: 'text-indigo-400' },
 ];
 
 const RESTRICTION_LABELS = {
@@ -190,10 +194,12 @@ function PrepromptEditor({ onClose }) {
 
 // ── Provider selector ───────────────────────────────────────
 const CLOUD_PROVIDERS = [
-  { id: 'gemini', name: 'Gemini', color: 'text-blue-400', desc: 'Google Gemini (via backend)' },
-  { id: 'claude', name: 'Claude', color: 'text-orange-400', desc: 'Anthropic Claude (via backend)' },
-  { id: 'openai', name: 'OpenAI', color: 'text-green-400', desc: 'GPT models (via backend)' },
-  { id: 'kimi', name: 'Kimi', color: 'text-purple-400', desc: 'Moonshot Kimi (via backend)' },
+  { id: 'aura', name: 'Aura (Gemini 3.1 Pro)', color: 'text-blue-400', desc: 'Google DeepMind High-IQ Logic', task: 'aura' },
+  { id: 'openrouter', name: 'OpenRouter High-Param', color: 'text-pink-400', desc: 'Sovereign 200B+ Multi-Model Grid', task: 'openrouter' },
+  { id: 'claude', name: 'Claude 4.7 Sonnet', color: 'text-orange-400', desc: 'Anthropic Surgical Refactoring', task: 'claude' },
+  { id: 'cybeni', name: 'Cybeni (Qwen 3.6 Max)', color: 'text-purple-400', desc: 'Alibaba Enterprise Compute', task: 'cybeni' },
+  { id: 'nova', name: 'Nova (Amazon Bedrock)', color: 'text-amber-400', desc: 'AWS Foundational Infrastructure', task: 'nova' },
+  { id: 'openai', name: 'OpenAI GPT-4o', color: 'text-green-400', desc: 'Standard Logic Gateway', task: 'coding' },
 ];
 
 const LOCAL_PROVIDERS = [
@@ -293,6 +299,19 @@ function ProviderSelector({ selectedProvider, onSelect, onClose }) {
         );
       })}
 
+      {/* Discovery Dashboard Link */}
+      <button
+        onClick={() => onSelect({ type: 'discovery' })}
+        className="w-full flex items-center gap-2 p-2 rounded-lg border border-primary/20 bg-primary/5 hover:bg-primary/10 transition-all text-left mt-4"
+      >
+        <Globe2 className="w-4 h-4 text-primary shrink-0" />
+        <div>
+          <div className="text-[11px] font-medium text-gray-200">Discovery Dashboard</div>
+          <div className="text-[10px] text-gray-500">Audit Gemini model limits & parameters</div>
+        </div>
+        <ChevronRight className="w-3.5 h-3.5 text-primary/40 ml-auto shrink-0" />
+      </button>
+
       {/* Local providers */}
       <div className="text-[10px] text-gray-500 uppercase tracking-wider mt-2 flex items-center gap-1.5">
         <Cpu className="w-3 h-3" /> Local Providers
@@ -385,12 +404,14 @@ export default function AIPanel() {
     runProject,
   } = useBuilderStore();
 
-  const [mode, setMode] = useState('chat'); // 'chat' | 'pipeline' | 'agent'
+  const [mode, setMode] = useState('chat'); // 'chat' | 'pipeline' | 'agent' | 'reconstruct'
   const [agentStatus, setAgentStatus] = useState('');
+  const [reconstructionStatus, setReconstructionStatus] = useState({ stage: 'idle', message: '' });
   const [input, setInput] = useState('');
   const [showAdjusters, setShowAdjusters] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [showPreprompt, setShowPreprompt] = useState(false);
+  const [showDiscovery, setShowDiscovery] = useState(false);
   const [showProviders, setShowProviders] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState({ type: 'auto', provider: 'auto', model: '', url: '' });
   const scrollRef = useRef(null);
@@ -498,6 +519,7 @@ export default function AIPanel() {
         result = await generateCode(msg, {
           provider: resolved.provider,
           model: resolved.model,
+          taskCategory: selectedProvider.task || 'coding',
           files: files.map((f) => ({ path: f.path, content: f.content })),
           maxTokens: 4096,
         });
@@ -517,6 +539,7 @@ export default function AIPanel() {
         result = await chatCloud(msg, {
           provider: resolved.provider,
           model: resolved.model,
+          taskCategory: selectedProvider.task || 'coding',
           maxTokens: 4096,
           temperature,
           isIDE: true,
@@ -592,6 +615,16 @@ export default function AIPanel() {
     };
   };
 
+  const handleProviderSelect = (prov) => {
+    if (prov.type === 'discovery') {
+      setShowDiscovery(true);
+      setShowProviders(false);
+      return;
+    }
+    setSelectedProvider(prov);
+    setShowProviders(false);
+  };
+
   const handleAgentSend = async () => {
     const prompt = input.trim();
     if (!prompt || agentRunning) return;
@@ -617,6 +650,7 @@ export default function AIPanel() {
         onMessage: (role, text) => addChatMessage({ role, text, timestamp: Date.now(), source: 'Agent Loop' }),
         maxRetries: 5,
         errorWaitMs: 3500,
+        pipelineAgents: useBuilderStore.getState().pipelineAgents,
       });
     } catch (err) {
       addChatMessage({ role: 'assistant', text: `Agent loop error: ${err.message}`, timestamp: Date.now(), error: true });
@@ -639,6 +673,88 @@ export default function AIPanel() {
         </div>
         <div className="flex-1 overflow-hidden">
           <PipelinePanel />
+        </div>
+      </div>
+    );
+  }
+
+  // Reconstruction Mode UI
+  if (mode === 'reconstruct') {
+    return (
+      <div className="flex flex-col h-full bg-[#0a0a15]">
+        {/* Mode tabs */}
+        <div className="flex items-center border-b border-white/10">
+          <button onClick={() => setMode('chat')} className="flex-1 text-[10px] py-1.5 text-gray-500 hover:text-gray-300 transition-colors border-b-2 border-transparent">Chat</button>
+          <button onClick={() => setMode('agent')} className="flex-1 text-[10px] py-1.5 text-gray-500 hover:text-gray-300 transition-colors border-b-2 border-transparent">⚡ Agent</button>
+          <button className="flex-1 text-[10px] py-1.5 text-indigo-400 font-medium border-b-2 border-indigo-400">Reconstruct</button>
+        </div>
+
+        {/* Reconstruction Header */}
+        <div className="px-3 py-2 border-b border-white/10 bg-indigo-500/5">
+          <div className="flex items-center gap-2">
+            <Factory className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-semibold text-indigo-400">White-Label Factory</span>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-1">
+            Automated pipeline: Scrape source (GitHub/Itch) → Rebrand with NovAura Official → Enhance with Premium Logic → Auto-Deploy.
+          </p>
+        </div>
+
+        {/* Status Area */}
+        <div className="flex-1 p-4 flex flex-col items-center justify-center text-center gap-4">
+          {reconstructionStatus.stage === 'idle' ? (
+            <>
+              <div className="w-12 h-12 rounded-full bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20">
+                <GitBranch className="w-6 h-6 text-indigo-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-gray-200">Start Reconstruction</h3>
+                <p className="text-[10px] text-gray-500 mt-1 max-w-[240px]">
+                  Paste a URL to an open-source game or app from GitHub or Itch.io to begin the automated transformation.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="relative">
+                <div className="w-16 h-16 rounded-full border-2 border-indigo-500/20 border-t-indigo-400 animate-spin" />
+                <Factory className="w-6 h-6 text-indigo-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-indigo-400 capitalize">{reconstructionStatus.stage}...</h3>
+                <p className="text-[11px] text-gray-300 mt-1">{reconstructionStatus.message}</p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Input */}
+        <div className="p-3 border-t border-white/10">
+          <div className="flex items-center gap-2 bg-white/5 rounded-lg border border-indigo-500/20 px-3 py-2">
+            <Globe className="w-4 h-4 text-gray-500" />
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Source URL (GitHub, Itch.io, Godot...)"
+              className="flex-1 bg-transparent text-xs text-gray-200 outline-none"
+              disabled={reconstructionStatus.stage !== 'idle'}
+            />
+            <button
+              onClick={() => {
+                setReconstructionStatus({ stage: 'scraping', message: 'Connecting to source...' });
+              }}
+              disabled={!input.trim() || reconstructionStatus.stage !== 'idle'}
+              className="px-3 py-1 bg-indigo-500 text-white text-[10px] font-bold rounded hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+            >
+              SCRAPE & BUILD
+            </button>
+          </div>
+          <div className="flex items-center gap-4 mt-3 px-1">
+            <div className="flex items-center gap-1.5 opacity-60">
+              <History className="w-3 h-3 text-indigo-400" />
+              <span className="text-[9px] text-gray-500 font-medium uppercase tracking-wider">Automated Revisioning: ACTIVE</span>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -765,6 +881,9 @@ export default function AIPanel() {
         <button onClick={() => setMode('pipeline')} className="flex-1 text-[10px] py-1.5 text-gray-500 hover:text-gray-300 transition-colors border-b-2 border-transparent">
           Pipeline
         </button>
+        <button onClick={() => setMode('reconstruct')} className="flex-1 text-[10px] py-1.5 text-gray-500 hover:text-indigo-400 transition-colors border-b-2 border-transparent">
+          🛠️ Factory
+        </button>
       </div>
 
       {/* Header */}
@@ -834,13 +953,31 @@ export default function AIPanel() {
       </div>
 
       {/* Config panels */}
-      {showProviders && <ProviderSelector selectedProvider={selectedProvider} onSelect={(p) => { setSelectedProvider(p); setShowProviders(false); }} onClose={() => setShowProviders(false)} />}
+      {showProviders && <ProviderSelector selectedProvider={selectedProvider} onSelect={handleProviderSelect} onClose={() => setShowProviders(false)} />}
       {showAdjusters && <AIAdjusters onClose={() => setShowAdjusters(false)} />}
       {showRules && <RulesPanel onClose={() => setShowRules(false)} />}
       {showPreprompt && <PrepromptEditor onClose={() => setShowPreprompt(false)} />}
       <div className="px-3 py-2 border-b border-white/10 text-[10px] text-gray-400 bg-black/10">
         Active code library: <span className="text-primary">{getActiveCodeLibrary()?.name || 'None'}</span> ? {getActiveCodeLibrary()?.description || 'No template selected.'}
       </div>
+
+      {/* Discovery Overlay */}
+      {showDiscovery && (
+        <div className="absolute inset-0 z-[100] bg-[#050508] animate-in fade-in zoom-in-95 duration-200 overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-[#08080c]">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-[#555] flex items-center gap-2">
+              <Globe className="w-4 h-4 text-primary" />
+              Frontier Discovery
+            </h3>
+            <button onClick={() => setShowDiscovery(false)} className="p-1.5 hover:bg-white/5 rounded-lg transition-colors">
+              <X className="w-4 h-4 text-gray-500 hover:text-white" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <DiscoveryDashboard />
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-3 scrollbar-thin">

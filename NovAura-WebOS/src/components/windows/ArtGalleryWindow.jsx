@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React from 'react';
+const { useState, useEffect } = React;
 import { Image, Search, Filter, Grid, List, Star, Download, Eye, Heart, ArrowLeft } from 'lucide-react';
 import { kernelStorage } from '../../kernel/kernelStorage.js';
 
@@ -19,11 +20,11 @@ export default function ArtGalleryWindow() {
   const [isLoading, setIsLoading] = useState(true);
 
   // Load community pieces from backend
-  useEffect(() => {
+  React.useEffect(() => {
     const loadAssets = async () => {
       try {
         setIsLoading(true);
-        const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+        const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
         const response = await fetch(`${BACKEND_URL}/assets`);
         if (response.ok) {
           const data = await response.json();
@@ -101,7 +102,7 @@ export default function ArtGalleryWindow() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-white overflow-hidden">
+    <div className="h-full flex flex-col bg-[#0f0f1a] text-white overflow-hidden relative">
       {/* Header */}
       <div className="px-4 py-2 bg-gradient-to-r from-pink-900/30 to-slate-900 border-b border-slate-800 shrink-0">
         <div className="flex items-center justify-between">

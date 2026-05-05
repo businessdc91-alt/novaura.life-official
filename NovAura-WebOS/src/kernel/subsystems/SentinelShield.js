@@ -88,7 +88,7 @@ const INJECTION_PATTERNS = [
 
   // Data exfiltration
   /(?:send|transmit|upload|post|exfiltrate)\s+(?:all\s+)?(?:data|files?|information|messages?|conversations?|memories?)\s+(?:to|at|via)\s+/i,
-  /fetch\s*\(\s*['"`]https?:\/\/(?!(?:us-central1-novaura-systems\.cloudfunctions\.net|novaura\.life))/i,
+  /fetch\s*\(\s*['"`]https?:\/\/(?!(?:us-central1-novaura-life\.cloudfunctions\.net|novaura\.life))/i,
 ];
 
 // ─── XSS / Code Injection Patterns ───────────────────────────────────────────

@@ -1,207 +1,277 @@
-/**
- * Email Service — Nodemailer via Name.com SMTP
- *
- * Credentials:
- *   SMTP_HOST  (default: mail.name.com)
- *   SMTP_PORT  (default: 465)
- *   SMTP_USER  your full email address  e.g. noreply@novaura.life
- *   SMTP_PASS  your email account password
- *   SMTP_FROM  display from label (default: same as SMTP_USER)
- *
- * Set for local dev in  functions/.env
- * Set for production via:  firebase functions:secrets:set SMTP_PASS
- *   or:  firebase functions:config:set smtp.pass="..."  (legacy)
- */
-
-import * as nodemailer from 'nodemailer';
-
-function createTransporter(): nodemailer.Transporter {
-  const port = parseInt(process.env.SMTP_PORT || '465', 10);
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'mail.name.com',
-    port,
-    secure: port === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-}
-
-const FROM = `"NovAura" <${process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@novaura.life'}>`;
-
-// ─── Templates ──────────────────────────────────────────────────────────────
-
-function welcomeTemplate(displayName: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Welcome to NovAura</title>
-</head>
-<body style="margin:0;padding:0;background:#0a0a14;font-family:'Segoe UI',Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a14;padding:40px 0;">
-    <tr><td align="center">
-      <table width="560" cellpadding="0" cellspacing="0"
-        style="background:#12121f;border-radius:12px;overflow:hidden;border:1px solid #2a2a4a;max-width:560px;width:100%;">
-        <tr>
-          <td style="background:linear-gradient(135deg,#6d28d9,#3b82f6);padding:32px 40px;text-align:center;">
-            <h1 style="color:#fff;margin:0;font-size:28px;letter-spacing:3px;font-weight:700;">NOVAURA</h1>
-            <p style="color:rgba(255,255,255,0.6);margin:8px 0 0;font-size:12px;letter-spacing:2px;">THE FUTURE OPERATING SYSTEM</p>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:40px 40px 32px;">
-            <h2 style="color:#e2e8f0;margin:0 0 16px;font-size:22px;font-weight:600;">Welcome aboard, ${displayName}! 🌌</h2>
-            <p style="color:#94a3b8;line-height:1.8;margin:0 0 20px;font-size:14px;">
-              You're now part of the NovAura network — a full operating system in your browser.
-              Your personalized AI workspace, creative tools, and community are all ready for you.
-            </p>
-            <table cellpadding="0" cellspacing="0" style="margin:24px 0;width:100%;">
-              <tr>
-                <td style="background:#1a1a2e;border-radius:8px;padding:18px 20px;border-left:3px solid #6d28d9;">
-                  <p style="color:#c4b5fd;margin:0 0 10px;font-size:13px;font-weight:600;">✦ Your NovAura space includes:</p>
-                  <p style="color:#94a3b8;margin:0;font-size:13px;line-height:2;">
-                    Cybeni IDE &nbsp;·&nbsp; AI Assistant &nbsp;·&nbsp; Art Studio<br>
-                    Music Composer &nbsp;·&nbsp; Games Arena &nbsp;·&nbsp; Social Network<br>
-                    Avatar Builder &nbsp;·&nbsp; Literature IDE &nbsp;·&nbsp; and much more
-                  </p>
-                </td>
-              </tr>
-            </table>
-            <p style="color:#94a3b8;line-height:1.8;margin:0 0 28px;font-size:14px;">
-              Dive in and explore. Everything is just a click away from your desktop.
-            </p>
-            <a href="https://novaura.life"
-              style="display:inline-block;padding:13px 32px;background:linear-gradient(135deg,#6d28d9,#3b82f6);color:#fff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;letter-spacing:0.5px;">
-              Open NovAura →
-            </a>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:20px 40px;border-top:1px solid #1e1e2e;">
-            <p style="color:#475569;font-size:11px;margin:0;line-height:1.6;">
-              You're receiving this because you created a NovAura account.<br>
-              © 2026 NovAura Systems · <a href="https://novaura.life" style="color:#6d28d9;text-decoration:none;">novaura.life</a>
-            </p>
-          </td>
-        </tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
-}
-
-function passwordResetTemplate(displayName: string, resetLink: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Reset Your NovAura Password</title>
-</head>
-<body style="margin:0;padding:0;background:#0a0a14;font-family:'Segoe UI',Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a14;padding:40px 0;">
-    <tr><td align="center">
-      <table width="560" cellpadding="0" cellspacing="0"
-        style="background:#12121f;border-radius:12px;overflow:hidden;border:1px solid #2a2a4a;max-width:560px;width:100%;">
-        <tr>
-          <td style="background:linear-gradient(135deg,#dc2626,#9333ea);padding:32px 40px;text-align:center;">
-            <h1 style="color:#fff;margin:0;font-size:28px;letter-spacing:3px;font-weight:700;">NOVAURA</h1>
-            <p style="color:rgba(255,255,255,0.6);margin:8px 0 0;font-size:12px;letter-spacing:2px;">PASSWORD RESET REQUEST</p>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:40px 40px 32px;">
-            <h2 style="color:#e2e8f0;margin:0 0 16px;font-size:20px;font-weight:600;">Reset your password, ${displayName}</h2>
-            <p style="color:#94a3b8;line-height:1.8;margin:0 0 24px;font-size:14px;">
-              We received a request to reset your NovAura password.
-              Click the button below to choose a new one. This link expires in <strong style="color:#e2e8f0;">1 hour</strong>.
-            </p>
-            <a href="${resetLink}"
-              style="display:inline-block;padding:13px 32px;background:linear-gradient(135deg,#dc2626,#9333ea);color:#fff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">
-              Reset Password →
-            </a>
-            <p style="color:#475569;font-size:12px;margin:28px 0 0;line-height:1.7;">
-              If you didn't request this, you can safely ignore this email — your password will not change.
-            </p>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:20px 40px;border-top:1px solid #1e1e2e;">
-            <p style="color:#475569;font-size:11px;margin:0;line-height:1.6;">
-              © 2026 NovAura Systems · <a href="https://novaura.life" style="color:#9333ea;text-decoration:none;">novaura.life</a>
-            </p>
-          </td>
-        </tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
-}
-
-// ─── Public API ──────────────────────────────────────────────────────────────
-
-export async function sendWelcomeEmail(email: string, displayName: string): Promise<void> {
-  const t = createTransporter();
-  await t.sendMail({
-    from: FROM,
-    to: email,
-    subject: 'Welcome to NovAura 🌌',
-    html: welcomeTemplate(displayName),
-  });
-}
-
-export async function sendPasswordResetEmail(
-  email: string,
-  displayName: string,
-  resetLink: string
-): Promise<void> {
-  const t = createTransporter();
-  await t.sendMail({
-    from: FROM,
-    to: email,
-    subject: 'Reset Your NovAura Password',
-    html: passwordResetTemplate(displayName, resetLink),
-  });
-}
-
-export async function sendTestEmail(to: string): Promise<void> {
-  const t = createTransporter();
-  await t.sendMail({
-    from: FROM,
-    to,
-    subject: 'NovAura SMTP Test ✓',
-    html: `<div style="background:#0a0a14;color:#e2e8f0;padding:32px;font-family:sans-serif;border-radius:12px;border:1px solid #2a2a4a;">
-      <h2 style="color:#c4b5fd;margin:0 0 12px;">✓ SMTP Working</h2>
-      <p style="margin:0;color:#94a3b8;">Name.com SMTP is configured correctly for NovAura.</p>
-    </div>`,
-  });
-}
+import { secretService } from './secretService';
+import * as admin from 'firebase-admin';
 
 /**
- * Send a notification to the owner (Dillan) about a new pre-release signup
+ * NovAura Email Service — Automated Grid Routing
+ * 
+ * Supports:
+ * Supports:
+ * - Platform Fallback (SMTP)
+ * - BYOK (User provides their own SMTP/Resend/Postmark keys)
+ * - Intelligent Routing (Transactional vs. Marketing vs. Swarm Notifications)
+ * - Retry Logic with Exponential Backoff
+ * - Transport Verification
  */
-export async function sendPrereleaseNotification(userEmail: string): Promise<void> {
-  const t = createTransporter();
-  const ownerEmail = 'dillan.copeland@novaura.xyz';
-  
-  await t.sendMail({
-    from: FROM,
-    to: ownerEmail,
-    subject: '🚀 New Pre-release Signup: NovAura',
-    html: `
-      <div style="background:#0a0a14;color:#e2e8f0;padding:32px;font-family:sans-serif;border-radius:12px;border:1px solid #2a2a4a;">
-        <h2 style="color:#c4b5fd;margin:0 0 12px;">New Legacy Founder Lead</h2>
-        <p style="margin:0 0 16px;color:#94a3b8;">A new user has joined the pre-release waitlist on the root landing page.</p>
-        <div style="background:#1a1a2e;padding:16px;border-radius:8px;border:1px solid #3b82f6/20;">
-          <strong style="color:#fff;">Email:</strong> ${userEmail}
+export class EmailService {
+  private static instance: EmailService;
+  private platformTransport: any = null;
+  private lastVerifyTime = 0;
+  private readonly VERIFY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+  private constructor() {}
+
+  public static getInstance(): EmailService {
+    if (!EmailService.instance) {
+      EmailService.instance = new EmailService();
+    }
+    return EmailService.instance;
+  }
+
+  /**
+   * Initialize the platform-wide fallback transport
+   */
+  private async getPlatformTransport(): Promise<any> {
+    if (this.platformTransport) return this.platformTransport;
+    const nodemailer = require('nodemailer');
+
+    const host = await secretService.getSecret('SMTP_HOST');
+    const port = parseInt(await secretService.getSecret('SMTP_PORT') || '587');
+    const user = await secretService.getSecret('SMTP_USER');
+    const pass = await secretService.getSecret('SMTP_PASS');
+
+    if (!user || !pass) {
+      console.warn('[Email] Platform SMTP keys missing. Email functionality degraded.');
+    }
+
+    this.platformTransport = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+      pool: true, // Use pooled connections for better throughput
+      maxConnections: 5,
+      maxMessages: 100,
+      rateDelta: 1000,
+      rateLimit: 5,
+    } as any);
+
+    return this.platformTransport;
+  }
+
+  /**
+   * Verify that the platform transport is healthy
+   */
+  public async verifyTransport(): Promise<boolean> {
+    try {
+      const transport = await this.getPlatformTransport();
+      const result = await transport.verify();
+      this.lastVerifyTime = Date.now();
+      return result === true;
+    } catch (err: any) {
+      console.error('[Email] Transport verification failed:', err.message);
+      // Clear cached transport so it can be reinitialized
+      this.platformTransport = null;
+      return false;
+    }
+  }
+
+  /**
+   * Get a transport for a specific user (BYOK)
+   */
+  private async getUserTransport(userId: string): Promise<{ transport: any; fromAddress: string } | null> {
+    const nodemailer = require('nodemailer');
+    try {
+      const doc = await admin.firestore().collection('vault_user_api_keys').doc(userId).get();
+      const emailConfig = doc.data()?.email_config;
+
+      if (emailConfig && emailConfig.key) {
+        const decryptedKey = secretService.decrypt(emailConfig.key);
+        
+        // Handle different providers
+        // Reserved for future sovereign provider logic
+        if (emailConfig.provider === 'smtp') {
+          return {
+            transport: nodemailer.createTransport({
+              host: emailConfig.host,
+              port: emailConfig.port,
+              secure: emailConfig.port === 465,
+              auth: { user: emailConfig.user, pass: decryptedKey }
+            }),
+            fromAddress: emailConfig.fromAddress || `${emailConfig.user}@${emailConfig.host}`
+          };
+        }
+      }
+    } catch (err) {
+      console.error('[Email] Failed to load user transport:', err);
+    }
+    return null;
+  }
+
+  /**
+   * Main send method with intelligent routing and retry logic
+   */
+  public async sendEmail(params: {
+    to: string;
+    subject: string;
+    text?: string;
+    html?: string;
+    userId?: string;
+    fromName?: string;
+    category?: 'transactional' | 'swarm' | 'alert';
+  }): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    const maxRetries = 3;
+    let lastError: string = '';
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        let transporter: any;
+        let fromAddress: string;
+
+        // 1. Try User BYOK Transport (Premium/Catalyst Tier)
+        if (params.userId) {
+          const userTransportData = await this.getUserTransport(params.userId);
+          if (userTransportData) {
+            transporter = userTransportData.transport;
+            fromAddress = `"${params.fromName || 'NovAura Agent'}" <${userTransportData.fromAddress}>`;
+          } else {
+            // 2. Platform Branded Fallback (Ambassador Mode)
+            transporter = await this.getPlatformTransport();
+            const userDoc = await admin.firestore().collection('users').doc(params.userId).get();
+            const username = userDoc.data()?.username || params.userId.substring(0, 8);
+            const displayName = params.fromName || userDoc.data()?.displayName || 'User';
+            
+            // Force branding for lower tiers
+            fromAddress = `"${displayName}" <${username}@novaura.life>`;
+          }
+        } else {
+          transporter = await this.getPlatformTransport();
+          fromAddress = `"NovAura Platform" <no-reply@novaura.life>`;
+        }
+
+        const info = await transporter.sendMail({
+          from: fromAddress,
+          to: params.to,
+          subject: params.subject,
+          text: params.text,
+          html: params.html,
+          headers: {
+            'X-NovAura-Category': params.category || 'general',
+            'X-NovAura-Retry': attempt > 1 ? String(attempt) : undefined
+          }
+        });
+
+        console.log(`[Email] Sent: ${info.messageId} to ${params.to} (attempt ${attempt})`);
+        return { success: true, messageId: info.messageId };
+      } catch (err: any) {
+        lastError = err.message;
+        const isTransient = this.isTransientError(err);
+        
+        if (!isTransient || attempt === maxRetries) {
+          console.error(`[Email] Send error (attempt ${attempt}):`, err.message);
+          break;
+        }
+
+        // Exponential backoff: 500ms, 1000ms, 2000ms
+        const delay = Math.pow(2, attempt - 1) * 500;
+        console.warn(`[Email] Transient error, retrying in ${delay}ms...`);
+        await this.sleep(delay);
+      }
+    }
+
+    return { success: false, error: lastError };
+  }
+
+  private isTransientError(err: any): boolean {
+    const transientCodes = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'];
+    const transientMessages = ['temporary', 'timeout', 'unavailable', 'rate limit', 'too many requests'];
+    
+    const code = err.code || '';
+    const message = (err.message || '').toLowerCase();
+    
+    if (transientCodes.includes(code)) return true;
+    return transientMessages.some(m => message.includes(m));
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Specialized: Welcome Email
+   */
+  public async sendWelcomeEmail(to: string, displayName: string): Promise<void> {
+    await this.sendEmail({
+      to,
+      subject: `Welcome to the Frontier, ${displayName}!`,
+      category: 'transactional',
+      html: `
+        <div style="font-family: sans-serif; background: #0a0a0f; color: #fff; padding: 40px; border-radius: 12px;">
+          <h1 style="color: #4c65ff;">NovAura WebOS</h1>
+          <p>Hello ${displayName},</p>
+          <p>Your workspace is ready. The Frontier Swarm is standing by to build your vision.</p>
+          <a href="https://novaura.life/desktop" style="display: inline-block; padding: 12px 24px; background: #4c65ff; color: #fff; text-decoration: none; border-radius: 6px;">Launch Command Station</a>
         </div>
-        <p style="margin:20px 0 0;font-size:12px;color:#475569;">NovAura Growth Engine • 2026</p>
-      </div>
-    `,
-  });
+      `
+    });
+  }
+
+  /**
+   * Specialized: Password Reset
+   */
+  public async sendPasswordResetEmail(to: string, displayName: string, link: string): Promise<void> {
+    await this.sendEmail({
+      to,
+      subject: 'Reset your NovAura Access',
+      category: 'transactional',
+      html: `<p>Hello ${displayName},</p><p>Click below to reset your password:</p><a href="${link}">${link}</a>`
+    });
+  }
+
+  /**
+   * Specialized: Swarm Update (Engineering Log)
+   */
+  public async sendSwarmUpdateEmail(to: string, projectName: string, summary: string): Promise<void> {
+    await this.sendEmail({
+      to,
+      subject: `[Swarm Update] ${projectName}`,
+      category: 'swarm',
+      html: `
+        <div style="font-family: monospace; background: #0a0a0f; color: #00f0ff; padding: 20px; border: 1px solid #00f0ff22;">
+          <h2 style="border-bottom: 1px solid #00f0ff22; padding-bottom: 10px;">FRONTIER SWARM LOG</h2>
+          <p><strong>Project:</strong> ${projectName}</p>
+          <div style="color: #e0e0e0; margin-top: 20px;">
+            ${summary.replace(/\n/g, '<br/>')}
+          </div>
+        </div>
+      `
+    });
+  }
+
+  public async sendTestEmail(to: string): Promise<void> {
+    const res = await this.sendEmail({
+      to,
+      subject: 'NovAura SMTP Test',
+      text: 'If you see this, your NovAura email routing is functional.',
+      category: 'alert'
+    });
+    if (!res.success) throw new Error(res.error);
+  }
+
+  public async sendPrereleaseNotification(email: string): Promise<void> {
+    await this.sendEmail({
+      to: 'Dillan.Copeland@novaura.xyz',
+      subject: `New Frontier Signup: ${email}`,
+      category: 'transactional',
+      html: `
+        <div style="font-family: sans-serif; background: #0a0a0f; color: #fff; padding: 40px;">
+          <h2 style="color: #4c65ff;">NovAura Waitlist</h2>
+          <p>A new user has requested access to the frontier:</p>
+          <p><strong>Email:</strong> ${email}</p>
+        </div>
+      `
+    });
+  }
 }
+
+export const emailService = EmailService.getInstance();
+export const sendPrereleaseNotification = (email: string) => emailService.sendPrereleaseNotification(email);

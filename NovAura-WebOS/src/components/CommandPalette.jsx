@@ -5,23 +5,92 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, X, Terminal, Settings, FileCode, GitBranch, FolderOpen, Globe, Shield, CreditCard, User, Plus, Moon, LogOut, Palette, Image, Sparkles, Bot } from 'lucide-react';
+import { 
+  Search, X, Terminal, Settings, FileCode, GitBranch, FolderOpen, Globe, Shield, CreditCard, User, Plus, Moon, LogOut, Palette, Image, Sparkles, Bot,
+  Paintbrush, Shirt, Wand2, Grid as GridIcon, Heart, BookOpen, Feather, PenTool, Library, Zap, Wrench, Blocks, GitMerge, Swords, Smile, Music, Radio,
+  Play, MessageSquare, Phone, Brain, Eraser, Briefcase, Dumbbell, BrainCircuit, Gamepad2, Rocket, Package, Crown, ShoppingBag, Store, Activity,
+  Bitcoin, Calculator, BellRing, CloudSun
+} from 'lucide-react';
 import { AIOrchestrator } from '../utils/AIOrchestrator.js';
 
 const COMMANDS = [
-  { id: 'ide', label: 'Open IDE', icon: FileCode, category: 'Apps' },
-  { id: 'terminal', label: 'Open Terminal', icon: Terminal, category: 'Apps' },
-  { id: 'browser', label: 'Open Browser', icon: Globe, category: 'Apps' },
-  { id: 'git', label: 'Open Git', icon: GitBranch, category: 'Apps' },
-  { id: 'files', label: 'Open Files', icon: FolderOpen, category: 'Apps' },
-  { id: 'pixai', label: 'PixAI Art Studio', icon: Image, category: 'Apps' },
-  { id: 'secrets', label: 'Secrets Manager', icon: Shield, category: 'Apps' },
-  { id: 'settings', label: 'Settings', icon: Settings, category: 'Apps' },
-  { id: 'billing', label: 'Billing', icon: CreditCard, category: 'Apps' },
-  { id: 'profile', label: 'Profile', icon: User, category: 'Apps' },
-  { id: 'new-file', label: 'New File', icon: Plus, category: 'Actions', shortcut: 'Ctrl+N' },
-  { id: 'dark-mode', label: 'Toggle Dark Mode', icon: Moon, category: 'Preferences' },
-  { id: 'logout', label: 'Logout', icon: LogOut, category: 'Account' },
+  // ─── Creative ───
+  { id: 'art-studio', label: 'Art Studio', icon: Paintbrush, category: 'Creative' },
+  { id: 'art-gallery', label: 'Art Gallery', icon: Image, category: 'Creative' },
+  { id: 'clothing-creator', label: 'Clothing Creator', icon: Shirt, category: 'Creative' },
+  { id: 'outfit-generator', label: 'Outfit Generator', icon: Wand2, category: 'Creative' },
+  { id: 'avatar-builder', label: 'Avatar Builder', icon: User, category: 'Creative' },
+  { id: 'avatar-gallery', label: 'Avatar Gallery', icon: GridIcon, category: 'Creative' },
+  { id: 'outfit-manager', label: 'Wardrobe Manager', icon: Heart, category: 'Creative' },
+  { id: 'comic-creator', label: 'Comic Creator', icon: Palette, category: 'Creative' },
+
+  // ─── Writing ───
+  { id: 'literature-ide', label: 'Literature IDE', icon: BookOpen, category: 'Writing' },
+  { id: 'poems', label: 'Poems Creator', icon: Feather, category: 'Writing' },
+  { id: 'collab-writing', label: 'Collaborative Writing', icon: PenTool, category: 'Writing' },
+  { id: 'writing-library', label: 'Writing Library', icon: Library, category: 'Writing' },
+
+  // ─── Dev Tools ───
+  { id: 'ide', label: 'Cybeni IDE', icon: FileCode, category: 'Development', shortcut: 'Ctrl+I' },
+  { id: 'website-builder', label: 'Website Builder', icon: Globe, category: 'Development' },
+  { id: 'vibe-coding', label: 'Vibe Coding', icon: Zap, category: 'Development' },
+  { id: 'creator-studio', label: 'Creator Studio', icon: Wrench, category: 'Development' },
+  { id: 'constructor', label: 'Constructor', icon: Blocks, category: 'Development' },
+  { id: 'script-fusion', label: 'Script Fusion', icon: GitMerge, category: 'Development' },
+  { id: 'workspace', label: 'Workspace Manager', icon: FolderOpen, category: 'Development' },
+  { id: 'dojo', label: 'Dojo Arena', icon: Swords, category: 'Development' },
+  { id: 'avatar-creator', label: 'Living Avatar Creator', icon: Smile, category: 'Development' },
+  { id: 'git', label: 'Git Interface', icon: GitBranch, category: 'Development', shortcut: 'Ctrl+G' },
+  { id: 'catalyst', label: 'Catalyst Station', icon: Rocket, category: 'Development', shortcut: 'Ctrl+Shift+C' },
+
+  // ─── Media ───
+  { id: 'music-composer', label: 'Music Composer', icon: Music, category: 'Media' },
+  { id: 'live-broadcast', label: 'Live Broadcast', icon: Radio, category: 'Media' },
+  { id: 'media', label: 'Media Player', icon: Play, category: 'Media' },
+  { id: 'media-library', label: 'Media Library', icon: FolderOpen, category: 'Media' },
+
+  // ─── AI ───
+  { id: 'social', label: 'Social Network', icon: MessageSquare, category: 'AI' },
+  { id: 'chat', label: 'AI Chat', icon: MessageSquare, category: 'AI' },
+  { id: 'voice', label: 'Voice Chat', icon: Phone, category: 'AI' },
+  { id: 'ai-assistant', label: 'Aura Assistant', icon: Brain, category: 'AI' },
+  { id: 'ai-companion', label: 'Nova AI', icon: Bot, category: 'AI' },
+  { id: 'vertex', label: 'Vertex AI', icon: Sparkles, category: 'AI' },
+  { id: 'pixai', label: 'PixAI Art Studio', icon: Image, category: 'AI' },
+  { id: 'bg-remover', label: 'Background Remover', icon: Eraser, category: 'AI' },
+
+  // ─── Utility ───
+  { id: 'terminal', label: 'Terminal', icon: Terminal, category: 'Utility', shortcut: 'Ctrl+T' },
+  { id: 'browser', label: 'Web Browser', icon: Globe, category: 'Utility', shortcut: 'Ctrl+B' },
+  { id: 'business-card', label: 'Business Cards', icon: CreditCard, category: 'Utility' },
+  { id: 'tax-filing', label: 'Tax Filing', icon: FileCode, category: 'Utility' },
+  { id: 'weather', label: 'Weather', icon: CloudSun, category: 'Utility' },
+  { id: 'system-diagnostics', label: 'System Health', icon: Activity, category: 'Utility' },
+  { id: 'crypto', label: 'Crypto Markets', icon: Bitcoin, category: 'Utility' },
+  { id: 'calculator', label: 'Calculator', icon: Calculator, category: 'Utility' },
+  { id: 'notifications', label: 'Notifications', icon: BellRing, category: 'Utility' },
+  { id: 'profile', label: 'User Profile', icon: User, category: 'Utility' },
+  { id: 'appstore', label: 'Repo Station', icon: Store, category: 'Utility' },
+  { id: 'platform', label: 'NovAura Platform', icon: ShoppingBag, category: 'Utility' },
+
+  // ─── Business ───
+  { id: 'business-operator', label: 'Venture Orchestrator', icon: Briefcase, category: 'Business' },
+  { id: 'nova-concierge', label: 'Ecosystem Manager', icon: Sparkles, category: 'Business' },
+  { id: 'admin-panel', label: 'Admin Panel', icon: Shield, category: 'Admin' },
+
+  // ─── Learn & Play ───
+  { id: 'challenges', label: 'Coding Challenges', icon: Dumbbell, category: 'Learn' },
+  { id: 'psychometrics', label: 'Psychometrics', icon: BrainCircuit, category: 'Learn' },
+  { id: 'games-arena', label: 'Games Arena', icon: Gamepad2, category: 'Play' },
+  { id: 'aetherium-tcg', label: 'Aetherium TCG', icon: Swords, category: 'Play' },
+  { id: 'gilded-cage', label: 'The Gilded Cage', icon: Crown, category: 'Play' },
+  { id: 'inventory', label: 'Inventory Manager', icon: Package, category: 'Play' },
+
+  // ─── System ───
+  { id: 'secrets', label: 'Secrets Manager', icon: Shield, category: 'System' },
+  { id: 'settings', label: 'Theme & Settings', icon: Settings, category: 'System', shortcut: 'Ctrl+S' },
+  { id: 'billing', label: 'Billing & Plans', icon: CreditCard, category: 'System' },
+  { id: 'logout', label: 'Logout Session', icon: LogOut, category: 'Account' },
 ];
 
 export default function CommandPalette({ isOpen, onClose, onSelect }) {

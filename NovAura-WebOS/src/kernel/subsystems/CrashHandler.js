@@ -19,7 +19,7 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
-  'https://us-central1-novaura-systems.cloudfunctions.net/api';
+  'https://us-central1-novaura-life.cloudfunctions.net/api';
 
 // ─── Noise Filter ───────────────────────────────────────────────────────────
 // These patterns are known-benign or external; never log or repair them.

@@ -11,7 +11,7 @@ if (!stripeKey) {
   console.error('[Stripe] STRIPE_SECRET_KEY not set. Stripe features will be disabled.');
 }
 const stripe = stripeKey ? new Stripe(stripeKey, {
-  apiVersion: '2026-03-25.dahlia' as any,
+  apiVersion: '2024-06-20', // Use a stable, real API version
 }) : null;
 
 const PLATFORM_URL = process.env.VITE_APP_URL || 'http://localhost:5173';
@@ -314,12 +314,17 @@ router.post('/webhook', async (req: Request, res: Response) => {
       // req.body is a Buffer here (express.raw middleware applied in app.ts)
       event = stripe!.webhooks.constructEvent(req.body, sig as string, webhookSecret);
     } catch (err: any) {
-      console.error('[Stripe Webhook] Signature verification failed:', err.message);
-      return res.status(400).json({ error: `Webhook signature invalid: ${err.message}` });
+      console.error(`[Stripe Webhook] Signature verification failed: ${err.message}`);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
     }
   } else {
-    // Dev mode — no signature verification
-    event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    // FALLBACK for development ONLY - in production this will be blocked by the secret check
+    console.warn('[Stripe Webhook] WARNING: Running without webhook secret verification!');
+    try {
+      event = JSON.parse(req.body.toString());
+    } catch (err) {
+      return res.status(400).send('Invalid JSON body');
+    }
   }
 
   const db = admin.firestore();

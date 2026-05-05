@@ -264,7 +264,7 @@ export default function BusinessOperatorWindow() {
   const [secrets, setSecrets] = useState([
     { id: 1, name: 'Shopify API', type: 'api_key' },
     { id: 2, name: 'Google Cloud', type: 'oauth' },
-    { id: 3, name: 'Alibaba Cloud', type: 'api_key' },
+    { id: 3, name: 'Alibaba Cloud (Production)', type: 'api_key', configured: true },
   ]);
   const [businessMetrics, setBusinessMetrics] = useState({
     monthlyRevenue: 2847,

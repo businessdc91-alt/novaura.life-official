@@ -3,11 +3,13 @@ import {
   Bot, Send, X, Maximize2, Minimize2, ExternalLink,
   Trash2, FileCode, Copy, Check, Download, ChevronDown,
   Loader2, Sparkles, Cpu, Wifi, WifiOff, Eye,
-  FolderOpen, Terminal, Image, Globe, Zap, MessageCircle, Minus
+  FolderOpen, Terminal, Image, Globe, Zap, MessageCircle, Minus,
+  Search, RefreshCw
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { useKernel } from '../../kernel/useKernel.js';
+import { BACKEND_URL } from '../../services/aiService.js';
 
 // ─── Code Block Component ────────────────────────────────────────────────────
 function CodeBlock({ code, language, onSaveToIDE }) {
@@ -57,9 +59,10 @@ function ToolResultBadge({ result }) {
 }
 
 // ─── Message Renderer ─────────────────────────────────────────────────────────
-function MessageBubble({ message, onSaveToIDE }) {
+function MessageBubble({ message, onSaveToIDE, onRetry }) {
   const isUser = message.role === 'user';
   const content = message.content || '';
+  const isError = message.isError;
 
   // Parse code blocks from content
   const parts = useMemo(() => {
@@ -98,15 +101,27 @@ function MessageBubble({ message, onSaveToIDE }) {
         )}
 
         {/* Bubble */}
-        <div className={`rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed ${
+        <div className={`rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed relative group ${
           isUser
             ? 'bg-primary/20 border border-primary/30 text-white/90'
-            : 'bg-white/5 border border-white/10 text-white/80'
+            : isError 
+              ? 'bg-red-500/10 border border-red-500/20 text-red-400' 
+              : 'bg-white/5 border border-white/10 text-white/80'
         }`}>
           {parts.map((part, i) =>
             part.type === 'code'
               ? <CodeBlock key={i} code={part.content} language={part.language} onSaveToIDE={onSaveToIDE} />
               : <p key={i} className="whitespace-pre-wrap">{part.content}</p>
+          )}
+
+          {isError && onRetry && (
+            <button 
+              onClick={onRetry}
+              className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded bg-red-500/20 border border-red-500/30 text-[10px] text-red-400 hover:bg-red-500/30 transition-all"
+            >
+              <Zap className="w-3 h-3" />
+              Retry Request
+            </button>
           )}
         </div>
 
@@ -177,56 +192,191 @@ function QuickActions({ onAction }) {
   );
 }
 
-// ─── Model Selector ───────────────────────────────────────────────────────────
-function ModelSelector({ currentModel, onSelect }) {
-  const models = [
-    { id: 'gemini-3.1-flash', name: 'Gemini 3.1 Flash', desc: 'Optimized Speed', color: 'text-cyan-400' },
-    { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', desc: 'Ultimate Intelligence', color: 'text-purple-400' },
-    { id: 'amazon.nova-pro-v1:0', name: 'Amazon Nova Pro', desc: 'Multimodal / AWS Nova', color: 'text-orange-400' },
-    { id: 'qwen-max', name: 'Qwen Max (Cybeni)', desc: 'Reasoning Specialist', color: 'text-red-400' },
-    { id: 'webgpu-local', name: 'WebLLM (Local GPU)', desc: 'Privacy-First / Browser-Native', color: 'text-cyan-400' },
-  ];
+// ─── Model Selector (Dynamic — live from OpenRouter catalog) ─────────────────
+const CATEGORY_TABS = ['all', 'general', 'coding', 'reasoning', 'vision'];
+const FALLBACK_MODELS = [
+  { id: 'google/gemma-4-31b-it:free',                   name: 'Gemma 4 31B',        isFree: true,  categories: ['general'], contextLength: 131072 },
+  { id: 'google/gemma-4-26b-a4b-it:free',               name: 'Gemma 4 26B A4B',    isFree: true,  categories: ['general'], contextLength: 131072 },
+  { id: 'qwen/qwen3-coder-480b-a35b:free',              name: 'Qwen3 Coder 480B',   isFree: true,  categories: ['coding'],  contextLength: 131072 },
+  { id: 'nvidia/llama-3.3-nemotron-super-49b-v1:free',  name: 'Nemotron Super 49B', isFree: true,  categories: ['general'], contextLength: 131072 },
+  { id: 'qwen/qwen3-80b-a3b:free',                      name: 'Qwen3 80B A3B',      isFree: true,  categories: ['general'], contextLength: 40960  },
+  { id: 'nousresearch/hermes-3-llama-3.1-405b:free',    name: 'Hermes 3 405B',      isFree: true,  categories: ['general'], contextLength: 131072 },
+  { id: 'google/gemini-2.0-flash-001',                  name: 'Gemini 2.0 Flash',   isFree: false, categories: ['general'], contextLength: 1048576 },
+  { id: 'qwen/qwen-max',                                name: 'Qwen Max',            isFree: false, categories: ['reasoning'], contextLength: 131072 },
+];
 
-  const [isOpen, setIsOpen] = useState(false);
-  const activeModel = models.find(m => m.id === currentModel) || models[0];
+function ModelSelector({ currentModel, onSelect }) {
+  const [isOpen, setIsOpen]         = useState(false);
+  const [models, setModels]         = useState(FALLBACK_MODELS);
+  const [loading, setLoading]       = useState(false);
+  const [search, setSearch]         = useState('');
+  const [activeTab, setActiveTab]   = useState('all');
+  const [hasFetched, setHasFetched] = useState(false);
+
+  // Fetch live models when the picker opens for the first time
+  const fetchModels = useCallback(async (force = false) => {
+    if ((hasFetched && !force) || loading) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/ai/models?free=true`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models?.length) {
+          // Sort: longer context first, then alphabetically
+          data.models.sort((a, b) => (b.contextLength || 0) - (a.contextLength || 0) || a.name.localeCompare(b.name));
+          setModels(data.models);
+          setHasFetched(true);
+        }
+      }
+    } catch {
+      // silently keep fallback
+    } finally {
+      setLoading(false);
+    }
+  }, [hasFetched, loading]);
+
+  const handleOpen = () => {
+    setIsOpen(true);
+    fetchModels();
+  };
+
+  const filtered = useMemo(() => {
+    let list = models;
+    if (activeTab !== 'all') list = list.filter(m => m.categories?.includes(activeTab));
+    if (search) {
+      const s = search.toLowerCase();
+      list = list.filter(m => m.id.toLowerCase().includes(s) || m.name.toLowerCase().includes(s));
+    }
+    return list;
+  }, [models, activeTab, search]);
+
+  const activeModel = models.find(m => m.id === currentModel) || FALLBACK_MODELS[0];
+
+  const formatCtx = (n) => {
+    if (!n) return '';
+    if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1)}M ctx`;
+    if (n >= 1_000) return `${Math.round(n/1_000)}K ctx`;
+    return `${n} ctx`;
+  };
 
   return (
     <div className="relative">
-      <button 
-        onClick={() => setIsOpen(!isOpen)}
+      <button
+        onClick={handleOpen}
         className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 border border-white/10 hover:border-cyan-500/30 transition-all group"
       >
-        <div className={`w-1 h-1 rounded-full ${activeModel.color} animate-pulse`} />
-        <span className="text-[9px] font-medium text-white/50 group-hover:text-cyan-400">{activeModel.name}</span>
-        <ChevronDown className={`w-2.5 h-2.5 text-white/20 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <div className={`w-1 h-1 rounded-full ${activeModel.isFree ? 'bg-emerald-400' : 'bg-cyan-400'} animate-pulse`} />
+        <span className="text-[9px] font-medium text-white/50 group-hover:text-cyan-400 max-w-[80px] truncate">{activeModel.name}</span>
+        {loading
+          ? <RefreshCw className="w-2.5 h-2.5 text-white/20 animate-spin" />
+          : <ChevronDown className={`w-2.5 h-2.5 text-white/20 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        }
       </button>
 
       <AnimatePresence>
         {isOpen && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 5 }}
-            className="absolute top-full mt-1.5 right-0 w-44 p-1 rounded-lg bg-[#0c0c14] border border-cyan-500/20 shadow-2xl z-50 backdrop-blur-xl"
+            className="absolute top-full mt-1.5 right-0 w-72 rounded-xl bg-[#0a0a12] border border-cyan-500/20 shadow-2xl z-50 backdrop-blur-xl overflow-hidden"
           >
-            {models.map(m => (
+            {/* Header */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
+              <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">OpenRouter Models</span>
               <button
-                key={m.id}
-                onClick={() => { onSelect(m.id); setIsOpen(false); }}
-                className={`w-full text-left p-1.5 rounded transition-colors flex flex-col gap-0.5 ${
-                  currentModel === m.id ? 'bg-cyan-500/10' : 'hover:bg-white/5'
-                }`}
+                onClick={() => fetchModels(true)}
+                className="p-1 rounded hover:bg-white/10 text-white/20 hover:text-cyan-400 transition-colors"
+                title="Refresh model catalog"
               >
-                <div className="flex items-center justify-between">
-                  <span className={`text-[10px] font-semibold ${m.color}`}>{m.name}</span>
-                  {currentModel === m.id && <Check className="w-3 h-3 text-cyan-400" />}
-                </div>
-                <span className="text-[8px] text-white/20">{m.desc}</span>
+                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
               </button>
-            ))}
+            </div>
+
+            {/* Search */}
+            <div className="px-2 py-1.5 border-b border-white/5">
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white/5 border border-white/5">
+                <Search className="w-3 h-3 text-white/20" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search models..."
+                  className="flex-1 bg-transparent text-[10px] text-white/70 placeholder-white/20 outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Category tabs */}
+            <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5 overflow-x-auto">
+              {CATEGORY_TABS.map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-2 py-0.5 rounded text-[8px] font-medium capitalize transition-colors whitespace-nowrap ${
+                    activeTab === tab
+                      ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                      : 'text-white/30 hover:text-white/60'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            {/* Model list */}
+            <div className="max-h-[260px] overflow-y-auto p-1">
+              {loading && filtered.length === 0 ? (
+                <div className="flex items-center justify-center py-4 gap-2 text-white/20">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span className="text-[10px]">Loading catalog...</span>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="text-center py-4 text-[10px] text-white/20">No models found</div>
+              ) : (
+                filtered.map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => { onSelect(m.id); setIsOpen(false); setSearch(''); }}
+                    className={`w-full text-left p-2 rounded-lg transition-colors flex items-start justify-between gap-2 ${
+                      currentModel === m.id ? 'bg-cyan-500/10 border border-cyan-500/20' : 'hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-semibold text-white/70 truncate">{m.name}</span>
+                        {m.isFree && (
+                          <span className="shrink-0 text-[7px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold">FREE</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[8px] text-white/20 truncate">{m.id.split('/')[0]}</span>
+                        {m.contextLength > 0 && (
+                          <span className="text-[8px] text-cyan-400/50">{formatCtx(m.contextLength)}</span>
+                        )}
+                      </div>
+                    </div>
+                    {currentModel === m.id && <Check className="w-3 h-3 text-cyan-400 shrink-0 mt-0.5" />}
+                  </button>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-3 py-2 border-t border-white/5 flex items-center justify-between">
+              <span className="text-[8px] text-white/15">{filtered.length} models</span>
+              <button onClick={() => setIsOpen(false)} className="text-[8px] text-white/20 hover:text-white/40">
+                Close
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Click-outside dismiss */}
+      {isOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+      )}
     </div>
   );
 }
@@ -239,7 +389,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
-  const [model, setModel] = useState('gemini-3.1-flash'); // Nova defaults to Flash 3.1
+  const [model, setModel] = useState('openrouter:google/gemma-4-31b-it:free'); // Nova defaults to Gemma 4 31B via OpenRouter
   const [context, setContext] = useState(null);
   const [showContext, setShowContext] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
@@ -292,16 +442,33 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
     }
   }, [isOpen, isPopout]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (textOverride) => {
+    const text = (typeof textOverride === 'string' ? textOverride : input).trim();
     if (!text || !agent) return;
 
-    setInput('');
-    const { response, toolResults } = await agent.chat(text, { persona: 'nova', model });
+    if (!textOverride) setInput('');
+
+    // If user manually selected an openrouter model, bypass persona routing and call directly
+    if (model.startsWith('openrouter:')) {
+      const orModel = model.replace('openrouter:', '');
+      const result = await agent.chat(text, { persona: 'nova', model: orModel, provider: 'openrouter', overrideProvider: true });
+      if (result.toolResults?.length > 0) {
+        for (const tr of result.toolResults) {
+          if (tr.success) toast.success(`Nova executed: ${tr.tool}`, { duration: 3000 });
+          else toast.error(`Tool failed: ${tr.tool} — ${tr.error}`, { duration: 5000 });
+        }
+      }
+      return;
+    }
+
+    const result = await agent.chat(text, { persona: 'nova', model });
+    
+    // If successful, result is { response, toolResults }
+    // If failed, result is { response, toolResults, isError: true }
 
     // Show tool execution results as toasts
-    if (toolResults?.length > 0) {
-      for (const tr of toolResults) {
+    if (result.toolResults?.length > 0) {
+      for (const tr of result.toolResults) {
         if (tr.success) {
           toast.success(`Nova executed: ${tr.tool}`, { duration: 3000 });
         } else {
@@ -310,6 +477,14 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
       }
     }
   }, [input, agent, model]);
+
+  const handleRetry = useCallback(() => {
+    // Find the last user message to retry
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+    if (lastUserMsg) {
+      handleSend(lastUserMsg.content);
+    }
+  }, [messages, handleSend]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -418,6 +593,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
             key={msg.id || i}
             message={msg}
             onSaveToIDE={handleSaveToIDE}
+            onRetry={i === messages.length - 1 ? handleRetry : undefined}
           />
         ))}
 

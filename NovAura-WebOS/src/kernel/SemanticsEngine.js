@@ -734,14 +734,6 @@ export const WINDOW_TYPES = {
     keywords: ['calculator', 'math', 'calculate', 'compute'],
     defaultProps: {}
   },
-  'gilded-cage': {
-    name: 'The Gilded Cage',
-    description: 'AI relationship simulation game',
-    icon: 'heart-crack',
-    category: 'entertainment',
-    keywords: ['game', 'gilded cage', 'relationship', 'simulation'],
-    defaultProps: {}
-  },
   'imagen': {
     name: 'Imagen',
     description: 'Google Imagen image generation',
@@ -867,7 +859,7 @@ class SemanticsEngine {
 
   init(kernel) {
     this._kernel = kernel;
-    this._windowManager = kernel.windowManager;
+    this._windowManager = kernel.wm;
     this._ipc = kernel.ipc;
     
     // Update registry with dynamic window types

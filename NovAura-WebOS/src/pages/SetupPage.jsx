@@ -193,8 +193,12 @@ export default function SetupPage({ onComplete }) {
       <Card className="relative z-10 w-full max-w-2xl p-8 glass border-primary/30 shadow-[0_0_60px_rgba(0,217,255,0.2)]">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-primary via-secondary to-accent mb-4">
-            <Sparkles className="w-10 h-10 text-white" />
+          <div className="w-20 h-20 mb-4">
+            <img 
+              src={`${import.meta.env.BASE_URL}logo.png`} 
+              alt="NovAura Logo" 
+              className="w-full h-full object-contain filter drop-shadow-[0_0_15px_rgba(0,217,255,0.4)]"
+            />
           </div>
           <h1 className="text-4xl font-bold bg-gradient-to-r from-primary via-secondary to-accent bg-clip-text text-transparent mb-2" data-testid="setup-title">
             NovAura AI OS

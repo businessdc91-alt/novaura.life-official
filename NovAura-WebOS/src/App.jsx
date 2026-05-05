@@ -2,14 +2,14 @@ import React, { useState, useCallback, useEffect, useRef, Suspense, lazy } from 
 import ParticleBackground from './components/ParticleBackground';
 import ChatBar from './components/ChatBar';
 import Toolbar from './components/Toolbar';
-import { useSystemTelemetry } from './hooks/useSystemTelemetry';
 import WindowManager from './components/WindowManager';
 import MobileLayout from './components/MobileLayout';
 import { LayoutToggle } from './components/LayoutToggle';
 import SetupPage from './pages/SetupPage';
 import AuthPage from './pages/AuthPage';
 import LandingPage from './pages/LandingPage';
-import { Toaster } from './components/ui/sonner';
+const AboutPage = lazy(() => import('./pages/AboutPage'));
+import { Toaster, toast } from 'sonner';
 import { LeftSidebar, RightSidebar } from './components/Sidebar';
 import AvatarButton from './components/AvatarButton';
 import OnboardingWizard, { HelpButton } from './components/OnboardingWizard';
@@ -18,17 +18,18 @@ import CommandPalette from './components/CommandPalette';
 import AuraChatHistory from './components/AuraChatHistory';
 import { useCommandPalette } from './hooks/useCommandPalette';
 import { useLayoutMode } from './hooks/useLayoutMode';
-import { toast } from 'sonner';
 import { MessageSquare, Shield, Smartphone } from 'lucide-react';
-import { AIOrchestrator } from './utils/AIOrchestrator';
+import AIOrchestrator from './utils/AIOrchestrator';
 import { smartChat } from './services/aiService';
-import { auth, isFirebaseConfigured } from './config/firebase';
+import { auth, isFirebaseConfigured, db } from './config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { loadUserPrefs, saveUserPref, recordSession } from './services/userService';
+import { kernelStorage } from './kernel/kernelStorage.js';
+
 // Nova & Aura — persistent AI companions (always visible, kernel-connected)
 const NovaChatFloating = lazy(() => import('./components/windows/NovaChatWindow'));
 const AuraChatFloating = lazy(() => import('./components/windows/AuraChatWindow'));
-import { kernelStorage } from './kernel/kernelStorage.js';
 
 // Lazy load window components for mobile layout
 const windowComponents = {
@@ -90,7 +91,6 @@ const windowComponents = {
   'weather': lazy(() => import('./components/windows/WeatherWindow')),
   'crypto': lazy(() => import('./components/windows/CryptoWindow')),
   'calculator': lazy(() => import('./components/windows/CalculatorWindow')),
-  'gilded-cage': lazy(() => import('./components/games/GildedCageGame')),
   'voice-studio': lazy(() => import('./components/windows/VoiceStudioWindow')),
   'music-studio': lazy(() => import('./components/windows/MusicStudioWindow')),
   'practice-tools': lazy(() => import('./components/windows/PracticeToolsWindow')),
@@ -107,6 +107,9 @@ const windowComponents = {
   'user-key-hub': lazy(() => import('./components/windows/UserKeyHubWindow')),
   'platform': lazy(() => import('./components/windows/PlatformWindow')),
   'founding-father-chat': lazy(() => import('./components/windows/FoundingFathersChatWindow')),
+  'aura-mail': lazy(() => import('./components/windows/AuraMailWindow')),
+  'about': lazy(() => import('./components/windows/AboutWindow')),
+  'catalyst': lazy(() => import('./components/windows/CatalystCommandStation')),
 };
 
 export default function App() {
@@ -139,6 +142,7 @@ export default function App() {
     setAuto, 
     toggleMode 
   } = useLayoutMode();
+
 
   useEffect(() => {
     // Check if we are on the OS, System, or window deep-link path
@@ -206,13 +210,7 @@ export default function App() {
     }
   }, []);
 
-  // Auto-save open windows to session storage whenever they change
-  useEffect(() => {
-    try {
-      const saveable = windows.map(w => ({ type: w.type, title: w.title, props: w.props || {} }));
-      kernelStorage.setItem('novaura_session_windows', JSON.stringify(saveable));
-    } catch (e) { /* ignore */ }
-  }, [windows]);
+
 
   // Firebase Auth — sole source of truth. No localStorage bypass.
   useEffect(() => {
@@ -248,7 +246,24 @@ export default function App() {
         }
         
         const savedConfig = kernelStorage.getItem('llm_config');
-        if (savedConfig) { setLlmConfig(JSON.parse(savedConfig)); setIsSetupComplete(true); }
+        if (savedConfig) { 
+          setLlmConfig(JSON.parse(savedConfig)); 
+          setIsSetupComplete(true); 
+        } else {
+          // Check Firestore for remote config sync
+          try {
+            const userRef = doc(db, 'users', firebaseUser.uid);
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists() && userSnap.data().llmConfig) {
+              const remoteConfig = userSnap.data().llmConfig;
+              setLlmConfig(remoteConfig);
+              kernelStorage.setItem('llm_config', JSON.stringify(remoteConfig));
+              setIsSetupComplete(true);
+            }
+          } catch (e) {
+            console.warn('[Sync] Failed to fetch remote config:', e);
+          }
+        }
       } else {
         setCurrentUser(null);
         setIsAuthenticated(false);
@@ -260,6 +275,8 @@ export default function App() {
 
     return () => unsubscribe();
   }, []);
+
+
 
   // Keep novaura.life as the landing page only.
   // Do not auto-activate the Web OS unless the user explicitly clicks the OS launch link.
@@ -276,12 +293,28 @@ export default function App() {
     setIsAuthenticated(true);
   };
 
-  const handleSetupComplete = (config) => {
+  const handleSetupComplete = async (config) => {
     setLlmConfig(config);
     setIsSetupComplete(true);
 
     const windowManagerAPI = { openWindow, closeWindow, focusWindow };
     orchestratorRef.current = new AIOrchestrator(windowManagerAPI, toast);
+
+    // Sync to Firestore immediately
+    if (currentUser?.uid) {
+      try {
+        const userRef = doc(db, 'users', currentUser.uid);
+        await setDoc(userRef, { 
+          llmConfig: config,
+          lastActive: Date.now(),
+          email: currentUser.email,
+          displayName: currentUser.displayName
+        }, { merge: true });
+        console.log('[Sync] Config pushed to Firestore');
+      } catch (e) {
+        console.warn('[Sync] Failed to push config:', e);
+      }
+    }
 
     toast.success('AI Environment Ready!', {
       description: `Using ${config.useLocalLLM ? 'Local LLM + ' : ''}Gemini AI`,
@@ -554,7 +587,6 @@ export default function App() {
       'avatar-creator': 'Living Avatar',
       'live-ai': 'Nova Live',
       'graphics-settings': 'Graphics Settings',
-      'gilded-cage': 'The Gilded Cage',
       'voice-studio': 'Voice Studio',
       'music-studio': 'Music Studio',
       'practice-tools': 'Practice Tools',
@@ -565,6 +597,9 @@ export default function App() {
       'music-tools': 'Music Tools',
       'founding-catalyst-chat': 'Founding Fathers Lounge',
       'platform': 'NovAura Platform',
+      'aura-mail': 'AuraMail',
+      'about': 'About NovAura',
+      'catalyst': 'Catalyst Command Station',
     };
     return titles[type] || 'Window';
   };
@@ -605,12 +640,22 @@ export default function App() {
     }
   }, [isSetupComplete, pendingWindow]);
 
+  // About Page Route
+  if (window.location.pathname === '/about' || window.location.pathname === '/about/') {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center text-white"><Zap className="w-8 h-8 animate-pulse text-cyan-400" /></div>}>
+        <AboutPage />
+      </Suspense>
+    );
+  }
+
   // Landing page (search engine) - entry point for all users
   if (!showOS) {
     return (
       <>
         <LandingPage 
           onLaunchOS={handleLaunchOS}
+          showOS={showOS}
         />
         <Toaster position="top-right" />
       </>
@@ -673,28 +718,16 @@ export default function App() {
         <CommandPalette
           isOpen={isCommandPaletteOpen}
           onClose={closeCommandPalette}
-          onSelect={(commandId) => {
-            const windowMap = {
-              'ide': () => openWindow('ide', 'Cybeni IDE'),
-              'terminal': () => openWindow('terminal', 'Terminal'),
-              'browser': () => openWindow('browser', 'AI Browser'),
-              'git': () => openWindow('git', 'Git'),
-              'files': () => openWindow('files', 'Files'),
-              'pixai': () => openWindow('pixai', 'PixAI Art Studio'),
-              'secrets': () => openWindow('secrets', 'Secrets Manager'),
-              'settings': () => openWindow('personalization', 'Settings'),
-              'diagnostics': () => openWindow('system-diagnostics', 'System Diagnostics'),
-              'nova': () => openWindow('nova-chat', 'Nova'),
-              'security': () => openWindow('security-monitor', 'Sentinel Shield'),
-              'profile': () => openWindow('profile', 'Profile'),
-              'billing': () => openWindow('billing', 'Billing'),
-              'platform': () => openWindow('platform', 'NovAura Platform'),
-            };
-            
-            if (windowMap[commandId]) {
-              windowMap[commandId]();
-              toast.success(`Opened ${commandId}`);
-            } else if (commandId === 'dark-mode') {
+          onSelect={(commandId, label, params) => {
+            // Handle AI Intent first
+            if (label && params) {
+              openWindow(commandId, label, params);
+              toast.success(`AI Intent: ${label}`);
+              return;
+            }
+
+            // Map commands to window openings
+            if (commandId === 'dark-mode') {
               const newTheme = theme === 'cosmic' ? 'blue-night' : 'cosmic';
               setTheme(newTheme);
               kernelStorage.setItem('novaura-theme', newTheme);
@@ -702,6 +735,11 @@ export default function App() {
               toast.success(`Theme: ${newTheme}`);
             } else if (commandId === 'logout') {
               handleLogout();
+            } else {
+              // Standard app opening
+              const title = getWindowTitle(commandId);
+              openWindow(commandId, title);
+              toast.success(`Opened ${title}`);
             }
           }}
         />
@@ -755,7 +793,6 @@ export default function App() {
           window.location.href = 'https://novaura.life';
         }}
         userTier={userTier}
-        telemetry={telemetry}
       />
       <RightSidebar 
         onOpenWindow={openWindow} 
@@ -784,7 +821,7 @@ export default function App() {
                 <polyline points="18 15 12 9 6 15" />
               </svg>
             </button>
-            <ChatBar onSubmit={handleChatSubmit} llmConfig={llmConfig} telemetry={telemetry} />
+            <ChatBar onSubmit={handleChatSubmit} llmConfig={llmConfig} />
           </div>
         </div>
       </div>
@@ -822,28 +859,16 @@ export default function App() {
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={closeCommandPalette}
-        onSelect={(commandId) => {
+        onSelect={(commandId, label, params) => {
+          // Handle AI Intent first
+          if (label && params) {
+            openWindow(commandId, label, params);
+            toast.success(`AI Intent: ${label}`);
+            return;
+          }
+
           // Map commands to window openings
-          const windowMap = {
-            'ide': () => openWindow('ide', 'Cybeni IDE'),
-            'terminal': () => openWindow('terminal', 'Terminal'),
-            'browser': () => openWindow('browser', 'AI Browser'),
-            'git': () => openWindow('git', 'Git'),
-            'files': () => openWindow('files', 'Files'),
-            'pixai': () => openWindow('pixai', 'PixAI Art Studio'),
-            'secrets': () => openWindow('secrets', 'Secrets Manager'),
-            'settings': () => openWindow('personalization', 'Settings'),
-            'diagnostics': () => openWindow('system-diagnostics', 'System Diagnostics'),
-            'nova': () => openWindow('nova-chat', 'Nova'),
-            'security': () => openWindow('security-monitor', 'Sentinel Shield'),
-            'profile': () => openWindow('profile', 'Profile'),
-            'billing': () => openWindow('billing', 'Billing'),
-          };
-          
-          if (windowMap[commandId]) {
-            windowMap[commandId]();
-            toast.success(`Opened ${commandId}`);
-          } else if (commandId === 'dark-mode') {
+          if (commandId === 'dark-mode') {
             const newTheme = theme === 'cosmic' ? 'blue-night' : 'cosmic';
             setTheme(newTheme);
             kernelStorage.setItem('novaura-theme', newTheme);
@@ -851,6 +876,11 @@ export default function App() {
             toast.success(`Theme: ${newTheme}`);
           } else if (commandId === 'logout') {
             handleLogout();
+          } else {
+            // Standard app opening
+            const title = getWindowTitle(commandId);
+            openWindow(commandId, title);
+            toast.success(`Opened ${title}`);
           }
         }}
       />

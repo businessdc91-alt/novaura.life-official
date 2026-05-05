@@ -97,19 +97,19 @@ function ParticleField() {
       if (frame % 2 === 0) {
         ctx.strokeStyle = 'rgba(0, 212, 255, 0.05)';
         ctx.lineWidth = 0.5;
+        ctx.beginPath();
         for (let i = 0; i < particles.length; i++) {
           for (let j = i + 1; j < particles.length; j++) {
             const dx = particles[i].x - particles[j].x;
             const dy = particles[i].y - particles[j].y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < 80) {
-              ctx.beginPath();
+            const distSq = dx * dx + dy * dy;
+            if (distSq < 6400) { // 80 * 80
               ctx.moveTo(particles[i].x, particles[i].y);
               ctx.lineTo(particles[j].x, particles[j].y);
-              ctx.stroke();
             }
           }
         }
+        ctx.stroke();
       }
 
       raf = requestAnimationFrame(loop);

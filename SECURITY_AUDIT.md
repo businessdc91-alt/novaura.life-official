@@ -29,10 +29,11 @@ const key = providedKey || import.meta.env.VITE_PIXAI_API_KEY;
 ## Current Secure Architecture
 
 ### Backend (Firebase Functions)
+
 **Location**: `NovAura-WebOS/functions/`
 
 | Component | Purpose | Status |
-|-----------|---------|--------|
+| :--- | :--- | :--- |
 | `src/api/routes/ai.ts` | AI chat/builder proxy for 12+ providers | ✅ Active |
 | `src/api/routes/generation.ts` | Image generation via PixAI/Vertex | ✅ Active |
 | `src/services/secretService.ts` | Secure env var key management | ✅ Active |
@@ -42,16 +43,18 @@ const key = providedKey || import.meta.env.VITE_PIXAI_API_KEY;
 **Supported Providers**: Azure, Gemini, Claude, OpenAI, Kimi, Alibaba, Novita, Scaleway, Hyperbolic, Fireworks, PixAI, Vertex AI
 
 ### Frontend
+
 **Location**: `NovAura-WebOS/platform/src/services/`
 
 | Component | Purpose | Status |
-|-----------|---------|--------|
+| :--- | :--- | :--- |
 | `pixaiService.js` | Secure proxy to backend | ✅ Active |
 | `apiClient.ts` | Authenticated API client | ✅ Active |
 
 **Routes Used**:
+
 - `POST /generation/image` - Submit generation
-- `GET /generation/status/:taskId` - Check status  
+- `GET /generation/status/:taskId` - Check status
 - `POST /generation/poll` - Wait for completion
 
 ---
@@ -59,7 +62,7 @@ const key = providedKey || import.meta.env.VITE_PIXAI_API_KEY;
 ## API Key Storage
 
 | Location | Keys Stored | Access |
-|----------|-------------|--------|
+| :--- | :--- | :--- |
 | `functions/.env` | All AI provider keys | Backend only |
 | `functions/config` | Production secrets | Backend only |
 | Frontend | ❌ NONE | N/A |
@@ -68,10 +71,10 @@ const key = providedKey || import.meta.env.VITE_PIXAI_API_KEY;
 
 ## Compliance
 
-✅ **Company Policy Met**: No direct API key usage in frontend  
-✅ **Guest Access**: Enabled via backend proxy with rate limiting  
-✅ **Key Rotation**: Supported via Firebase Config  
-✅ **Audit Trail**: Request logging in Firebase Functions
+- ✅ **Company Policy Met**: No direct API key usage in frontend
+- ✅ **Guest Access**: Enabled via backend proxy with rate limiting
+- ✅ **Key Rotation**: Supported via Firebase Config
+- ✅ **Audit Trail**: Request logging in Firebase Functions
 
 ---
 

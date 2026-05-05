@@ -109,9 +109,13 @@ function getTemp(traits, passType) {
 
 // ── API Wrapper (with provider fallback) ──────────────────
 
-// Vertex is Gemini hosted on separate Google Cloud infra — same models, different endpoint.
-// If gemini is down, vertex is almost certainly still up (and vice versa).
-const FALLBACK_ORDER = ['gemini', 'vertex', 'claude', 'kimi'];
+// Fallback order for standard passes - targeting NovAura Free Pool
+const FALLBACK_ORDER = [
+  'qwen/qwen3-coder:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'google/gemma-4-31b-it:free',
+  'meta-llama/llama-3.3-70b-instruct:free'
+];
 
 async function callAI(provider, prompt, temp, isCancelled, _log) {
   if (isCancelled()) throw new Error('CANCELLED');
@@ -232,41 +236,45 @@ async function orchestratorCheck(provider, codeBlocks, userPrompt, passLabel, is
 // ── Phase Definitions (for UI) ────────────────────────────
 
 export const PIPELINE_PHASES = [
-  { id: 'pass-1', name: 'Gemini Pass 1 — Foundation', provider: 'gemini' },
-  { id: 'pass-1-check', name: 'Pass 1 Self-Check', provider: 'gemini' },
-  { id: 'orch-1', name: 'Orchestrator Check — Foundation', provider: 'claude' },
-  { id: 'pass-2', name: 'Gemini Pass 2 — Depth & Functionality', provider: 'gemini' },
-  { id: 'pass-2-check', name: 'Pass 2 Self-Check', provider: 'gemini' },
-  { id: 'orch-2', name: 'Orchestrator Check — Depth', provider: 'claude' },
-  { id: 'pass-3', name: 'Gemini Pass 3 — Branching Logic', provider: 'gemini' },
-  { id: 'pass-3-check', name: 'Pass 3 Self-Check', provider: 'gemini' },
-  { id: 'pass-3-review', name: 'Pass 3 ↔ Pass 2 Review Loop', provider: 'gemini' },
-  { id: 'orch-3', name: 'Orchestrator Check — Branching', provider: 'claude' },
-  { id: 'pass-4', name: 'Pass 4 — Cap Logic Validation', provider: 'gemini' },
-  { id: 'pass-4-check', name: 'Pass 4 Self-Check', provider: 'gemini' },
-  { id: 'orch-takeover', name: 'Orchestrator Takeover', provider: 'claude', conditional: true },
-  { id: 'kimi-inspect', name: 'Kimi Inspection', provider: 'kimi' },
-  { id: 'reinforce', name: 'Reinforcement (Claude/GPT)', provider: 'claude', conditional: true },
-  { id: 'kimi-final', name: 'Kimi Final Review', provider: 'kimi', conditional: true },
+  { id: 'pass-1', name: '480B Pass 1 — Foundation', provider: 'qwen/qwen3-coder-480b-a35b:free' },
+  { id: 'pass-1-check', name: 'Pass 1 Self-Check', provider: 'qwen/qwen3-coder-480b-a35b:free' },
+  { id: 'orch-1', name: '1T Orchestrator Check — Foundation', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'pass-data', name: 'Aura-DB — Data Architecture & Persistence', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'pass-2', name: '480B Pass 2 — Depth & Functionality', provider: 'qwen/qwen3-coder-480b-a35b:free' },
+  { id: 'pass-2-check', name: 'Pass 2 Self-Check', provider: 'qwen/qwen3-coder-480b-a35b:free' },
+  { id: 'orch-2', name: '1T Orchestrator Check — Depth', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'pass-3', name: '1T Pass 3 — Branching Logic', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'pass-3-check', name: 'Pass 3 Self-Check', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'pass-3-review', name: '1T Pass 3 ↔ Pass 2 Review Loop', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'orch-3', name: '1T Orchestrator Check — Branching', provider: 'inclusionai/ling-2.6-1t:free' },
+  { id: 'pass-aesthetic', name: 'Nova — Aesthetic Polish & Flare', provider: 'google/gemma-4-31b-it:free' },
+  { id: 'pass-4', name: '405B Pass 4 — Cap Logic Validation', provider: 'nousresearch/hermes-3-llama-3.1-405b:free' },
+  { id: 'pass-4-check', name: 'Pass 4 Self-Check', provider: 'nousresearch/hermes-3-llama-3.1-405b:free' },
+  { id: 'orch-takeover', name: '1T Orchestrator Takeover', provider: 'inclusionai/ling-2.6-1t:free', conditional: true },
+  { id: 'kimi-inspect', name: '405B Final Inspection', provider: 'nousresearch/hermes-3-llama-3.1-405b:free' },
+  { id: 'pass-edge', name: 'Aura-Edge — Vercel/Performance Optimization', provider: 'qwen/qwen3-coder-480b-a35b:free' },
+  { id: 'reinforce', name: '480B Reinforcement (Specialist)', provider: 'qwen/qwen3-coder-480b-a35b:free', conditional: true },
+  { id: 'kimi-final', name: '405B Final Review', provider: 'nousresearch/hermes-3-llama-3.1-405b:free', conditional: true },
   { id: 'preview', name: 'Preview Ready' },
 ];
 
 // ── Main Pipeline Runner ──────────────────────────────────
 
-/**
- * @param {string} userPrompt
- * @param {Array} projectFiles - [{ path, content }]
- * @param {object} pipelineConfig - { traits, restrictions, reinforceProvider, orchestratorProvider }
- * @param {object} callbacks - { onPhaseStart, onPhaseComplete, onPhaseError, onLog, onCodeUpdate, onConfusion, onComplete, isCancelled }
- */
 export async function runPipeline(userPrompt, projectFiles, pipelineConfig, callbacks) {
   const { onPhaseStart, onPhaseComplete, onPhaseError, onLog, onCodeUpdate, onConfusion, onComplete, isCancelled } = callbacks;
+  const { pipelineAgents = {} } = pipelineConfig;
+
+  // Fallback to defaults if agents aren't provided
+  const planner = pipelineAgents.PLANNER || { model: 'inclusionai/ling-2.6-1t:free', temperature: 0.1, systemPrompt: 'You are the Lead Architect.' };
+  const developer = pipelineAgents.DEVELOPER || { model: 'qwen/qwen3-coder-480b-a35b:free', temperature: 0.4, systemPrompt: 'You are a Senior Developer.' };
+  const designer = pipelineAgents.DESIGNER || { model: 'google/gemma-4-31b-it:free', temperature: 0.8, systemPrompt: 'You are Nova, the Digital Designer.' };
+  const dataArchitect = pipelineAgents.DATA_ARCHITECT || { model: 'inclusionai/ling-2.6-1t:free', temperature: 0.1, systemPrompt: 'You are the Data Architect.' };
+  const optimizer = pipelineAgents.OPTIMIZER || { model: 'qwen/qwen3-coder-480b-a35b:free', temperature: 0.2, systemPrompt: 'You are the Edge Optimizer.' };
+  const auditor = pipelineAgents.AUDITOR || { model: 'nousresearch/hermes-3-llama-3.1-405b:free', temperature: 0.2, systemPrompt: 'You are a QA Engineer.' };
+
   const restrictions = buildRestrictionBlock(pipelineConfig.restrictions || {});
   const traits = buildTraitBlock(pipelineConfig.traits);
-  const traitVals = pipelineConfig.traits || {};
-  const reinforceProvider = pipelineConfig.reinforceProvider || 'claude';
-  const orchProvider = pipelineConfig.orchestratorProvider || 'claude';
-
+  
   const existingContext = projectFiles.length > 0
     ? `## Existing Project Files\n${projectFiles.map(f => `### ${f.path}\n\`\`\`${f.path}\n${f.content}\n\`\`\``).join('\n\n')}`
     : '';
@@ -278,19 +286,20 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
   try {
     // ═══════════════════════════════════════════════════════
-    // PASS 1: Foundation & Groundwork (Gemini)
+    // PASS 1: Foundation & Groundwork (Qwen Coder)
     // ═══════════════════════════════════════════════════════
     onPhaseStart?.('pass-1');
-    log('Gemini Pass 1: Foundation and groundwork...');
+    log(`${developer.name || 'DevAgent'} Pass 1: Foundation and groundwork...`);
 
-    const pass1Resp = await runPass('gemini', [
-      'You are Pass 1 (Foundation) in a multi-AI cascading code generation pipeline.',
+    const pass1Resp = await runPass(developer.model, [
+      `## Agent Identity\n${developer.systemPrompt}`,
+      '\nYou are Pass 1 (Foundation) in a multi-AI cascading code generation pipeline.',
       'Create the CORE ARCHITECTURE: file structure, entry points, data models, UI skeleton, routing, base styling.',
       'Output COMPLETE files — no TODOs, no placeholders. Every function needs a real implementation.',
       'Wrap each file in ```filename.ext code blocks.',
       restrictions, traits, existingContext,
       `\n## User Request\n${userPrompt}`,
-    ].filter(Boolean).join('\n'), getTemp(traitVals, 'gen'), isCancelled, onConfusion);
+    ].filter(Boolean).join('\n'), developer.temperature, isCancelled, onConfusion);
 
     codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(pass1Resp));
     onCodeUpdate?.(codeBlocks);
@@ -298,13 +307,37 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
     // Pass 1 self-check
     onPhaseStart?.('pass-1-check');
-    codeBlocks = await selfCheck('gemini', codeBlocks, 'Pass 1', getTemp(traitVals, 'check'), isCancelled, log);
+    codeBlocks = await selfCheck(developer.model, codeBlocks, 'Pass 1', Math.max(0.1, developer.temperature - 0.2), isCancelled, log);
     onCodeUpdate?.(codeBlocks);
     onPhaseComplete?.('pass-1-check');
 
+    // ═══════════════════════════════════════════════════════
+    // AURA-DB PASS: Data Architecture & Persistence
+    // ═══════════════════════════════════════════════════════
+    if (!skipToKimi) {
+      onPhaseStart?.('pass-data');
+      log(`${dataArchitect.name || 'Aura-DB'}: Architecting data schemas and persistence rules...`);
+
+      const dbResp = await callAI(dataArchitect.model, [
+        `## Agent Identity\n${dataArchitect.systemPrompt}`,
+        '\nYou are Aura-DB, the Data Architect. Model the database schema based on the foundation.',
+        'Support Firestore, Supabase, Neon, or Convex as requested or appropriate.',
+        'Output COMPLETE database rules, schema definitions, and CRUD service files.',
+        'Ensure the application has a robust, persistent data layer. No placeholders.',
+        'Output corrected/new files in ```filename.ext code blocks.',
+        restrictions, traits,
+        `\n## Current Code\n${formatCodeContext(codeBlocks)}`,
+        `\n## Original Request\n${userPrompt}`,
+      ].filter(Boolean).join('\n'), dataArchitect.temperature, isCancelled);
+
+      codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(dbResp));
+      onCodeUpdate?.(codeBlocks);
+      onPhaseComplete?.('pass-data');
+    }
+
     // ── Orchestrator Check 1 ──
     onPhaseStart?.('orch-1');
-    const orch1 = await orchestratorCheck(orchProvider, codeBlocks, userPrompt, 'Pass 1 (Foundation)', isCancelled, log);
+    const orch1 = await orchestratorCheck(planner.model, codeBlocks, userPrompt, 'Pass 1 (Foundation)', isCancelled, log);
     onPhaseComplete?.('orch-1');
 
     if (orch1.action === 'takeover') {
@@ -312,16 +345,17 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
       // Generate code directly
       onPhaseStart?.('orch-takeover');
       log('Orchestrator taking over — generating full codebase...');
-      const takeoverResp = await callAI(orchProvider, [
-        'You are the ORCHESTRATOR. The pipeline foundation was insufficient.',
+      const takeoverResp = await callAI(planner.model, [
+        `## Agent Identity\n${planner.systemPrompt}`,
+        '\nYou are the ORCHESTRATOR. The pipeline foundation was insufficient.',
         'Generate the COMPLETE application from scratch based on the user\'s request.',
         'Output ALL files in ```filename.ext code blocks. No TODOs, no placeholders.',
         restrictions, traits, existingContext,
         `\n## User Request\n${userPrompt}`,
-      ].filter(Boolean).join('\n'), getTemp(traitVals, 'gen'), isCancelled);
+      ].filter(Boolean).join('\n'), planner.temperature, isCancelled);
 
       codeBlocks = mergeBlocks({}, extractCodeBlocks(takeoverResp));
-      codeBlocks = await selfCheck(orchProvider, codeBlocks, 'Orchestrator takeover', getTemp(traitVals, 'check'), isCancelled, log);
+      codeBlocks = await selfCheck(planner.model, codeBlocks, 'Orchestrator takeover', Math.max(0.1, planner.temperature), isCancelled, log);
       onCodeUpdate?.(codeBlocks);
       onPhaseComplete?.('orch-takeover');
     } else if (orch1.action === 'redirect') {
@@ -329,14 +363,15 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
     }
 
     // ═══════════════════════════════════════════════════════
-    // PASS 2: Depth & Functionality (Gemini)
+    // PASS 2: Depth & Functionality (Qwen Coder)
     // ═══════════════════════════════════════════════════════
     if (!skipToKimi) {
       onPhaseStart?.('pass-2');
-      log('Gemini Pass 2: Depth and full functionality...');
+      log(`${developer.name || 'DevAgent'} Pass 2: Depth and full functionality...`);
 
       const pass2Prompt = [
-        'You are Pass 2 (Depth & Functionality) in a multi-AI pipeline.',
+        `## Agent Identity\n${developer.systemPrompt}`,
+        '\nYou are Pass 2 (Depth & Functionality) in a multi-AI pipeline.',
         'Add FULL functionality to the foundation code: complete all implementations, error handling,',
         'state management, user interactions, API integrations, loading/empty/error states.',
         'Every function MUST be complete. Every handler MUST work. Output ALL files.',
@@ -347,7 +382,7 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
         `\n## Original Request\n${userPrompt}`,
       ].filter(Boolean).join('\n');
 
-      const pass2Resp = await runPass('gemini', pass2Prompt, getTemp(traitVals, 'gen'), isCancelled, onConfusion);
+      const pass2Resp = await runPass(developer.model, pass2Prompt, developer.temperature, isCancelled, onConfusion);
       redirectDirective = ''; // consumed
 
       codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(pass2Resp));
@@ -356,30 +391,31 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
       // Pass 2 self-check
       onPhaseStart?.('pass-2-check');
-      codeBlocks = await selfCheck('gemini', codeBlocks, 'Pass 2', getTemp(traitVals, 'check'), isCancelled, log);
+      codeBlocks = await selfCheck(developer.model, codeBlocks, 'Pass 2', Math.max(0.1, developer.temperature - 0.2), isCancelled, log);
       onCodeUpdate?.(codeBlocks);
       onPhaseComplete?.('pass-2-check');
 
       // ── Orchestrator Check 2 ──
       onPhaseStart?.('orch-2');
-      const orch2 = await orchestratorCheck(orchProvider, codeBlocks, userPrompt, 'Pass 2 (Depth)', isCancelled, log);
+      const orch2 = await orchestratorCheck(planner.model, codeBlocks, userPrompt, 'Pass 2 (Depth)', isCancelled, log);
       onPhaseComplete?.('orch-2');
 
       if (orch2.action === 'takeover') {
         skipToKimi = true;
         onPhaseStart?.('orch-takeover');
         log('Orchestrator taking over after Pass 2...');
-        const takeoverResp = await callAI(orchProvider, [
-          'You are the ORCHESTRATOR. The depth pass was insufficient.',
+        const takeoverResp = await callAI(planner.model, [
+          `## Agent Identity\n${planner.systemPrompt}`,
+          '\nYou are the ORCHESTRATOR. The depth pass was insufficient.',
           'Take the existing foundation and generate the COMPLETE application with full functionality.',
           'Output ALL files in ```filename.ext code blocks.',
           restrictions, traits,
           `\n## Current Code\n${formatCodeContext(codeBlocks)}`,
           `\n## User Request\n${userPrompt}`,
-        ].filter(Boolean).join('\n'), getTemp(traitVals, 'gen'), isCancelled);
+        ].filter(Boolean).join('\n'), planner.temperature, isCancelled);
 
         codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(takeoverResp));
-        codeBlocks = await selfCheck(orchProvider, codeBlocks, 'Orchestrator takeover', getTemp(traitVals, 'check'), isCancelled, log);
+        codeBlocks = await selfCheck(planner.model, codeBlocks, 'Orchestrator takeover', Math.max(0.1, planner.temperature), isCancelled, log);
         onCodeUpdate?.(codeBlocks);
         onPhaseComplete?.('orch-takeover');
       } else if (orch2.action === 'redirect') {
@@ -388,7 +424,7 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
     }
 
     // ═══════════════════════════════════════════════════════
-    // PASS 3: Branching Logic & Dependencies (Gemini)
+    // PASS 3: Branching Logic & Dependencies (Nemotron)
     // with Pass 2 rejection loop (max 3x)
     // ═══════════════════════════════════════════════════════
     if (!skipToKimi) {
@@ -397,10 +433,11 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
       while (!pass3Done) {
         onPhaseStart?.('pass-3');
-        log(`Gemini Pass 3: Branching logic & dependencies${rejections > 0 ? ` (attempt ${rejections + 1})` : ''}...`);
+        log(`${planner.name || 'Orchestrator'} Pass 3: Branching logic & dependencies${rejections > 0 ? ` (attempt ${rejections + 1})` : ''}...`);
 
-        const pass3Resp = await runPass('gemini', [
-          'You are Pass 3 (Branching Logic & Dependency Specialist).',
+        const pass3Resp = await runPass(planner.model, [
+          `## Agent Identity\n${planner.systemPrompt}`,
+          '\nYou are Pass 3 (Branching Logic & Dependency Specialist).',
           'Trace EVERY feature to its logical conclusion. Ensure ALL dependencies exist.',
           '',
           'Think recursively about what each feature requires:',
@@ -418,7 +455,7 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
           restrictions, traits,
           `\n## Current Code\n${formatCodeContext(codeBlocks)}`,
           `\n## Original Request\n${userPrompt}`,
-        ].filter(Boolean).join('\n'), getTemp(traitVals, 'gen'), isCancelled, onConfusion);
+        ].filter(Boolean).join('\n'), planner.temperature, isCancelled, onConfusion);
 
         redirectDirective = ''; // consumed
 
@@ -428,7 +465,7 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
         // Pass 3 self-check
         onPhaseStart?.('pass-3-check');
-        codeBlocks = await selfCheck('gemini', codeBlocks, 'Pass 3', getTemp(traitVals, 'check'), isCancelled, log);
+        codeBlocks = await selfCheck(planner.model, codeBlocks, 'Pass 3', Math.max(0.1, planner.temperature), isCancelled, log);
         onCodeUpdate?.(codeBlocks);
         onPhaseComplete?.('pass-3-check');
 
@@ -436,12 +473,13 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
         onPhaseStart?.('pass-3-review');
         log('Pass 3 reviewing for refactoring needs...');
 
-        const reviewResp = await callAI('gemini', [
-          'Review this code. Check: all dependency chains complete? All functions real? No circular deps? All imports valid?',
+        const reviewResp = await callAI(planner.model, [
+          `## Agent Identity\n${planner.systemPrompt}`,
+          '\nReview this code. Check: all dependency chains complete? All functions real? No circular deps? All imports valid?',
           'If PASSES: respond APPROVED',
           'If NEEDS WORK: respond NEEDS_REFACTORING followed by a list of issues.',
           `\n${formatCodeContext(codeBlocks)}`,
-        ].join('\n'), 0.15, isCancelled);
+        ].join('\n'), Math.max(0.1, planner.temperature), isCancelled);
 
         if (detectApproval(reviewResp)) {
           log('Pass 3 review: APPROVED');
@@ -453,29 +491,31 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
           log(`Rejected (${rejections}/3). Sending back to Pass 2 for refactoring...`);
           onPhaseComplete?.('pass-3-review');
 
-          const refactorResp = await callAI('gemini', [
-            `Pass 2 refactoring (rejection ${rejections}/3). Fix these issues:`,
+          const refactorResp = await callAI(developer.model, [
+            `## Agent Identity\n${developer.systemPrompt}`,
+            `\nPass 2 refactoring (rejection ${rejections}/3). Fix these issues:`,
             issues,
             'Output COMPLETE corrected files in ```filename.ext code blocks.',
             `\n${formatCodeContext(codeBlocks)}`,
             `\n## Original Request\n${userPrompt}`,
-          ].join('\n'), getTemp(traitVals, 'gen'), isCancelled);
+          ].join('\n'), developer.temperature, isCancelled);
 
           codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(refactorResp));
-          codeBlocks = await selfCheck('gemini', codeBlocks, 'Pass 2 refactor', getTemp(traitVals, 'check'), isCancelled, log);
+          codeBlocks = await selfCheck(developer.model, codeBlocks, 'Pass 2 refactor', Math.max(0.1, developer.temperature - 0.2), isCancelled, log);
           onCodeUpdate?.(codeBlocks);
         } else {
           log('3 rejections exhausted. Pass 3 self-correcting remaining issues...');
           onPhaseComplete?.('pass-3-review');
 
-          const forceResp = await callAI('gemini', [
-            'You have been sent back 3 times. Fix ALL remaining issues yourself.',
+          const forceResp = await callAI(planner.model, [
+            `## Agent Identity\n${planner.systemPrompt}`,
+            '\nYou have been sent back 3 times. Fix ALL remaining issues yourself.',
             'Double-check everything. Output FINAL corrected files in ```filename.ext code blocks.',
             `\n${formatCodeContext(codeBlocks)}`,
-          ].join('\n'), getTemp(traitVals, 'check'), isCancelled);
+          ].join('\n'), Math.max(0.1, planner.temperature), isCancelled);
 
           codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(forceResp));
-          codeBlocks = await selfCheck('gemini', codeBlocks, 'Pass 3 forced fix', getTemp(traitVals, 'check'), isCancelled, log);
+          codeBlocks = await selfCheck(planner.model, codeBlocks, 'Pass 3 forced fix', Math.max(0.1, planner.temperature), isCancelled, log);
           onCodeUpdate?.(codeBlocks);
           pass3Done = true;
         }
@@ -483,28 +523,52 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
       // ── Orchestrator Check 3 ──
       onPhaseStart?.('orch-3');
-      const orch3 = await orchestratorCheck(orchProvider, codeBlocks, userPrompt, 'Pass 3 (Branching Logic)', isCancelled, log);
+      const orch3 = await orchestratorCheck(planner.model, codeBlocks, userPrompt, 'Pass 3 (Branching Logic)', isCancelled, log);
       onPhaseComplete?.('orch-3');
 
       if (orch3.action === 'takeover') {
         skipToKimi = true;
         onPhaseStart?.('orch-takeover');
         log('Orchestrator taking over after branching logic...');
-        const takeoverResp = await callAI(orchProvider, [
-          'You are the ORCHESTRATOR. The branching logic pass failed to meet standards.',
+        const takeoverResp = await callAI(planner.model, [
+          `## Agent Identity\n${planner.systemPrompt}`,
+          '\nYou are the ORCHESTRATOR. The branching logic pass failed to meet standards.',
           'Using the existing code as a base, complete ALL missing dependency chains,',
           'fix all issues, and ensure the full application is production-ready.',
           'Output ALL files in ```filename.ext code blocks.',
           restrictions, traits,
           `\n## Current Code\n${formatCodeContext(codeBlocks)}`,
           `\n## User Request\n${userPrompt}`,
-        ].filter(Boolean).join('\n'), getTemp(traitVals, 'gen'), isCancelled);
+        ].filter(Boolean).join('\n'), planner.temperature, isCancelled);
 
         codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(takeoverResp));
-        codeBlocks = await selfCheck(orchProvider, codeBlocks, 'Orchestrator takeover', getTemp(traitVals, 'check'), isCancelled, log);
+        codeBlocks = await selfCheck(planner.model, codeBlocks, 'Orchestrator takeover', Math.max(0.1, planner.temperature), isCancelled, log);
         onCodeUpdate?.(codeBlocks);
         onPhaseComplete?.('orch-takeover');
       }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // NOVA PASS: Aesthetic Polish & Flare
+    // ═══════════════════════════════════════════════════════
+    if (!skipToKimi) {
+      onPhaseStart?.('pass-aesthetic');
+      log(`${designer.name || 'Nova'}: Injecting aesthetics, flare, and UX polish...`);
+
+      const aestheticResp = await callAI(designer.model, [
+        `## Agent Identity\n${designer.systemPrompt}`,
+        '\nYou are Nova, the Digital Designer. Your goal is to take the stable code and inject WOW factor.',
+        'Refine the CSS/Styles for premium aesthetics: glassmorphism, smooth animations, vibrant gradients,',
+        'modern typography, and high-depth layouts. Make it look like a high-end production app.',
+        'Output COMPLETE corrected files in ```filename.ext code blocks.',
+        restrictions, traits,
+        `\n## Current Code\n${formatCodeContext(codeBlocks)}`,
+        `\n## Original Request\n${userPrompt}`,
+      ].filter(Boolean).join('\n'), designer.temperature, isCancelled);
+
+      codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(aestheticResp));
+      onCodeUpdate?.(codeBlocks);
+      onPhaseComplete?.('pass-aesthetic');
     }
 
     // ═══════════════════════════════════════════════════════
@@ -512,10 +576,11 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
     // ═══════════════════════════════════════════════════════
     if (!skipToKimi) {
       onPhaseStart?.('pass-4');
-      log('Pass 4: Cap logic validation...');
+      log(`${auditor.name || 'Validator'} Pass 4: Cap logic validation...`);
 
-      const pass4Resp = await callAI('gemini', [
-        'You are Pass 4 (Cap Logic Validator) — final technical validation.',
+      const pass4Resp = await callAI(auditor.model, [
+        `## Agent Identity\n${auditor.systemPrompt}`,
+        '\nYou are Pass 4 (Cap Logic Validator) — final technical validation.',
         'Check for: dead code paths, unreachable branches, missing returns, race conditions,',
         'missing edge cases, type mismatches, memory leaks, crash scenarios.',
         'Does this comply with the user vision? Is it as entertaining/complete as comparable applications?',
@@ -524,7 +589,7 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
         restrictions,
         `\n${formatCodeContext(codeBlocks)}`,
         `\n## Original Request\n${userPrompt}`,
-      ].filter(Boolean).join('\n'), getTemp(traitVals, 'check'), isCancelled);
+      ].filter(Boolean).join('\n'), auditor.temperature, isCancelled);
 
       codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(pass4Resp));
       onCodeUpdate?.(codeBlocks);
@@ -532,19 +597,20 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
       // Pass 4 self-check
       onPhaseStart?.('pass-4-check');
-      codeBlocks = await selfCheck('gemini', codeBlocks, 'Pass 4', getTemp(traitVals, 'check'), isCancelled, log);
+      codeBlocks = await selfCheck(auditor.model, codeBlocks, 'Pass 4', Math.max(0.1, auditor.temperature), isCancelled, log);
       onCodeUpdate?.(codeBlocks);
       onPhaseComplete?.('pass-4-check');
     }
 
     // ═══════════════════════════════════════════════════════
-    // KIMI INSPECTION
+    // FINAL INSPECTION
     // ═══════════════════════════════════════════════════════
     onPhaseStart?.('kimi-inspect');
-    log('Kimi: Quality inspection...');
+    log(`${auditor.name || 'Validator'}: Quality inspection...`);
 
-    const kimiResp = await callAI('kimi', [
-      'You are the FINAL QUALITY INSPECTOR. This code has been through a multi-pass generation pipeline.',
+    const kimiResp = await callAI(auditor.model, [
+      `## Agent Identity\n${auditor.systemPrompt}`,
+      '\nYou are the FINAL QUALITY INSPECTOR. This code has been through a multi-pass generation pipeline.',
       'Check: compiles without errors? All features implemented? Secure? UX polished? Matches user vision?',
       'Is it as complete and feature-rich as comparable production applications?',
       'If EVERYTHING passes: respond APPROVED (first line) then summary.',
@@ -555,6 +621,29 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
 
     onPhaseComplete?.('kimi-inspect');
 
+    // ═══════════════════════════════════════════════════════
+    // AURA-EDGE PASS: Vercel/Performance Optimization
+    // ═══════════════════════════════════════════════════════
+    if (!skipToKimi) {
+      onPhaseStart?.('pass-edge');
+      log(`${optimizer.name || 'Aura-Edge'}: Optimizing for Vercel edge and performance...`);
+
+      const edgeResp = await callAI(optimizer.model, [
+        `## Agent Identity\n${optimizer.systemPrompt}`,
+        '\nYou are Aura-Edge, the Performance Optimizer. Refine the ENTIRE codebase for maximum performance.',
+        'Implement Vercel/Vite best practices: React Server Components, image optimization, lazy loading,',
+        'and edge-runtime compatibility. Ensure maximum lighthouse scores.',
+        'Output corrected files in ```filename.ext code blocks.',
+        restrictions, traits,
+        `\n## Current Code\n${formatCodeContext(codeBlocks)}`,
+        `\n## Original Request\n${userPrompt}`,
+      ].filter(Boolean).join('\n'), optimizer.temperature, isCancelled);
+
+      codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(edgeResp));
+      onCodeUpdate?.(codeBlocks);
+      onPhaseComplete?.('pass-edge');
+    }
+
     if (detectApproval(kimiResp)) {
       log('Kimi: APPROVED — spinning up preview.');
       onPhaseStart?.('preview');
@@ -564,33 +653,35 @@ export async function runPipeline(userPrompt, projectFiles, pipelineConfig, call
     }
 
     // ═══════════════════════════════════════════════════════
-    // REINFORCEMENT (Claude or GPT Codex)
+    // REINFORCEMENT
     // ═══════════════════════════════════════════════════════
     const kimiIssues = extractIssues(kimiResp);
     onPhaseStart?.('reinforce');
-    log(`Kimi found issues. Sending to ${reinforceProvider} for reinforcement...`);
+    log(`Quality Inspector found issues. Sending to ${developer.name || 'DevAgent'} for reinforcement...`);
 
-    const reinforceResp = await callAI(reinforceProvider, [
-      'You are the REINFORCEMENT SPECIALIST. The quality inspector found these issues:',
+    const reinforceResp = await callAI(developer.model, [
+      `## Agent Identity\n${developer.systemPrompt}`,
+      '\nYou are the REINFORCEMENT SPECIALIST. The quality inspector found these issues:',
       kimiIssues,
       'Fix ALL issues. Zero build errors. Output COMPLETE files in ```filename.ext code blocks.',
       `\n## Original Request\n${userPrompt}`,
       `\n## Code\n${formatCodeContext(codeBlocks)}`,
-    ].join('\n'), 0.2, isCancelled);
+    ].join('\n'), Math.min(0.8, developer.temperature + 0.1), isCancelled);
 
     codeBlocks = mergeBlocks(codeBlocks, extractCodeBlocks(reinforceResp));
-    codeBlocks = await selfCheck(reinforceProvider, codeBlocks, `${reinforceProvider} reinforcement`, 0.15, isCancelled, log);
+    codeBlocks = await selfCheck(developer.model, codeBlocks, `${developer.name || 'DevAgent'} reinforcement`, Math.max(0.1, developer.temperature), isCancelled, log);
     onCodeUpdate?.(codeBlocks);
     onPhaseComplete?.('reinforce');
 
     // ═══════════════════════════════════════════════════════
-    // KIMI FINAL REVIEW
+    // FINAL REVIEW
     // ═══════════════════════════════════════════════════════
     onPhaseStart?.('kimi-final');
-    log('Kimi: Final review after reinforcement...');
+    log(`${auditor.name || 'Validator'}: Final review after reinforcement...`);
 
-    const kimiFinalResp = await callAI('kimi', [
-      'Final quality review after reinforcement.',
+    const kimiFinalResp = await callAI(auditor.model, [
+      `## Agent Identity\n${auditor.systemPrompt}`,
+      '\nFinal quality review after reinforcement.',
       'If ready: respond APPROVED. If still broken: respond ISSUES: [problems].',
       `\n## Code\n${formatCodeContext(codeBlocks)}`,
     ].join('\n'), 0.15, isCancelled);

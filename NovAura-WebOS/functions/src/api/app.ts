@@ -24,6 +24,7 @@ import emailRoutes from './routes/email';
 import adminKeysRoutes from './routes/admin-keys';
 import userKeysRoutes from './routes/user-keys';
 import prereleaseRoutes from './routes/prerelease';
+import inboundRoutes from './routes/inbound';
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use(cors({
     'https://www.novaura.life',
     'http://localhost:5173',
     'http://localhost:3000',
+    'http://localhost:3001',
     /\.novaura\.life$/,
   ],
   credentials: true
@@ -79,6 +81,7 @@ mountRoute('/royalties', royaltiesRoutes);
 mountRoute('/admin/keys', adminKeysRoutes);
 mountRoute('/user/keys', userKeysRoutes);
 mountRoute('/prerelease', prereleaseRoutes);
+mountRoute('/inbound', inboundRoutes);
 
 // Health check
 const healthHandler = (req: express.Request, res: express.Response) => {

@@ -17,11 +17,12 @@ import {
   updateProfile,
 } from 'firebase/auth';
 
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
 
 export default function AuthPage({ onAuthComplete }) {
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('login');
+  const [signupMode, setSignupMode] = useState('sovereign'); // 'sovereign' or 'standard'
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -31,6 +32,13 @@ export default function AuthPage({ onAuthComplete }) {
   });
 
   useEffect(() => {
+    // Handle query params (e.g. ?tab=signup)
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    if (tab === 'signup' || tab === 'login') {
+      setActiveTab(tab);
+    }
+
     // Allow scrolling on auth page
     document.body.style.overflow = 'auto';
     return () => { document.body.style.overflow = 'hidden'; };
@@ -126,21 +134,40 @@ export default function AuthPage({ onAuthComplete }) {
 
     try {
       if (!isFirebaseConfigured || !auth) {
-        throw new Error('Firebase is not configured. Please set VITE_FIREBASE_* env vars.');
+        throw new Error('Firebase is not configured.');
       }
-      const username = (formData.username || formData.name || '').trim().toLowerCase();
-      const usernameCheck = await fetch(`${BACKEND_URL}/auth/check-username?username=${encodeURIComponent(username)}`);
-      const usernameData = await usernameCheck.json();
-      if (!usernameData.available) throw new Error('Username is already taken');
+      
+      if (signupMode === 'sovereign') {
+        const handle = (formData.username || '').trim().toLowerCase();
+        if (!handle) throw new Error('Please choose an email handle');
 
-      const credential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      // Set display name on the newly created user
-      if (formData.name) {
-        await updateProfile(credential.user, { displayName: formData.name });
-      }
-      completeAuth(credential.user, formData.name);
-      // Persist profile extended metadata
-      try {
+        // Atomic ESP Signup
+        const response = await fetch(`${BACKEND_URL}/auth/esp-signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            handle: handle,
+            password: formData.password,
+            displayName: formData.name,
+            backupEmail: formData.backupEmail
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Signup failed');
+
+        const email = `${handle}@novaura.life`;
+        const credential = await signInWithEmailAndPassword(auth, email, formData.password);
+        completeAuth(credential.user, formData.name);
+      } else {
+        // Standard Firebase Signup
+        const credential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+        if (formData.name) {
+          await updateProfile(credential.user, { displayName: formData.name });
+        }
+        completeAuth(credential.user, formData.name);
+        
+        // Sync profile
         const idToken = await credential.user.getIdToken();
         await fetch(`${BACKEND_URL}/auth/profile`, {
           method: 'POST',
@@ -149,26 +176,19 @@ export default function AuthPage({ onAuthComplete }) {
             Authorization: `Bearer ${idToken}`
           },
           body: JSON.stringify({
-            displayName: formData.name || formData.username,
-            username: username,
-            backupEmail: formData.backupEmail || null
+            displayName: formData.name,
+            username: formData.email.split('@')[0],
+            backupEmail: formData.email
           })
         });
-      } catch (innerErr) {
-        console.warn('Profile sync failed', innerErr);
       }
 
-
-      toast.success('Account created!', {
-        description: 'Welcome to NovAura AI OS'
+      toast.success('Welcome to NovAura!', {
+        description: 'Account created successfully.'
       });
     } catch (error) {
       console.error('Signup error:', error);
-      const msg = error.code === 'auth/email-already-in-use' ? 'An account with that email already exists'
-        : error.code === 'auth/weak-password' ? 'Password must be at least 6 characters'
-        : error.code === 'auth/invalid-email' ? 'Please enter a valid email address'
-        : error.message || 'Could not create account';
-      toast.error('Signup failed', { description: msg });
+      toast.error('Signup failed', { description: error.message });
     } finally {
       setIsLoading(false);
     }
@@ -236,27 +256,18 @@ export default function AuthPage({ onAuthComplete }) {
       <Card className="relative z-10 w-full max-w-md p-8 glass border-primary/30 shadow-[0_0_60px_rgba(0,217,255,0.2)]">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-primary via-secondary to-accent mb-4">
-            <Sparkles className="w-10 h-10 text-white" />
+          <div className="w-20 h-20 mb-4 mx-auto">
+            <img 
+              src={`${import.meta.env.BASE_URL}logo.png`} 
+              alt="NovAura Logo" 
+              className="w-full h-full object-contain filter drop-shadow-[0_0_15px_rgba(0,217,255,0.4)]"
+            />
           </div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-primary via-secondary to-accent bg-clip-text text-transparent mb-2">
             NovAura AI OS
           </h1>
-          <p className="text-muted-foreground">Sign in to access your workspace</p>
-
-        {/* Cinematic intro */}
-        <div className="mb-6 rounded-xl overflow-hidden border border-white/10">
-          <video
-            src={import.meta.env.VITE_CINEMATIC_CLIP_URL || '/assets/cinematic-intro.mp4'}
-            autoPlay
-            muted
-            loop
-            playsInline
-            className="w-full h-54 object-cover"
-          />
-        </div>
-
-                </div>
+        <p className="text-muted-foreground">Sign in to access your workspace</p>
+      </div>
 
         {/* Auth Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -328,45 +339,27 @@ export default function AuthPage({ onAuthComplete }) {
           {/* Signup Form */}
           <TabsContent value="signup">
             <form onSubmit={handleSignup} className="space-y-4" data-testid="signup-form">
+              <div className="flex bg-[#0f0f15] p-1 rounded-xl border border-primary/10 mb-6">
+                <button
+                  type="button"
+                  onClick={() => setSignupMode('sovereign')}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${signupMode === 'sovereign' ? 'bg-primary text-white shadow-lg' : 'text-muted-foreground hover:text-white'}`}
+                >
+                  NovAura Identity
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSignupMode('standard')}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${signupMode === 'standard' ? 'bg-[#222] text-white' : 'text-muted-foreground hover:text-white'}`}
+                >
+                  Existing Email
+                </button>
+              </div>
+
               <div>
                 <label className="text-sm font-medium text-foreground mb-2 block">
                   Name
-                </label>              <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">
-                  Username
                 </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    type="text"
-                    value={formData.username}
-                    onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
-                    placeholder="username"
-                    className="pl-10 mt-1 bg-window-bg border-primary/20"
-                    required
-                    data-testid="signup-username-input"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">
-                  Backup Email (optional)
-                </label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    type="email"
-                    value={formData.backupEmail}
-                    onChange={(e) => setFormData(prev => ({ ...prev, backupEmail: e.target.value }))}
-                    placeholder="backup@example.com"
-                    className="pl-10 mt-1 bg-window-bg border-primary/20"
-                    data-testid="signup-backup-email-input"
-                  />
-                </div>
-              </div>
-
-
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
@@ -376,28 +369,67 @@ export default function AuthPage({ onAuthComplete }) {
                     placeholder="Your name"
                     className="pl-10 bg-window-bg border-primary/20"
                     required
-                    data-testid="signup-name-input"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">
-                  Email
-                </label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                    placeholder="you@example.com"
-                    className="pl-10 bg-window-bg border-primary/20"
-                    required
-                    data-testid="signup-email-input"
-                  />
+              {signupMode === 'sovereign' ? (
+                <>
+                  <div>
+                    <label className="text-sm font-medium text-foreground mb-2 block">
+                    Choose your @novaura.life username
+                    </label>
+                    <div className="relative">
+                      <Sparkles className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400" />
+                      <Input
+                        type="text"
+                        value={formData.username}
+                        onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
+                        placeholder="your-handle"
+                        className="pl-10 mt-1 bg-window-bg border-cyan-500/20 pr-32"
+                        required={signupMode === 'sovereign'}
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-cyan-500/50 uppercase tracking-tighter">
+                        @novaura.life
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-foreground mb-2 block">
+                      Recovery Email
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        type="email"
+                        value={formData.backupEmail}
+                        onChange={(e) => setFormData(prev => ({ ...prev, backupEmail: e.target.value }))}
+                        placeholder="recovery@example.com"
+                        className="pl-10 mt-1 bg-window-bg border-primary/20"
+                        required={signupMode === 'sovereign'}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-2 block">
+                    Your Existing Email
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="you@example.com"
+                      className="pl-10 mt-1 bg-window-bg border-primary/20"
+                      required={signupMode === 'standard'}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div>
                 <label className="text-sm font-medium text-foreground mb-2 block">
@@ -461,6 +493,23 @@ export default function AuthPage({ onAuthComplete }) {
           Google
         </Button>
 
+        {/* Localhost / WebLLM Mode */}
+        <Button
+          onClick={() => {
+            const localUser = { name: 'Local User', email: 'localhost@novaura.local', id: 'local-user' };
+            kernelStorage.setItem('auth_token', 'local-token');
+            kernelStorage.setItem('user_data', JSON.stringify(localUser));
+            kernelStorage.setItem('llm_config', JSON.stringify({ useLocalLLM: true, provider: 'webllm' }));
+            onAuthComplete(localUser);
+            toast.success('Localhost Mode Activated', { description: 'WebLLM initialized for private offline use.' });
+          }}
+          variant="outline"
+          className="w-full mt-4 border-cyan-500/30 hover:bg-cyan-500/10 text-cyan-400"
+        >
+          <Sparkles className="w-4 h-4 mr-2" />
+          Enter Localhost (WebLLM)
+        </Button>
+
         {/* Dev bypass */}
         {import.meta.env.DEV && (
           <Button
@@ -471,7 +520,7 @@ export default function AuthPage({ onAuthComplete }) {
               onAuthComplete(devUser);
             }}
             variant="ghost"
-            className="w-full mt-4 text-muted-foreground hover:text-primary text-xs"
+            className="w-full mt-2 text-muted-foreground hover:text-primary text-xs"
           >
             Skip Login (Dev Mode)
           </Button>

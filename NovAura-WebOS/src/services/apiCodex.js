@@ -6,7 +6,7 @@
  * - Cloud provisioning (Google Cloud, Alibaba, AWS, DigitalOcean)
  * - Server management (SSH, deployment, scaling)
  * - Database creation (Supabase, Firebase, Postgres)
- * - Email services (SendGrid, Mailgun)
+ * - Email services (Sovereign SMTP, Mailgun)
  * - Payment processing (Stripe)
  */
 
@@ -265,15 +265,10 @@ export const DatabaseAPI = {
 
 export const EmailAPI = {
   /**
-   * SendGrid
+   * Reserved for Sovereign Communication logic
    */
-  async sendCampaign(apiKey, campaign) {
-    const res = await fetch(`${BACKEND_URL}/api/codex/email/sendgrid/campaign`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ apiKey, campaign })
-    });
-    return await res.json();
+  async sendSovereignMessage(payload) {
+    // Integration logic for native @novaura.life messaging
   },
 
   /**

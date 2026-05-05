@@ -75,14 +75,18 @@ export async function runAgentLoop({
   onMessage,
   maxRetries = 5,
   errorWaitMs = 3500,
+  pipelineAgents = {},
 }) {
+  const developer = pipelineAgents.DEVELOPER || { model: 'qwen/qwen3-coder:free', temperature: 0.4, systemPrompt: 'You are a Senior Developer.' };
+  const debuggerAgent = pipelineAgents.DEBUGGER || { model: 'nvidia/nemotron-3-super-120b-a12b:free', temperature: 0.1, systemPrompt: 'You are a Debugging Specialist.' };
+
   const status = (msg) => {
     onStatus(msg);
   };
 
   // Conversation accumulates context across iterations so the AI knows what it already wrote
   const conversation = [
-    { role: 'system', content: AGENT_SYSTEM_PROMPT },
+    { role: 'system', content: `${developer.systemPrompt}\n\nAdditional Rules:\n1. Output COMPLETE files. Never use "..." or "rest of code unchanged" shortcuts.\n2. Each file must be wrapped in a code fence with its filename as the language.\n3. Do NOT use mock, dummy, or placeholder data.\n4. Output runs in sandboxed iframe (vanilla HTML/CSS/JS).\n5. No explanations needed.` },
   ];
 
   // ── Step 1: Initial build ───────────────────────────────────────────────────
@@ -91,9 +95,13 @@ export async function runAgentLoop({
 
   let aiResponse;
   try {
-    aiResponse = await callAI(conversation);
+    // Specialist Build: Use Developer configuration
+    aiResponse = await callAI(conversation, { 
+      model: developer.model, 
+      temperature: developer.temperature 
+    });
   } catch (err) {
-    onMessage('system', `❌ AI call failed: ${err.message}`);
+    onMessage('system', `❌ AI build call failed: ${err.message}`);
     return { success: false, iterations: 0 };
   }
 
@@ -133,7 +141,8 @@ export async function runAgentLoop({
     status(`🔧 Fixing ${errors.length} error${errors.length > 1 ? 's' : ''}...`);
 
     const fixPrompt = [
-      `The preview iframe reported the following errors after running your code:`,
+      `## Debugger Identity\n${debuggerAgent.systemPrompt}`,
+      `\nThe preview iframe reported the following errors after running your code:`,
       `\`\`\``,
       errorSummary,
       `\`\`\``,
@@ -148,7 +157,11 @@ export async function runAgentLoop({
 
     let fixResponse;
     try {
-      fixResponse = await callAI(conversation);
+      // Specialist Fix: Use Debugger configuration
+      fixResponse = await callAI(conversation, { 
+        model: debuggerAgent.model,
+        temperature: debuggerAgent.temperature
+      });
     } catch (err) {
       onMessage('system', `❌ AI fix call failed: ${err.message}`);
       return { success: false, iterations: attempt };

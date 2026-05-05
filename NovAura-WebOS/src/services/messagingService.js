@@ -3,7 +3,7 @@
  *
  * Handles push notification registration, permission requests,
  * and foreground message handling via Firebase Cloud Messaging.
- * Uses the novaura-systems project VAPID key for web push.
+ * Uses the novaura-life project VAPID key for web push.
  */
 
 import { messaging, isFirebaseConfigured } from '../config/firebase';
@@ -142,7 +142,7 @@ export function showLocalNotification(title, body, options = {}) {
 export function subscribeToTopic(topic) {
   const token = getFCMToken();
   if (token) {
-    const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+    const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
     fetch(`${BACKEND_URL}/notifications/subscribe`, {
       method: 'POST',
       headers: {

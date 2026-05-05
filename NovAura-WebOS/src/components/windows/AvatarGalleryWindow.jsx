@@ -26,7 +26,7 @@ export default function AvatarGalleryWindow() {
     const loadAvatars = async () => {
       try {
         setIsLoading(true);
-        const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+        const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
         const response = await fetch(`${BACKEND_URL}/avatars`);
         if (response.ok) {
           const data = await response.json();

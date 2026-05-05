@@ -14,7 +14,7 @@ Firebase Admin SDK backend for novaura systems.
 ### HTTP Callable Functions
 
 | Function | Description |
-|----------|-------------|
+| :--- | :--- |
 | `sendPushNotification` | Send FCM notification to specific user |
 | `registerFCMToken` | Register device token for push notifications |
 | `unregisterFCMToken` | Remove device token |
@@ -22,7 +22,7 @@ Firebase Admin SDK backend for novaura systems.
 ### Firestore Triggers
 
 | Trigger | Description |
-|---------|-------------|
+| :--- | :--- |
 | `onDirectMessageCreated` | Notify recipient of new DM |
 | `onPostCreated` | Notify followers of new post |
 | `onFollowerAdded` | Notify user of new follower |
@@ -33,7 +33,7 @@ Firebase Admin SDK backend for novaura systems.
 ### Auth Triggers
 
 | Trigger | Description |
-|---------|-------------|
+| :--- | :--- |
 | `onUserCreated` | Create social profile on signup |
 | `onUserDeleted` | Cleanup user data on delete |
 
@@ -42,16 +42,19 @@ Firebase Admin SDK backend for novaura systems.
 ### Prerequisites
 
 1. Install Firebase CLI:
+
 ```bash
 npm install -g firebase-tools
 ```
 
 2. Login to Firebase:
+
 ```bash
 firebase login
 ```
 
 3. Set project:
+
 ```bash
 firebase use novaura-systems
 ```
@@ -86,6 +89,7 @@ firebase emulators:start
 ```
 
 This starts:
+
 - Functions: http://localhost:5001
 - Firestore: http://localhost:8080
 - Auth: http://localhost:9099

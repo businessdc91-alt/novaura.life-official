@@ -1,0 +1,73 @@
+{
+  "name": "novaura-coding-partner",
+  "displayName": "NovAura AI Coding Partner",
+  "description": "Cybeni, Nova, and Aura directly inside your IDE. Synthesize code, rebrand templates, and push to the NovAura ecosystem autonomously.",
+  "version": "1.0.0",
+  "publisher": "NovAuraLife",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onView:novaura-ai-sidebar"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "novaura.synthesizeCurrentFile",
+        "title": "NovAura: Synthesize Current File (Cybeni)",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "novaura.deployToFirebase",
+        "title": "NovAura: Quick Deploy to Firebase",
+        "icon": "$(cloud-upload)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "novaura-explorer",
+          "title": "NovAura Partner",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "novaura-explorer": [
+        {
+          "type": "webview",
+          "id": "novaura-ai-sidebar",
+          "name": "Cybeni & Nova"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "novaura.synthesizeCurrentFile",
+          "group": "novaura@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "18.x"
+  }
+}

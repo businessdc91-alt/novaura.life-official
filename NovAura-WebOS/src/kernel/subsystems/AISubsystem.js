@@ -23,14 +23,14 @@ import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
-  'https://us-central1-novaura-systems.cloudfunctions.net/api';
+  'https://us-central1-novaura-life.cloudfunctions.net/api';
 
-const PROVIDER_CHAIN = ['gemini', 'aws', 'alibaba', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'];
+const PROVIDER_CHAIN = ['openrouter', 'gemini', 'aws', 'alibaba', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'];
 
 const PERSONA_CHAINS = {
-  nova:  ['aws', 'webgpu-local', 'gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'],
-  aura:  ['gemini-3.1-pro', 'gemini-3.1-flash', 'claude', 'qwen', 'openai'],
-  cybeni: ['alibaba', 'qwen', 'gemini', 'claude'], // Cybeni prefers Qwen/Alibaba
+  nova:  ['openrouter', 'aws', 'webgpu-local', 'gemini', 'qwen', 'claude', 'openai', 'ollama', 'lmstudio'],
+  aura:  ['gemini', 'openrouter', 'claude', 'qwen', 'openai'],
+  cybeni: ['openrouter', 'alibaba', 'qwen', 'gemini', 'claude'], // Cybeni prefers OpenRouter/Alibaba
   default: PROVIDER_CHAIN,
 };
 
@@ -500,6 +500,12 @@ class AISubsystem {
 
     if (!result) {
       this._kernel.ipc.emit('ai:request:error', { requestId, error: lastError?.message });
+      // Notify the user via the OS notification system (non-blocking)
+      this._kernel.ipc.emit('notification', {
+        title: 'AI Unavailable',
+        message: 'All AI providers are currently offline. Check your connection or API keys in Settings → AI.',
+        type: 'warning',
+      });
       throw lastError || new Error('[AI] All providers failed');
     }
 

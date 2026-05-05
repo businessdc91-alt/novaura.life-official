@@ -8,26 +8,31 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import { Toaster } from './components/ui/sonner';
-import { useAuthStore } from '../platform/src/stores/authStore';
+import { AuthProvider, useAuth } from './hooks/useAuth';
 import './index.css';
 
 // Standalone landing page (no OS)
-function LandingApp() {
-  React.useEffect(() => {
-    useAuthStore.getState().init();
-  }, []);
-
+function LandingAppContent() {
+  const { user, isAuthenticated } = useAuth();
+  
   return (
     <BrowserRouter>
       <LandingPage 
         onLaunchOS={() => {
-          // Redirect to OS path
           window.location.href = '/os/';
         }}
-        isAuthenticated={false}
+        isAuthenticated={isAuthenticated}
       />
       <Toaster position="top-right" />
     </BrowserRouter>
+  );
+}
+
+function LandingApp() {
+  return (
+    <AuthProvider>
+      <LandingAppContent />
+    </AuthProvider>
   );
 }
 

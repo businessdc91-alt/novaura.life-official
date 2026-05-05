@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { kernelStorage } from '../kernel/kernelStorage.js';
 import { useSystemTelemetry } from '../hooks/useSystemTelemetry';
-import { useAuthStore } from '../../platform/src/stores/authStore';
+import { useAuth } from '../hooks/useAuth';
 import {
   Clock, Cpu, Wifi, Activity, Bell, Settings, ChevronLeft, ChevronRight,
   Layers, Gauge, MemoryStick, Search,
-  Gamepad2, Swords, Rocket, Crown, ShoppingBag, Users, User,
+  Gamepad2, Swords, Rocket, Crown, ShoppingBag, Users, User, Star, Flame, Target,
   // App icons
   Paintbrush, Image, Shirt, Wand2, PenTool, Library, Zap,
   BookOpen, Feather, FileText, MessageSquare, Phone, Brain,
@@ -23,7 +23,7 @@ import {
   Smartphone, Monitor
 } from 'lucide-react';
 
-import { AIOrchestrator } from '../utils/AIOrchestrator.js';
+import AIOrchestrator from '../utils/AIOrchestrator.js';
 
 // ─── App Registry ───
 const APP_CATEGORIES = [
@@ -133,7 +133,6 @@ const APP_CATEGORIES = [
       { type: 'psychometrics', label: 'Psyche', icon: BrainCircuit },
       { type: 'games-arena', label: 'Games', icon: Gamepad2 },
       { type: 'aetherium-tcg', label: 'Aetherium', icon: Swords },
-      { type: 'gilded-cage', label: 'Gilded Cage', icon: Crown },
       { type: 'glb-game', label: '3D Games', icon: Rocket },
       { type: 'inventory', label: 'Inventory', icon: Package },
     ],
@@ -267,7 +266,8 @@ function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen, status })
 }
 
 // ─── LEFT SIDEBAR: App Launcher ───
-export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, windowCount, telemetry, userTier }) {
+export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, windowCount, userTier, className = '' }) {
+  const telemetry = useSystemTelemetry();
   const [collapsed, setCollapsed] = useState(true);
   const [time, setTime] = useState(new Date());
   const [search, setSearch] = useState('');
@@ -291,8 +291,8 @@ export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, wind
 
   const toggleCat = (id) => setExpandedCats(prev => ({ ...prev, [id]: !prev[id] }));
 
-  const { user, isOwner } = useAuthStore();
-  const ownerMode = isOwner();
+  const { user, isOwner } = useAuth();
+  const ownerMode = isOwner;
 
   const intentResult = useMemo(() => {
     if (!search.trim()) return null;
@@ -579,27 +579,27 @@ export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, wind
                 <SystemWidget 
                   icon={Cpu} 
                   label="CPU" 
-                  value={`${telemetry.cpuUsage}% (${telemetry.cpuCores} Cores)`} 
-                  progress={telemetry.cpuUsage}
-                  color={telemetry.cpuUsage > 80 ? 'text-red-400' : 'text-cyan-400'}
+                  value={`${telemetry?.cpuUsage || 0}% (${telemetry?.cpuCores || 0} Cores)`} 
+                  progress={telemetry?.cpuUsage || 0}
+                  color={telemetry?.cpuUsage > 80 ? 'text-red-400' : 'text-cyan-400'}
                 />
                 <SystemWidget 
                   icon={MemoryStick} 
                   label="Memory" 
-                  value={`${telemetry.memoryUsed.toFixed(1)} / ${telemetry.memoryTotal} GB`} 
-                  progress={(telemetry.memoryUsed / telemetry.memoryTotal) * 100}
+                  value={`${(telemetry?.memoryUsed || 0).toFixed(1)} / ${telemetry?.memoryTotal || 0} GB`} 
+                  progress={((telemetry?.memoryUsed || 0) / (telemetry?.memoryTotal || 1)) * 100}
                   color="text-purple-400"
                 />
                 <SystemWidget 
                   icon={Gauge} 
                   label="GPU" 
-                  value={telemetry.gpuStatus} 
+                  value={telemetry?.gpuStatus || 'Unknown'} 
                   color="text-emerald-400"
                 />
                 <SystemWidget 
                   icon={Wifi} 
                   label="Network" 
-                  value={`${telemetry.isOnline ? telemetry.networkType : 'Offline'} (${telemetry.networkSpeed} Mbps)`} 
+                  value={`${telemetry?.isOnline ? telemetry?.networkType : 'Offline'} (${telemetry?.networkSpeed || 0} Mbps)`} 
                   color={telemetry.isOnline ? 'text-blue-400' : 'text-white/20'}
                 />
                 <SystemWidget 
@@ -663,9 +663,10 @@ export function LeftSidebar({ windows = [], onOpenWindow, onExitToPlatform, wind
 
 // ─── RIGHT SIDEBAR: Games + Social ───
 const GAMES = [
-  { id: 'games-arena', title: 'Games Arena', desc: 'Chess, Checkers & more', icon: Gamepad2, accent: 'from-cyan-500 to-emerald-500', windowType: 'games-arena' },
+  { id: 'games-arena', title: 'Games Arena', desc: 'Nova Strike, Net Battler, Chess, TCG & more', icon: Gamepad2, accent: 'from-cyan-500 to-emerald-500', windowType: 'games-arena' },
   { id: 'aetherium-tcg', title: 'Aetherium TCG', desc: 'Trading Card Game', icon: Swords, accent: 'from-purple-500 to-cyan-500', windowType: 'aetherium-tcg' },
-  { id: 'gilded-cage', title: 'The Gilded Cage', desc: 'Steampunk RPG Adventure', icon: Crown, accent: 'from-amber-500 to-orange-600', windowType: 'gilded-cage' },
+  { id: 'gilded-cage', title: 'The Gilded Cage', desc: 'Steampunk fantasy RPG', icon: Crown, accent: 'from-amber-500 to-orange-600', windowType: 'games-arena', launchGame: 'gilded-cage' },
+  { id: 'nova-net-battler', title: 'Nova Net Battler', desc: 'Grid flash-step combat', icon: Target, accent: 'from-blue-500 to-indigo-500', windowType: 'games-arena', launchGame: 'nova-net-battler' },
 ];
 
 const SOCIAL = [
@@ -704,7 +705,7 @@ export function RightSidebar({ onOpenGame, onOpenWindow, onLogout, className = '
             return (
               <button
                 key={game.id}
-                onClick={() => onOpenWindow?.(game.windowType, game.title)}
+                onClick={() => onOpenWindow?.(game.windowType, game.title, game.launchGame ? { initialGame: game.launchGame } : {})}
                 className="relative group flex items-center justify-center w-8 h-8 rounded-lg hover:bg-white/10 transition-all"
               >
                 <Icon className="w-4 h-4 text-secondary/50 group-hover:text-secondary/90 transition-colors" />
@@ -804,7 +805,8 @@ export function RightSidebar({ onOpenGame, onOpenWindow, onLogout, className = '
                 <button
                   key={game.id}
                   onClick={() => {
-                    if (onOpenWindow) onOpenWindow(game.windowType, game.title);
+                    const props = game.launchGame ? { initialGame: game.launchGame } : {};
+                    if (onOpenWindow) onOpenWindow(game.windowType, game.title, props);
                     else if (onOpenGame) onOpenGame(game.id, game.title);
                   }}
                   className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-all group text-left"

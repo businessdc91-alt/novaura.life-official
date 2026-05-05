@@ -29,7 +29,7 @@ export const isFirebaseConfigured = Boolean(
   firebaseConfig.apiKey !== 'YOUR_FIREBASE_API_KEY'
 );
 
-// FCM OAuth Client ID (novaura-systems project)
+// FCM OAuth Client ID (novaura-life project)
 export const FCM_OAUTH_CLIENT_ID = import.meta.env.VITE_FCM_OAUTH_CLIENT_ID || '';
 export const FCM_SENDER_ID = import.meta.env.VITE_FCM_SENDER_ID || '';
 

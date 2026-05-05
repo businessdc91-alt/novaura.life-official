@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { CreditCard, Check, Zap, Sparkles, Flame, Star, Users, Loader2, AlertCircle, TrendingUp, Award } from 'lucide-react';
+import { CreditCard, Check, Zap, Sparkles, Flame, Star, Users, Loader2, AlertCircle, TrendingUp, Award, Crown } from 'lucide-react';
 import { auth } from '../../config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { createSubscriptionCheckout, getSubscriptionStatus } from '../../services/stripeService';

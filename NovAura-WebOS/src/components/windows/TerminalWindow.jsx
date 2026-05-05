@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Terminal as TerminalIcon, Zap } from 'lucide-react';
+import { Terminal as TerminalIcon, Zap, Sparkles } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 
 const initialOutput = [
@@ -112,17 +112,26 @@ export default function TerminalWindow() {
       {/* Terminal Header */}
       <div className="flex items-center gap-3 px-4 py-2 bg-[#0d1117] border-b border-primary/20">
         <div className="flex gap-2">
-          <div className="w-3 h-3 rounded-full bg-destructive" />
-          <div className="w-3 h-3 rounded-full bg-warning" />
-          <div className="w-3 h-3 rounded-full bg-success" />
+          <div className="w-3 h-3 rounded-full bg-[#ff5f56]" />
+          <div className="w-3 h-3 rounded-full bg-[#ffbd2e]" />
+          <div className="w-3 h-3 rounded-full bg-[#27c93f]" />
         </div>
         <div className="flex items-center gap-2">
           <TerminalIcon className="w-4 h-4 text-primary" />
-          <span className="text-sm text-muted-foreground">AI Terminal</span>
+          <span className="text-sm text-muted-foreground font-black uppercase tracking-widest">Aura Terminal</span>
         </div>
-        <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-          <Zap className="w-3 h-3 text-success" />
-          <span>Ready</span>
+        <div className="ml-auto flex items-center gap-4">
+          <button 
+            onClick={() => executeCommand('aura fix')}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-[10px] text-primary hover:bg-primary/20 transition-all font-black uppercase tracking-tighter"
+          >
+            <Sparkles className="w-3 h-3" />
+            Aura Fix
+          </button>
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+            <Zap className="w-3 h-3 text-success animate-pulse" />
+            <span className="font-bold uppercase">Ready</span>
+          </div>
         </div>
       </div>
 

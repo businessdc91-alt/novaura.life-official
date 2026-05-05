@@ -149,13 +149,33 @@ class NovaKernel {
         }
       });
 
-      // Phase 6 — AI providers (Phase 1/2/3 engine)
+      // Phase 6 — AI providers (Phase 1/2/3 engine) — non-fatal
       await this._phase(6, async () => {
-        this.ai.init(this);
-        const llmConfig = this.settings.get('llm_config');
-        if (llmConfig) this.ai.setConfig(llmConfig);
-        await this.ai.loadCacheFromFirestore?.();
-        this._log(6, 'AI engine online. Hash cache loaded. Provider probe dispatched.');
+        try {
+          this.ai.init(this);
+          // Sanitize stored llm_config: purge any deprecated model names
+          const llmConfig = this.settings.get('llm_config');
+          if (llmConfig) {
+            const deprecated = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemma-4'];
+            if (deprecated.includes(llmConfig.model)) {
+              llmConfig.model = 'gemini-3.1-flash';
+              this.settings.set('llm_config', llmConfig);
+            }
+            this.ai.setConfig(llmConfig);
+          }
+          await this.ai.loadCacheFromFirestore?.();
+          this._log(6, 'AI engine online. Hash cache loaded. Provider probe dispatched.');
+        } catch (aiErr) {
+          this._log(6, 'AI subsystem degraded: ' + aiErr.message + ' — continuing without AI.');
+          // Non-fatal: notify user after desktop loads
+          setTimeout(() => {
+            this.ipc.emit('notification', {
+              title: 'AI Offline',
+              message: 'Could not connect to AI providers. You can still use the OS — AI features will retry automatically.',
+              type: 'warning',
+            });
+          }, 3000);
+        }
       });
 
       // Phase 7 — Semantics Engine + Local Model
@@ -163,9 +183,13 @@ class NovaKernel {
         this.semantics = getSemanticsEngine();
         this.semantics.init(this);
 
-        // Initialize local model subsystem (WebGPU/WebLLM)
-        this.localModel.init(this);
-        this.localModel.boot();
+        // Initialize local model subsystem (WebGPU/WebLLM) — non-fatal
+        try {
+          this.localModel.init(this);
+          this.localModel.boot();
+        } catch (lmErr) {
+          this._log(7, 'LocalModel failed to init: ' + lmErr.message + ' — WebGPU unavailable, continuing.');
+        }
         const gpuSupport = this.localModel.isAvailable ? 'WebGPU available' : 'WebGPU not supported';
         this._log(7, `Semantics engine online. ${this.semantics.getAvailableApps().length} apps registered. ${gpuSupport}.`);
       });
@@ -202,16 +226,20 @@ class NovaKernel {
         this.processes.init(this);
         this.processes.boot();
 
-        // Boot NovaAgent — persistent AI with context awareness + tool calls
-        this.nova.init(this);
-        await this.nova.boot();
+        // Boot NovaAgent — persistent AI with context awareness + tool calls (non-fatal)
+        try {
+          this.nova.init(this);
+          await this.nova.boot();
 
-        // Schedule Nova proactive check every 10 minutes
-        this.scheduler.schedule('nova:proactive', () => {
-          this.nova.proactiveCheck?.();
-        }, { interval: 600_000, tags: ['system', 'nova'] });
+          // Schedule Nova proactive check every 10 minutes
+          this.scheduler.schedule('nova:proactive', () => {
+            this.nova.proactiveCheck?.();
+          }, { interval: 600_000, tags: ['system', 'nova'] });
+        } catch (novaErr) {
+          this._log(11, 'NovaAgent failed to boot: ' + novaErr.message + ' — Nova offline, OS continuing.');
+        }
 
-        this._log(11, 'Desktop ready. Nova online. Boot took ' + (Date.now() - this._bootStart) + 'ms.');
+        this._log(11, 'Desktop ready. Boot took ' + (Date.now() - this._bootStart) + 'ms.');
       });
 
       this.bootPhase = 'ready';

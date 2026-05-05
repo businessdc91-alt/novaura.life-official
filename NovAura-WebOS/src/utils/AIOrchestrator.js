@@ -1,4 +1,6 @@
 // AI Orchestration System - Controls all OS functions via AI intent
+import SystemSoul from './SystemSoul';
+import { chatCloud } from '../services/aiService';
 
 const APP_KEYWORDS = {
   'ide': ['ide', 'code editor', 'coding editor'],
@@ -112,11 +114,54 @@ export class AIOrchestrator {
     this.windowManager = windowManager;
     this.toast = toast;
     this.openWindows = new Map();
+    this.soul = new SystemSoul();
+    this.currentTask = 'Stable Operation';
   }
 
   async executeIntent(intent, context = {}) {
-    const { action, params } = this.parseIntent(intent);
+    // 1. Wrap the intent in System-Self context
+    const soulContext = this.soul.wrapIntent(intent, {
+      activeApp: context.activeApp,
+      openWindows: Array.from(this.openWindows.keys()),
+      userTier: context.userTier,
+      currentTask: this.currentTask
+    });
 
+    // 2. Decide if we need a "High Consciousness" reflection (LLM) or just "Reflex" (Keywords)
+    // For fast reflexes, we still use the keyword matcher first
+    const reflex = this.parseIntent(intent);
+    
+    if (reflex.action !== 'unknown') {
+      this.toast(`System Reflex: ${reflex.action}`);
+      return this.executeAction(reflex.action, reflex.params);
+    }
+
+    // 3. If reflex fails, the System Soul "Thinks" using the cloud
+    try {
+      this.toast('System thinking...', { icon: '🧠' });
+      const response = await chatCloud(soulContext.prompt, {
+        provider: 'kimi', // Default to Kimi for logic/reasoning
+        systemPrompt: soulContext.systemPrompt,
+        maxTokens: 512
+      });
+
+      // The soul returns a thought and potentially a structured command
+      // For now, we'll try to extract an app name or action from the soul's response
+      const thought = response.response;
+      const detectedAction = this.detectAppFromText(thought);
+      
+      if (detectedAction) {
+        return this.openApp(detectedAction);
+      }
+
+      return { success: true, thought, action: 'reflect' };
+    } catch (e) {
+      console.error('System Soul failure:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async executeAction(action, params) {
     if (action === 'open_app') {
       return this.openApp(params.appType);
     }
@@ -137,6 +182,9 @@ export class AIOrchestrator {
     }
     if (action === 'execute_command') {
       return this.openApp('terminal', { initialCommand: params.command });
+    }
+    if (action === 'catalyze') {
+      return this.openApp('catalyst', { githubUrl: params.url });
     }
 
     return { success: false, action: 'unknown', message: null };

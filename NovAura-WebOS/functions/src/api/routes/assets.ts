@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import * as admin from 'firebase-admin';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { moderateAsset } from '../../services/moderationService';
 
 const router = Router();
 
@@ -17,13 +18,6 @@ async function getSignedDownloadUrl(storagePath: string): Promise<string> {
 }
 
 // ─── POST /assets/upload ──────────────────────────────────────────────────────
-// Multipart form upload from CreatorUpload wizard.
-// Fields: title, description, category, licenseTier, price, tags (JSON array)
-// File fields: mainFile, thumbnailFile, previewFiles[] (optional)
-//
-// NOTE: Firebase Functions doesn't support multipart directly — the client sends
-// a base64-encoded payload JSON (common pattern for Functions). If you later move
-// to a dedicated Node server you can swap in multer.
 router.post('/upload', async (req: Request, res: Response) => {
   try {
     const db = admin.firestore();
@@ -67,13 +61,11 @@ router.post('/upload', async (req: Request, res: Response) => {
     let mainFileType = '';
 
     if (req.body.mainFilePath) {
-      // File was uploaded directly to storage by client
       mainPath = req.body.mainFilePath;
       mainFileSize = req.body.mainFileSize || 0;
       mainFileName = req.body.mainFileName || 'asset.zip';
       mainFileType = req.body.mainFileType || 'application/octet-stream';
     } else if (mainFileData) {
-      // Fallback for smaller files / legacy
       const mainExt = path.extname(mainFileData.name) || '';
       mainPath = `assets/${assetId}/main${mainExt}`;
       const mainBuffer = Buffer.from(mainFileData.base64, 'base64');
@@ -97,7 +89,6 @@ router.post('/upload', async (req: Request, res: Response) => {
       await bucket.file(thumbnailPath).save(thumbBuffer, {
         metadata: { contentType: thumbnailData.type }
       });
-      // Make thumbnail public (it's just a preview image)
       await bucket.file(thumbnailPath).makePublic();
       thumbnailUrl = `https://storage.googleapis.com/${bucket.name}/${thumbnailPath}`;
     }
@@ -118,11 +109,18 @@ router.post('/upload', async (req: Request, res: Response) => {
       }
     }
 
-    // Generate license key for this asset
+    // ─── IMPLEMENT BACKUP EXISTENCE ───────────────────────────────────────────
+    const backupPath = `backups/assets/${assetId}_${mainFileName}`;
+    try {
+      await bucket.file(mainPath).copy(bucket.file(backupPath));
+    } catch (err) {
+      console.warn('[Assets Upload] Backup copy failed (continuing):', err);
+    }
+
     const licenseKey = `NVA-${crypto.randomBytes(4).toString('hex').toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 
     // Save asset metadata to Firestore
-    const assetData = {
+    const assetData: any = {
       id: assetId,
       slug,
       title,
@@ -135,28 +133,53 @@ router.post('/upload', async (req: Request, res: Response) => {
       foundationAssets: foundationAssets || [],
       revenueSplits: revenueSplits || [],
       creatorId,
-      // Storage paths (private)
       mainFilePath: mainPath,
+      backupFilePath: backupPath,
       mainFileName,
       mainFileSize,
       mainFileType,
-      // Public URLs
+      files: [
+        {
+          id: 'main',
+          fileName: mainFileName,
+          fileSize: mainFileSize,
+          fileType: mainFileType,
+          path: mainPath,
+        }
+      ],
       thumbnailUrl,
       previewUrls,
       licenseKey,
-      // Status
-      status: 'pending_review', // admin must approve before listing
+      status: 'pending',
       downloadCount: 0,
       salesCount: 0,
       rating: 0,
       reviewCount: 0,
+      moderationReason: '',
+      moderationConfidence: 0,
       createdAt: now,
       updatedAt: now,
     };
 
+    // ─── AI MODERATION (NOVA) ────────────────────────────────────────────────
+    try {
+      const modResult = await moderateAsset({
+        title,
+        description,
+        tags: assetData.tags,
+        thumbnailUrl,
+        isContestEntry: req.body.isContest || false
+      });
+      
+      assetData.status = modResult.status;
+      assetData.moderationReason = modResult.reason;
+      assetData.moderationConfidence = modResult.confidence;
+    } catch (err) {
+      console.warn('[Assets Upload] AI Moderation failed:', err);
+    }
+
     await db.collection('assets').doc(assetId).set(assetData);
 
-    // Add to creator's asset list
     await db.collection('users').doc(creatorId).update({
       assetIds: admin.firestore.FieldValue.arrayUnion(assetId)
     });
@@ -166,8 +189,10 @@ router.post('/upload', async (req: Request, res: Response) => {
       assetId,
       slug,
       thumbnailUrl,
-      status: 'pending_review',
-      message: 'Asset uploaded. Pending admin review before going live.',
+      status: assetData.status,
+      message: assetData.status === 'approved' 
+        ? 'Asset uploaded and auto-approved by Nova.' 
+        : 'Asset uploaded. Pending review.',
     });
   } catch (error: any) {
     console.error('[Assets Upload] Error:', error);
@@ -176,15 +201,12 @@ router.post('/upload', async (req: Request, res: Response) => {
 });
 
 // ─── GET /assets/:id ──────────────────────────────────────────────────────────
-// Public asset detail — returns metadata without download URL
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = admin.firestore();
     const doc = await db.collection('assets').doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Asset not found' });
-
     const data = doc.data()!;
-    // Strip private storage path from public response
     const { mainFilePath, licenseKey, ...publicData } = data;
     return res.json(publicData);
   } catch (error: any) {
@@ -193,8 +215,6 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // ─── GET /assets/:id/download ─────────────────────────────────────────────────
-// Returns a signed download URL — only if the requesting user has purchased it
-// Requires: Authorization: Bearer <firebase-id-token>
 router.get('/:id/download', async (req: Request, res: Response) => {
   try {
     const db = admin.firestore();
@@ -209,28 +229,24 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     const userId = decoded.uid;
     const assetId = req.params.id;
 
-    // Check if user has purchased this asset
-    const userDoc = await db.collection('users').doc(userId).get();
-    const userData = userDoc.data();
-    const purchasedAssets: string[] = userData?.purchasedAssetIds || [];
-
-    // Also check free assets (price = 0)
     const assetDoc = await db.collection('assets').doc(assetId).get();
     if (!assetDoc.exists) return res.status(404).json({ error: 'Asset not found' });
     const assetData = assetDoc.data()!;
+
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const purchasedAssets: string[] = userData?.purchasedAssetIds || [];
 
     const isFree = assetData.price === 0;
     const hasPurchased = purchasedAssets.includes(assetId);
     const isCreator = assetData.creatorId === userId;
 
     if (!isFree && !hasPurchased && !isCreator) {
-      return res.status(403).json({ error: 'Purchase required to download this asset' });
+      return res.status(403).json({ error: 'Purchase required' });
     }
 
-    // Generate signed URL
     const signedUrl = await getSignedDownloadUrl(assetData.mainFilePath);
 
-    // Log the download
     await db.collection('downloads').add({
       userId,
       assetId,
@@ -238,7 +254,6 @@ router.get('/:id/download', async (req: Request, res: Response) => {
       downloadedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // Increment download count
     await db.collection('assets').doc(assetId).update({
       downloadCount: admin.firestore.FieldValue.increment(1)
     });
@@ -246,10 +261,9 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     return res.json({
       url: signedUrl,
       fileName: assetData.mainFileName,
-      expiresIn: 7200, // seconds
+      expiresIn: 7200,
     });
   } catch (error: any) {
-    console.error('[Assets Download] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -259,19 +273,14 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const db = admin.firestore();
     const { category, limit = '20', sort = 'createdAt' } = req.query;
-
     let query: admin.firestore.Query = db.collection('assets').where('status', '==', 'approved');
-
     if (category) query = query.where('category', '==', category);
-
     query = query.orderBy(sort as string, 'desc').limit(Number(limit));
-
     const snapshot = await query.get();
     const assets = snapshot.docs.map(doc => {
       const { mainFilePath, licenseKey, ...data } = doc.data();
       return data;
     });
-
     return res.json({ assets, total: assets.length });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });

@@ -1,5 +1,24 @@
 import { kernelStorage } from '../kernel/kernelStorage.js';
-import { useAuthStore } from '../../platform/src/stores/authStore';
+
+// ─── OpenRouter Free Model Pool ──────────────────────────────────────────────
+// Verified slugs from openrouter.ai/models — append :free for zero-cost inference
+export const OR_MODELS = {
+  // ─── 1T+ Powerhouses ──────────────────────────────────────────────────
+  LING_1T:    'inclusionai/ling-2.6-1t:free',       // 1 Trillion Parameter Giant
+  QWEN_480B:  'qwen/qwen3-coder-480b-a35b:free',   // Massive Coding Specialist
+  QWEN_235B:  'qwen/qwen3-235b-a22b-instruct:free', // High-Reliability Giant
+  HERMES_405B: 'nousresearch/hermes-3-llama-3.1-405b:free', // Logic Powerhouse
+  
+  // ─── Specialized Specialists ──────────────────────────────────────────
+  NEMOTRON_SUPER: 'nvidia/nemotron-3-super:free',   // High-Fidelity Reasoning
+  NEMOTRON_EMBED: 'nvidia/llama-nemotron-embed-vl-1b-v2:free', // Multimodal Retrieval
+  HY3:            'tencent/hy3:free',               // Tencent Hy3 Preview
+  VENICE:         'venice/venice-uncensored:free',  // Uncensored Roleplay/Logic
+  
+  // ─── Persona Primaries ────────────────────────────────────────────────
+  NOVA:    'google/gemma-4-31b-it:free',            // Nova — Gemma 4 31B
+  AURA:    'google/gemma-4-26b-a4b-it:free',        // Aura — Gemma 4 26B MoE (A4B active)
+};
 /**
  * NovAura AI Service — Centralized API layer
  *
@@ -8,9 +27,10 @@ import { useAuthStore } from '../../platform/src/stores/authStore';
  * - Local LLM direct-from-browser (Ollama, LM Studio)
  * - Smart routing based on task category and llmConfig
  * - Auth headers, error handling, provider fallback
+ * - Auth headers, error handling, provider fallback
  */
 
-export const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api').replace(/\/$/, '');
+export const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api').replace(/\/$/, '');
 
 // ─── Auth ──────────────────────────────────────────────────────────────
 
@@ -48,25 +68,49 @@ export async function checkHealth() {
 // ─── Cloud AI (via backend proxy) ──────────────────────────────────────
 
 /** Helper to check membership and deduct tokens for IDE usage */
-async function ensureActionTokens(isIDE = false) {
-  const { user } = useAuthStore.getState();
+export async function ensureActionTokens(isIDE = false) {
+  let user = null;
+  let isPartner = false;
+  try {
+    const userData = JSON.parse(kernelStorage.getItem('user_data') || 'null');
+    user = userData;
+    isPartner = !!userData?.partnership || 
+                userData?.email?.endsWith('@novaura.xyz') || 
+                userData?.email?.endsWith('@novaura.life') ||
+                userData?.email === 'lostitonce420@gmail.com';
+  } catch (e) {
+    console.warn('Failed to parse user data from kernel storage:', e);
+  }
+
   const isPremium = user?.membershipTier === 'catalyst' ||
     user?.membershipTier === 'nova' ||
     user?.membershipTier === 'catalytic-crew' ||
-    user?.membershipTier === 'spark' ||
-    user?.membershipTier === 'emergent' ||
-    user?.membershipTier === 'founding-spark' ||
-    user?.membershipTier === 'founding-catalyst' ||
-    user?.membershipTier === 'founding-nova' ||
-    user?.membershipTier === 'catalyst-crew-founders' ||
+    user?.membershipTier === 'founding-father' ||
+    user?.membershipTier === 'council-member' ||
     user?.membershipTier === 'strategic-investor' ||
-    user?.email?.endsWith('@novaura.life');
+    isPartner;
 
-  if (!isPremium && isIDE) {
-    const { useActionTokens } = useAuthStore.getState();
-    const success = await useActionTokens(0.25);
-    if (!success) {
-      throw new Error('Action tokens required for IDE usage (0.25/action). Please upgrade to Spark or purchase tokens.');
+  const burnRate = isPartner ? 0.125 : 0.25;
+
+  if (isIDE) {
+    try {
+      const { db } = await import('../config/firebase');
+      const { doc, getDoc, updateDoc } = await import('firebase/firestore');
+      if (db && user?.uid) {
+        const userRef = doc(db, 'users', user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          const currentTokens = data.actionTokens || 0;
+          if (currentTokens < burnRate) {
+            throw new Error(`Action tokens required for IDE usage (${burnRate}/action). Please upgrade to Spark or purchase tokens.`);
+          }
+          await updateDoc(userRef, { actionTokens: currentTokens - burnRate });
+        }
+      }
+    } catch (e) {
+      if (e.message.includes('Action tokens required')) throw e;
+      console.warn('Failed to deduct tokens:', e);
     }
   }
   return isPremium || user?.email?.endsWith('@novaura.xyz') || user?.email?.endsWith('@novaura.life');
@@ -78,70 +122,115 @@ async function ensureActionTokens(isIDE = false) {
  * @param {object} options - { provider, model, maxTokens, temperature, conversation, isIDE }
  */
 export async function chatCloud(prompt, options = {}) {
-  const { user } = useAuthStore.getState();
   const isPremium = await ensureActionTokens(options.isIDE);
 
-  // Azure OpenAI (Kimi) BYOK / System Fallback
-  const userKimiData = kernelStorage.getItem('kimi_key');
-  const userAzureData = kernelStorage.getItem('azure_key') || kernelStorage.getItem('user_azure_key');
+  // ── Kimi (Moonshot) BYOK ────────────────────────────────────────────────
+  const userKimiKey = kernelStorage.getItem('kimi_key');
+  if (userKimiKey && options.provider === 'kimi') {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-  let azureOpenAIKey = 'l1EbAyY4Y8xoQiTr6cdCUgmRX23TqEqpJ0pMZJ4y6RXEDAwR0a8yJQQJ99CCACHYHv6XJ3w3AAAAACOG1UQ9';
-  let azureEndpoint = 'https://livenovaura-resource.services.ai.azure.com/';
+    try {
+      const res = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${userKimiKey}`,
+        },
+        body: JSON.stringify({
+          model: options.model || 'moonshot-v1-8k',
+          messages: [
+            ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: options.maxTokens || 4096,
+          temperature: options.temperature || 0.7,
+        }),
+        signal: controller.signal
+      });
 
-  // Priority: 1. Specific provider key, 2. Generic azure key, 3. System fallback
-  const effectiveData = (options.provider === 'kimi' && userKimiData) ? userKimiData : (userAzureData || userKimiData);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(`Kimi Error: ${res.status} - ${errorData.error?.message || 'Unknown Error'}`);
+      }
 
-  if (effectiveData && effectiveData.includes('|')) {
-    const [savedKey, savedEndpoint] = effectiveData.split('|');
-    azureOpenAIKey = savedKey;
-    azureEndpoint = savedEndpoint;
+      const data = await res.json();
+      return {
+        response: data.choices[0].message.content,
+        source: 'kimi (BYOK)',
+        model: options.model || 'moonshot-v1-8k',
+      };
+    } catch (err) {
+      if (err.name === 'AbortError') throw new Error('Kimi request timed out (45s)');
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
-  if (options.provider === 'kimi' || options.provider === 'azure') {
-    const deployment = options.model || (options.provider === 'kimi' ? 'kimi' : 'gpt-4o');
+  // ── Azure OpenAI BYOK ───────────────────────────────────────────────────
+  const userAzureData = kernelStorage.getItem('azure_key') || kernelStorage.getItem('user_azure_key');
+  if (userAzureData && options.provider === 'azure') {
+    let azureKey = userAzureData;
+    let azureEndpoint = 'https://livenovaura-resource.services.ai.azure.com/';
+
+    if (userAzureData.includes('|')) {
+      const [savedKey, savedEndpoint] = userAzureData.split('|');
+      azureKey = savedKey;
+      azureEndpoint = savedEndpoint;
+    }
+
+    const deployment = options.model || 'gpt-4o';
     const apiVersion = '2024-05-01-preview';
     const baseUrl = azureEndpoint.endsWith('/') ? azureEndpoint : `${azureEndpoint}/`;
 
-    // Intelligent URL construction based on Azure service type
     let url;
     if (baseUrl.includes('/openai/deployments/')) {
-      // User pasted a full deployment-specific URL
       url = baseUrl.includes('api-version=') ? baseUrl : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api-version=${apiVersion}`;
     } else if (baseUrl.includes('.services.ai.azure.com')) {
-      // Azure AI Foundry / MaaS (Kimi, Llama, etc.)
       url = `${baseUrl}models/chat/completions?api-version=${apiVersion}`;
     } else {
-      // Standard Azure OpenAI Base URL
       url = `${baseUrl}openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
     }
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': azureOpenAIKey,
-      },
-      body: JSON.stringify({
-        messages: [
-          ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: options.maxTokens || 1024,
-        temperature: options.temperature || 0.7,
-      }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(`Azure OpenAI Error: ${res.status} - ${errorData.error?.message || 'Unknown Error'}`);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': azureKey,
+        },
+        body: JSON.stringify({
+          messages: [
+            ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: options.maxTokens || 4096,
+          temperature: options.temperature || 0.7,
+        }),
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(`Azure Error: ${res.status} - ${errorData.error?.message || 'Unknown Error'}`);
+      }
+
+      const data = await res.json();
+      return {
+        response: data.choices[0].message.content,
+        source: 'azure (BYOK)',
+        model: deployment,
+      };
+    } catch (err) {
+      if (err.name === 'AbortError') throw new Error('Azure request timed out (45s)');
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const data = await res.json();
-    return {
-      response: data.choices[0].message.content,
-      source: userAzureData ? 'azure (BYOK)' : 'azure (system)',
-      model: deployment,
-    };
   }
 
   const userOpenAIKey = kernelStorage.getItem('openai_api_key') || kernelStorage.getItem('user_openai_key');
@@ -163,7 +252,7 @@ export async function chatCloud(prompt, options = {}) {
           ...options.conversation.map(m => ({ role: m.role, content: m.text || m.content })),
           { role: 'user', content: prompt }
         ],
-        max_tokens: options.maxTokens || 1024,
+        max_tokens: options.maxTokens || 8192,
         temperature: options.temperature ?? 0.7,
       }),
     });
@@ -178,6 +267,36 @@ export async function chatCloud(prompt, options = {}) {
     };
   }
 
+  // OpenRouter (free-tier models for testing: Llama, Mistral, Gemma)
+  const userOpenRouterKey = kernelStorage.getItem('openrouter_api_key') || kernelStorage.getItem('user_openrouter_key');
+  if (userOpenRouterKey && (options.provider === 'openrouter' || (!options.provider && userOpenRouterKey))) {
+    const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userOpenRouterKey}`,
+        'HTTP-Referer': 'https://novaura.life',
+        'X-Title': 'NovAura OS',
+      },
+      body: JSON.stringify({
+        model: options.model || 'meta-llama/llama-3.1-8b-instruct:free',
+        messages: [
+          ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: options.maxTokens || 2048,
+        temperature: options.temperature ?? 0.7,
+      }),
+    });
+    const orData = await orRes.json();
+    if (!orRes.ok) throw new Error(orData.error?.message || 'OpenRouter request failed');
+    return {
+      response: orData.choices[0].message.content,
+      source: 'openrouter (BYOK)',
+      model: orData.model,
+    };
+  }
+
   const userAIMLKey = kernelStorage.getItem('aimlapi_key') || kernelStorage.getItem('user_aimlapi_key');
   if (userAIMLKey && (options.provider === 'aimlapi' || (options.model && options.model.toLowerCase().includes('gemma')))) {
     const aimlRes = await fetch('https://api.aimlapi.com/v1/chat/completions', {
@@ -187,7 +306,7 @@ export async function chatCloud(prompt, options = {}) {
         'Authorization': `Bearer ${userAIMLKey}`,
       },
       body: JSON.stringify({
-        model: options.model || 'google/gemma-7b-it',
+        model: options.model || 'google/gemma-3-27b-it',
         messages: [
           ...(options.conversation || []).map(m => ({
             role: m.role === 'assistant' ? 'assistant' : m.role,
@@ -195,7 +314,7 @@ export async function chatCloud(prompt, options = {}) {
           })),
           { role: 'user', content: prompt }
         ],
-        max_tokens: options.maxTokens || 1024,
+        max_tokens: options.maxTokens || 2048,
         temperature: options.temperature ?? 0.7,
       }),
     });
@@ -249,7 +368,7 @@ export async function chatCloud(prompt, options = {}) {
       body: JSON.stringify({
         prompt,
         apiKey: userAlibabaKey,
-        model: options.model || 'qwen-max',
+        model: options.model || 'qwen-3.6-max',
         conversation: options.conversation || [],
       }),
     });
@@ -262,22 +381,34 @@ export async function chatCloud(prompt, options = {}) {
     };
   }
 
-  const res = await fetch(`${BACKEND_URL}/ai/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getAuthHeaders(),
-    },
-    body: JSON.stringify({
-      prompt,
-      provider: options.provider,
-      model: options.model,
-      maxTokens: options.maxTokens || 1024,
-      temperature: options.temperature ?? 0.7,
-      conversation: options.conversation || [],
-      // Note: API keys are handled server-side based on user tier
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  let res;
+  try {
+    res = await fetch(`${BACKEND_URL}/ai/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({
+        prompt,
+        provider: options.provider,
+        model: options.model,
+        maxTokens: options.maxTokens || 8192,
+        temperature: options.temperature ?? 0.7,
+        conversation: options.conversation || [],
+        // Note: API keys are handled server-side based on user tier
+      }),
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('AI request timed out after 60s');
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const data = await res.json();
   if (!res.ok || !data.success) {
@@ -512,7 +643,13 @@ async function discoverLocalModel(baseUrl, type) {
  * @param {object} config - { url, type, model, systemPrompt, conversation }
  */
 export async function chatLocal(message, config) {
-  const { user } = useAuthStore.getState();
+  let user = null;
+  try {
+    user = JSON.parse(kernelStorage.getItem('user_data') || 'null');
+  } catch (e) {
+    console.error('Failed to parse user data from kernel storage:', e);
+  }
+
   const isPremium = user?.membershipTier === 'catalyst' ||
     user?.membershipTier === 'nova' ||
     user?.membershipTier === 'catalytic-crew' ||
@@ -521,16 +658,34 @@ export async function chatLocal(message, config) {
     user?.membershipTier === 'founding-spark' ||
     user?.membershipTier === 'founding-catalyst' ||
     user?.membershipTier === 'founding-nova' ||
+    user?.membershipTier === 'founding-father' ||
+    user?.membershipTier === 'council-member' ||
     user?.membershipTier === 'catalyst-crew-founders' ||
     user?.membershipTier === 'strategic-investor' ||
+    user?.email?.endsWith('@novaura.xyz') ||
     user?.email?.endsWith('@novaura.life');
 
   // IDE usage charge for Free tier: 0.25 action tokens per action
   if (!isPremium && config.isIDE) {
-    const { useActionTokens } = useAuthStore.getState();
-    const success = await useActionTokens(0.25);
-    if (!success) {
-      throw new Error('Action tokens required for IDE usage (0.25/action). Please upgrade to Spark or purchase tokens.');
+    // Direct Firestore update for tokens in WebOS
+    try {
+      const { db } = await import('../config/firebase');
+      const { doc, getDoc, updateDoc } = await import('firebase/firestore');
+      if (db && user?.uid) {
+        const userRef = doc(db, 'users', user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          const currentTokens = data.actionTokens || 0;
+          if (currentTokens < 0.25) {
+            throw new Error('Action tokens required for IDE usage (0.25/action). Please upgrade to Spark or purchase tokens.');
+          }
+          await updateDoc(userRef, { actionTokens: currentTokens - 0.25 });
+        }
+      }
+    } catch (e) {
+      if (e.message.includes('Action tokens required')) throw e;
+      console.warn('Failed to deduct tokens:', e);
     }
   } else if (!isPremium && !config.isIDE) {
     // Regular local chat is free for everyone, but we still verify access exists
@@ -539,7 +694,7 @@ export async function chatLocal(message, config) {
 
   const target = resolveLocalTarget(config.url, config.type);
   const discoveredModel = await discoverLocalModel(target.baseUrl, config.type);
-  const selectedModel = config.model || discoveredModel || (config.type === 'ollama' ? 'llama4:latest' : 'local-model');
+  const selectedModel = config.model || discoveredModel || (config.type === 'ollama' ? 'gemma3:27b' : 'local-model');
 
   if (config.type === 'ollama') {
     const messages = [];
@@ -563,17 +718,13 @@ export async function chatLocal(message, config) {
         stream: false,
         options: {
           temperature: config.temperature ?? 0.7,
-          num_predict: config.maxTokens || 1024,
+          num_predict: config.maxTokens || 8192,
         },
       }
       : {
         model: selectedModel,
         messages,
         stream: false,
-        options: {
-          temperature: config.temperature ?? 0.7,
-          num_predict: config.maxTokens || 1024,
-        },
       };
 
     const res = await fetch(target.requestUrl, {
@@ -610,7 +761,7 @@ export async function chatLocal(message, config) {
       model: selectedModel,
       messages,
       temperature: config.temperature ?? 0.7,
-      max_tokens: config.maxTokens || 1024,
+      max_tokens: config.maxTokens || 8192,
     }),
   });
   if (!res.ok) {
@@ -657,9 +808,9 @@ export function buildTaskRouting(models = []) {
     : has('gemma3') ? models.find(m => m.includes('gemma3'))
       : models[0];
 
-  const chatModel = has('llama4:latest') ? 'llama4:latest'
-    : has('llama4') ? models.find(m => m.includes('llama4'))
-      : has('gemma3') ? models.find(m => m.includes('gemma3'))
+  const chatModel = has('gemma3:27b') ? 'gemma3:27b'
+    : has('gemma3') ? models.find(m => m.includes('gemma3'))
+      : has('llama4') ? models.find(m => m.includes('llama4'))
         : models[0];
 
   const fastModel = has('gemma3:2b') ? 'gemma3:2b'
@@ -708,6 +859,9 @@ export function resolveProvider(taskCategory = 'general', llmConfig = {}) {
   if (['gemini', 'vertex'].includes(routing.provider)) {
     return { type: 'cloud', provider: routing.provider, model: routing.model };
   }
+  if (routing.provider === 'openrouter') {
+    return { type: 'cloud', provider: 'openrouter', model: routing.model || 'meta-llama/llama-3.1-8b-instruct:free' };
+  }
   if (routing.provider === 'huggingface') {
     return { type: 'cloud', provider: 'huggingface', model: routing.model || 'microsoft/DialoGPT-medium' };
   }
@@ -740,17 +894,73 @@ export function resolveProvider(taskCategory = 'general', llmConfig = {}) {
 export async function smartChat(message, taskCategory = 'general', llmConfig = {}) {
   const resolved = resolveProvider(taskCategory, llmConfig);
 
-  // Specialized Persona Routing
+  // ── Persona Routing ────────────────────────────────────────────────────────
+
+  // Nova: Gemma 4 31B via OpenRouter → Gemini fallback
   if (taskCategory === 'nova') {
-    return await chatCloud(message, { provider: 'aws-bedrock', model: 'amazon.nova-pro-v1:0', conversation: llmConfig.conversation });
-  }
-  if (taskCategory === 'cybeni') {
-    return await chatCloud(message, { provider: 'alibaba', model: 'qwen-max', conversation: llmConfig.conversation });
-  }
-  if (taskCategory === 'aura') {
-    return await chatCloud(message, { provider: 'gemini', model: 'gemini-3.1-flash', conversation: llmConfig.conversation });
+    try {
+      return await chatCloud(message, {
+        provider: 'openrouter',
+        model: OR_MODELS.NOVA,
+        conversation: llmConfig.conversation,
+        maxTokens: 8192,
+      });
+    } catch (e) {
+      console.warn('[Nova] OpenRouter failed, falling back to Gemini:', e.message);
+      return await chatCloud(message, { provider: 'gemini', model: 'gemini-2.0-flash', conversation: llmConfig.conversation });
+    }
   }
 
+  // Aura: Gemma 4 26B A4B via OpenRouter → Gemini Pro fallback
+  if (taskCategory === 'aura') {
+    try {
+      return await chatCloud(message, {
+        provider: 'openrouter',
+        model: OR_MODELS.AURA,
+        conversation: llmConfig.conversation,
+        maxTokens: 8192,
+      });
+    } catch (e) {
+      console.warn('[Aura] OpenRouter failed, falling back to Gemini Pro:', e.message);
+      return await chatCloud(message, { provider: 'gemini', model: 'gemini-3.1-pro', conversation: llmConfig.conversation });
+    }
+  }
+
+  // Cybeni: Qwen via Alibaba (unchanged — paid, high quality)
+  if (taskCategory === 'cybeni') {
+    return await chatCloud(message, { provider: 'alibaba', model: 'qwen-3.6-max', conversation: llmConfig.conversation });
+  }
+
+  // Claude: Anthropic direct
+  if (taskCategory === 'claude') {
+    return await chatCloud(message, { provider: 'anthropic', model: 'claude-4.7-sonnet', conversation: llmConfig.conversation });
+  }
+
+  // ── Coding: Qwen3 Coder 480B → Hermes 3 405B → Gemini fallback ────────────
+  if (taskCategory === 'coding' || taskCategory === 'ide') {
+    try {
+      return await chatCloud(message, {
+        provider: 'openrouter',
+        model: OR_MODELS.QWEN_CODER,
+        conversation: llmConfig.conversation,
+        maxTokens: 8192,
+      });
+    } catch {
+      try {
+        return await chatCloud(message, {
+          provider: 'openrouter',
+          model: OR_MODELS.HERMES,
+          conversation: llmConfig.conversation,
+          maxTokens: 8192,
+        });
+      } catch (e) {
+        console.warn('[Coding] OpenRouter failed, falling back to Gemini:', e.message);
+        // Fall through to default
+      }
+    }
+  }
+
+  // ── Local LLM (user-configured) ───────────────────────────────────────────
   if (resolved.type === 'local') {
     try {
       return await chatLocal(message, {
@@ -761,12 +971,51 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
       });
     } catch (localError) {
       console.warn('Local LLM failed, falling back to cloud:', localError);
-      // Fall through to cloud
     }
   }
 
+  // ── General: OpenRouter free pool → Gemini fallback ───────────────────────
+  // Try Nemotron → Qwen3 80B → GPT OSS → Gemini
+  const generalPool = [OR_MODELS.NEMOTRON, OR_MODELS.QWEN_80B, OR_MODELS.GPT_OSS];
+  for (const orModel of generalPool) {
+    try {
+      return await chatCloud(message, {
+        provider: 'openrouter',
+        model: orModel,
+        conversation: llmConfig.conversation,
+        maxTokens: 8192,
+      });
+    } catch {
+      console.warn(`[General] OpenRouter model ${orModel} failed, trying next...`);
+    }
+  }
+
+  // Hard fallback: Gemini
   return await chatCloud(message, {
     provider: 'gemini',
-    model: resolved.model || 'gemini-3.1-flash',
+    model: resolved.model || 'gemini-2.0-flash',
   });
+}
+
+/**
+ * Simplified OpenResponses API call.
+ * @param {string} input - User message or multimodal input
+ * @param {string} model - Model slug
+ */
+export async function sendOpenResponse(input, model = 'google/gemini-2.0-flash-001') {
+  const res = await fetch(`${BACKEND_URL}/ai/beta/responses`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ input, model }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.detail || 'OpenResponses request failed');
+  }
+
+  return data;
 }

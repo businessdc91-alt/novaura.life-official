@@ -3,12 +3,15 @@ import { Send, Mic, Sparkles } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
+import { useSystemTelemetry } from '../hooks/useSystemTelemetry';
+
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-export default function ChatBar({ onSubmit, llmConfig, telemetry }) {
+export default function ChatBar({ onSubmit, llmConfig }) {
   const [message, setMessage] = useState('');
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
+  const telemetry = useSystemTelemetry();
 
   const handleSubmit = (e) => {
     e.preventDefault();

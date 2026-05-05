@@ -10,6 +10,9 @@ mod terminal;
 // Aura Nova sidecar bridge
 mod aura_sidecar;
 
+// Aura Hub bridge for external satellites (VS Code, etc.)
+mod aura_hub;
+
 // Commands module
 mod commands {
     use serde::Serialize;
@@ -126,8 +129,16 @@ fn main() {
         .setup(move |app| {
             match aura_sidecar::AuraSidecar::spawn(app.handle(), &aura_tier) {
                 Ok(sidecar) => {
-                    app.manage(Arc::new(sidecar));
-                    println!("[AURA] Sidecar spawned (tier: {})", aura_tier);
+                    let sidecar_arc = Arc::new(sidecar);
+                    app.manage(Arc::clone(&sidecar_arc));
+                    
+                    // Start the Hub for external satellites
+                    let hub_sidecar = Arc::clone(&sidecar_arc);
+                    tokio::spawn(async move {
+                        aura_hub::start_hub(hub_sidecar).await;
+                    });
+
+                    println!("[AURA] Sidecar & Hub spawned (tier: {})", aura_tier);
                 }
                 Err(e) => {
                     // Sidecar is optional — desktop still works without it

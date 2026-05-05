@@ -12,8 +12,8 @@ class WebBrowserInterface:
     def __init__(self, inputs):
         self.inputs = inputs
         # RESTORED: Your API Keys
-        self.api_key = "AIzaSyCHlFtnekeAqwsnCN5EgHsWcbEu7w4bH4M"
-        self.cx_id = "31217b0d6a804497d"
+        self.api_key = "AIzaSyDWtjHaRwvSB1cVrZbCubbJzQlAyouBGxY"
+        self.cx_id = "011241151433367520038:p_p6x9u0uyw" 
 
     def browse_interest(self, topic):
         self.inputs.virtual_type(f"www.google.com/search?q={topic}")

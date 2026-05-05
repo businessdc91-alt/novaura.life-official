@@ -12,3 +12,8 @@ Thumbs.db
 
 *.zip
 Kimi_Agent_Deployment_v14.zip
+
+# Service account credentials — NEVER commit these
+*firebase-adminsdk*
+*service-account*.json
+*.credentials.json

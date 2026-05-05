@@ -17,7 +17,8 @@ import {
   Flame,
   Smartphone,
   Monitor as MonitorIcon,
-  RefreshCw
+  RefreshCw,
+  Zap
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
@@ -171,21 +172,21 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
 
   // Load saved preferences
   useEffect(() => {
-    if (!kernel) return;
-    
-    const unsubStatus = kernel.ipc.on('localmodel:status', (status) => {
-      setLocalStatus(prev => ({ ...prev, ...status }));
-    });
-    
-    const unsubProgress = kernel.ipc.on('localmodel:progress', (progress) => {
-      setLocalStatus(prev => ({ ...prev, ...progress, state: 'downloading' }));
-    });
+    if (typeof window !== 'undefined' && window.kernel && window.kernel.ipc) {
+      const unsubStatus = window.kernel.ipc.on('localmodel:status', (status) => {
+        setLocalStatus(prev => ({ ...prev, ...status }));
+      });
+      
+      const unsubProgress = window.kernel.ipc.on('localmodel:progress', (progress) => {
+        setLocalStatus(prev => ({ ...prev, ...progress, state: 'downloading' }));
+      });
 
-    return () => {
-      unsubStatus();
-      unsubProgress();
-    };
-  }, [kernel]);
+      return () => {
+        unsubStatus();
+        unsubProgress();
+      };
+    }
+  }, []);
 
   useEffect(() => {
     const savedTheme = kernelStorage.getItem('novaura-theme') || 'cosmic';
@@ -252,10 +253,10 @@ export default function PersonalizationWindow({ onThemeChange, onOpenWindow }) {
   };
 
   const saveSettings = () => {
-    kernel.settings.set('theme', selectedTheme);
-    kernel.settings.set('taskbar_apps', taskbarApps);
-    kernel.settings.set('llm_config', llmConfig);
-    kernel.settings.set('webgpu_local_model', llmConfig.useWebGPU);
+    kernelStorage.setItem('novaura-theme', selectedTheme);
+    kernelStorage.setItem('novaura-taskbar-apps', JSON.stringify(taskbarApps));
+    kernelStorage.setItem('llm_config', JSON.stringify(llmConfig));
+    kernelStorage.setItem('webgpu_local_model', llmConfig.useWebGPU ? 'true' : 'false');
 
     // Apply theme
     document.documentElement.setAttribute('data-theme', selectedTheme);

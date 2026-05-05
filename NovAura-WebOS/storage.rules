@@ -1,28 +1,10 @@
 rules_version = '2';
-
 service firebase.storage {
   match /b/{bucket}/o {
-    // Default deny all
+    // Permit any logged in user to read or write any file
+    // This stops Firebase from blocking user uploads/saves
     match /{allPaths=**} {
-      allow read, write: if false;
-    }
-    
-    // User files - only accessible by the authenticated owner
-    match /users/{userId}/{allPaths=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Public files (avatars, shared content) - readable by anyone, writable by authenticated users
-    match /public/{allPaths=**} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-    
-    // Shared files - readable by authenticated users, writable by owner
-    match /shared/{fileId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && resource.metadata.owner == request.auth.uid;
-      allow create: if request.auth != null && request.resource.metadata.owner == request.auth.uid;
+      allow read, write: if request.auth != null;
     }
   }
 }

@@ -23,6 +23,15 @@ const USER_SERVICES = [
     benefits: ['Gemini 1.5 Pro/Flash', '1M+ context window', 'Native multimodal support']
   },
   {
+    id: 'emergent',
+    name: 'Emergent (Partner)',
+    icon: '✨',
+    description: 'Trusted Partnership Access: Reduced 50% burn rate and priority scoped keys',
+    keyPlaceholder: 'emergent-...',
+    website: 'https://emergent.ai',
+    benefits: ['50% Token Burn Reduction', '75% Credit Boost', 'Scoped Infrastructure']
+  },
+  {
     id: 'kimi',
     name: 'Kimi / Moonshot',
     icon: '🎋',
@@ -41,13 +50,38 @@ const USER_SERVICES = [
     benefits: ['Claude 3.5 Sonnet', 'Top-tier coding performance', 'Human-like reasoning']
   },
   {
-    id: 'elevenlabs',
-    name: 'ElevenLabs',
-    icon: '🎙️',
-    description: 'Use your own voice synthesis credits',
-    keyPlaceholder: 'Enter your API key',
     website: 'https://elevenlabs.io/app/settings/api-keys',
     benefits: ['Professional voice cloning', 'Ultra-realistic synthesis', 'Multi-language support']
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    icon: '🌐',
+    description: 'Unified access to 1500+ models with user-controlled billing',
+    keyPlaceholder: 'sk-or-v1-...',
+    website: 'https://openrouter.ai/keys',
+    benefits: ['1500+ AI Models', 'User-managed billing', 'Consolidated inference queue'],
+    hasOAuth: true
+  },
+  {
+    id: 'namecom',
+    name: 'Name.com',
+    icon: '🏷️',
+    description: 'Automate DNS and domain management for custom email routing',
+    keyPlaceholder: 'Username:API-Key',
+    website: 'https://www.name.com/account/settings/api',
+    benefits: ['One-click DNS setup', 'Automated MX records', 'Sovereign domain control'],
+    hasEndpoint: true, // Used for Username|Key pattern
+    endpointPlaceholder: 'Name.com Username'
+  },
+  {
+    id: 'googleadmin',
+    name: 'Google Admin SDK',
+    icon: '🛡️',
+    description: 'Provision and manage users/aliases on your custom domains',
+    keyPlaceholder: 'Service Account JSON...',
+    website: 'https://console.cloud.google.com/apis/library/admin.googleapis.com',
+    benefits: ['Programmatic user creation', 'Alias management', 'Workspace automation']
   }
 ];
 
@@ -65,7 +99,7 @@ export default function UserKeyHubWindow() {
   const [success, setSuccess] = useState(null);
   const [userTier, setUserTier] = useState(null);
 
-  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-systems.cloudfunctions.net/api';
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://us-central1-novaura-life.cloudfunctions.net/api';
   const MIN_TIER_LEVEL = 3; // Catalyst = $29.99 (0:free, 1:spark, 2:emergent, 3:catalyst)
 
   useEffect(() => {
@@ -184,6 +218,31 @@ export default function UserKeyHubWindow() {
         fetchUserKeys();
       } else {
         setError(data.error || 'Failed to save key');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const connectOAuth = async () => {
+    if (!selectedService?.hasOAuth) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/user/keys/oauth/init`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      const data = await response.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error(data.error || 'Failed to start OAuth flow');
       }
     } catch (err) {
       setError(err.message);
@@ -404,31 +463,48 @@ export default function UserKeyHubWindow() {
                 )}
 
                 {/* Actions */}
-                <div className="flex gap-3">
-                  <button
-                    onClick={testKey}
-                    disabled={!apiKey || testing}
-                    className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                  >
-                    {testing ? (
-                      <RefreshCw size={16} className="animate-spin" />
-                    ) : (
-                      <CheckCircle size={16} />
-                    )}
-                    Test
-                  </button>
-                  <button
-                    onClick={saveKey}
-                    disabled={!apiKey || loading}
-                    className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                  >
-                    {loading ? (
-                      <RefreshCw size={16} className="animate-spin" />
-                    ) : (
-                      <Save size={16} />
-                    )}
-                    Save Key
-                  </button>
+                <div className="flex flex-col gap-3">
+                  {selectedService.hasOAuth && (
+                    <button
+                      onClick={connectOAuth}
+                      disabled={loading}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 mb-2"
+                    >
+                      {loading ? (
+                        <RefreshCw size={16} className="animate-spin" />
+                      ) : (
+                        <ExternalLink size={16} />
+                      )}
+                      Connect via OAuth (Recommended)
+                    </button>
+                  )}
+                  
+                  <div className="flex gap-3">
+                    <button
+                      onClick={testKey}
+                      disabled={!apiKey || testing}
+                      className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                    >
+                      {testing ? (
+                        <RefreshCw size={16} className="animate-spin" />
+                      ) : (
+                        <CheckCircle size={16} />
+                      )}
+                      Test
+                    </button>
+                    <button
+                      onClick={saveKey}
+                      disabled={!apiKey || loading}
+                      className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                    >
+                      {loading ? (
+                        <RefreshCw size={16} className="animate-spin" />
+                      ) : (
+                        <Save size={16} />
+                      )}
+                      Save Key
+                    </button>
+                  </div>
                 </div>
 
                 {selectedService.configured && (

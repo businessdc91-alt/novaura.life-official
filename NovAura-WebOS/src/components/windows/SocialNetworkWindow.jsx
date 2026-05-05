@@ -14,37 +14,7 @@ import {
   getNotificationHistory,
 } from '../../services/messagingService';
 
-// ── Components ───────────────────────────────────────────────────────────────
-
-function Avatar({ user, size = 'md', showStatus = false }) {
-  const sizes = {
-    sm: 'w-8 h-8 text-sm',
-    md: 'w-10 h-10 text-base',
-    lg: 'w-14 h-14 text-xl',
-    xl: 'w-20 h-20 text-3xl'
-  };
-  
-  const statusColors = {
-    online: 'bg-green-400',
-    away: 'bg-yellow-400',
-    offline: 'bg-gray-500'
-  };
-  
-  const displayName = user?.displayName || user?.name || 'User';
-  const avatar = user?.avatar || user?.photoURL || displayName.charAt(0).toUpperCase();
-  const status = user?.status || 'offline';
-  
-  return (
-    <div className="relative">
-      <div className={`${sizes[size]} rounded-full bg-gradient-to-br from-primary/20 to-purple-500/20 flex items-center justify-center border border-white/10 text-gray-200`}>
-        {avatar}
-      </div>
-      {showStatus && (
-        <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ${statusColors[status]} border-2 border-[#0a0a0f]`} />
-      )}
-    </div>
-  );
-}
+import Avatar from '../avatar/Avatar';
 
 function PostCard({ post, currentUserId, onLike, onBookmark, onShare }) {
   const isLiked = post.likes?.includes(currentUserId);
