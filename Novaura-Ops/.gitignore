@@ -1,0 +1,16 @@
+# Environment — never commit keys
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+target/
+node_modules/
+
+# Tauri
+src-tauri/target/
+
+# OS
+.DS_Store
+Thumbs.db

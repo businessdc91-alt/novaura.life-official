@@ -112,7 +112,7 @@ const PROVIDERS: Record<string, any> = {
       'anthropic-version': '2023-06-01'
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'claude-4.6',
+      model: 'claude-opus-4-7',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
       temperature: temp
@@ -128,7 +128,7 @@ const PROVIDERS: Record<string, any> = {
       'anthropic-version': '2023-06-01'
     }),
     formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      model: 'claude-4.6',
+      model: 'claude-opus-4-7',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
       temperature: temp

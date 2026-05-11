@@ -1,0 +1,79 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:5177",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "NovAura Ops",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": { "open": true, "execute": true, "sidecar": true },
+      "window": {
+        "close": true, "hide": true, "show": true,
+        "maximize": true, "minimize": true, "unmaximize": true,
+        "unminimize": true, "startDragging": true, "setFocus": true,
+        "setTitle": true, "setSize": true, "setPosition": true
+      },
+      "path": { "all": true },
+      "os": { "all": true },
+      "fs": { "all": true, "scope": ["$APPDATA/**", "$DOCUMENT/**", "$HOME/**"] },
+      "http": { "all": true, "scope": ["https://**", "http://localhost/**"] },
+      "clipboard": { "all": true },
+      "notification": { "all": true },
+      "globalShortcut": { "all": true },
+      "dialog": { "all": true }
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.novaura.ops",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "shortDescription": "NovAura internal ops & dev command center",
+      "longDescription": "Staff-only command center for NovAura: voice calls, live editing, AI orchestration, task management, and Firebase-synced team collaboration.",
+      "category": "DeveloperTool",
+      "copyright": "© 2026 NovAura",
+      "externalBin": [],
+      "windows": {
+        "digestAlgorithm": "sha256",
+        "certificateThumbprint": null,
+        "timestampUrl": ""
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false
+    },
+    "updater": { "active": false },
+    "windows": [
+      {
+        "label": "main",
+        "title": "NovAura Ops",
+        "width": 1600,
+        "height": 1000,
+        "minWidth": 1200,
+        "minHeight": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --void: #0a0a0f;
+  --void-light: #12121a;
+  --void-lighter: #1a1a26;
+  --neon-cyan: #00f0ff;
+  --neon-magenta: #ff0080;
+  --neon-lime: #ccff00;
+  --neon-violet: #8b5cf6;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--void);
+  color: #fff;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Allow text selection in editors and chat */
+.selectable, input, textarea, .monaco-editor {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,240,255,0.3); }
+
+.glow-cyan { box-shadow: 0 0 20px rgba(0,240,255,0.3); }
+.glow-magenta { box-shadow: 0 0 20px rgba(255,0,128,0.3); }
+.glow-violet { box-shadow: 0 0 20px rgba(139,92,246,0.3); }
+
+.glass {
+  background: rgba(255,255,255,0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.neon-border-cyan { border-color: rgba(0,240,255,0.3); }
+.neon-border-magenta { border-color: rgba(255,0,128,0.3); }
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.anim-slide-in { animation: slideIn 0.2s ease forwards; }
+.anim-fade-up { animation: fadeUp 0.2s ease forwards; }
+
+/* Tauri drag region */
+[data-tauri-drag-region] { -webkit-app-region: drag; }
+[data-tauri-drag-region] * { -webkit-app-region: no-drag; }

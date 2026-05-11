@@ -1,0 +1,87 @@
+/* Premium Paper Aesthetic for Literature IDE */
+
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&family=Outfit:wght@100..900&family=Cormorant+Garamond:ital,基础@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&display=swap');
+
+.premium-paper {
+  background-color: #fcfcfc;
+  background-image: 
+    url("https://www.transparenttextures.com/patterns/cardboard-flat.png"),
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.8) 0%, rgba(245,245,245,0) 100%);
+  box-shadow: 
+    0 10px 30px rgba(0,0,0,0.1),
+    inset 0 0 100px rgba(0,0,0,0.02);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.premium-paper::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  background: url("https://www.transparenttextures.com/patterns/paper-fibers.png");
+  opacity: 0.15;
+  mix-blend-mode: multiply;
+}
+
+.premium-paper-cream {
+  background-color: #fdfaf3;
+  background-image: 
+    url("https://www.transparenttextures.com/patterns/cardboard-flat.png"),
+    radial-gradient(circle at 50% 50%, rgba(253,250,243,0.8) 0%, rgba(243,238,220,0.2) 100%);
+}
+
+.premium-paper-dark {
+  background-color: #1a1a2e;
+  background-image: url("https://www.transparenttextures.com/patterns/dark-leather.png");
+  color: #e0e0e0;
+}
+
+.premium-paper-dark::before {
+  opacity: 0.05;
+  filter: invert(1);
+}
+
+.premium-typography {
+  font-family: 'EB Garamond', serif;
+  line-height: 1.8;
+  color: #1a1a1a;
+  font-variant-numeric: oldstyle-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+.premium-headings h1, .premium-headings h2, .premium-headings h3 {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 300;
+  color: #2c2c2c;
+  letter-spacing: -0.02em;
+}
+
+/* Glassmorphism Controls */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+/* Editor Scrollbar */
+.premium-paper::-webkit-scrollbar {
+  width: 8px;
+}
+
+.premium-paper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.premium-paper::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.05);
+  border-radius: 10px;
+}
+
+.premium-paper::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.1);
+}

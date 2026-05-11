@@ -1,0 +1,920 @@
+﻿import React, { useState, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Shield, Users, MessageSquare, Video, Layout, 
+  Search, Bell, Activity, Lock, Globe,
+  Terminal, BarChart3, Command, User,
+  MoreVertical, Send, Phone, Mic, Camera, X,
+  Maximize2, Minimize2, Cpu, Database, Network,
+  Loader2, ExternalLink, Filter, RefreshCw,
+  Wand2, Check, Settings, Server
+} from 'lucide-react';
+import { Button } from '../ui/button';
+import { Card } from '../ui/card';
+import { Input } from '../ui/input';
+import { Badge } from '../ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
+import { toast } from 'sonner';
+import { skimAll, skimHuggingFace, SKIMMER_PLATFORMS, HF_PIPELINE_TAGS } from '../../services/skimmerService';
+import { integrationService } from '../../services/backendIntegrationService';
+
+/**
+ * NECHQ v.1 - NovAura Enterprises Command Headquarters
+ * A high-security, premium collaboration portal for internal staff,
+ * partners (IvaTech, Alibaba), and investor presentations.
+ * 
+ * Aesthetic: WebOS Glassmorphism, Deep Space Theme, Intent-Based.
+ */
+export default function NECHQ() {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [showPrivacyScreen, setShowPrivacyScreen] = useState(false);
+  const [isLiveCall, setIsLiveCall] = useState(false);
+  
+  // Skimmer state
+  const [showSkimmer, setShowSkimmer] = useState(false);
+  const [skimQuery, setSkimQuery] = useState('');
+  const [skimResults, setSkimResults] = useState([]);
+  const [skimMeta, setSkimMeta] = useState(null);
+  const [skimLoading, setSkimLoading] = useState(false);
+  const [skimPlatforms, setSkimPlatforms] = useState(['huggingface', 'github', 'godot']);
+  const [skimFilter, setSkimFilter] = useState('all'); // all | white-label | redeployable | template
+  
+  // Backend Integration state
+  const [integrations, setIntegrations] = useState([]);
+  
+  useEffect(() => {
+    setIntegrations(integrationService.getIntegrationsList());
+  }, []);
+  
+  const runSkim = useCallback(async (query) => {
+    if (!query?.trim()) return;
+    setSkimLoading(true);
+    try {
+      const { results, meta } = await skimAll({
+        query: query.trim(),
+        platforms: skimPlatforms,
+        limit: 15,
+      });
+      setSkimResults(results);
+      setSkimMeta(meta);
+      toast.success(`Found ${meta.totalResults} assets across ${meta.platforms.length} platforms in ${meta.durationMs}ms`);
+    } catch (err) {
+      console.error('[NECHQ Skimmer]', err);
+      toast.error('Skimmer scan failed');
+    } finally {
+      setSkimLoading(false);
+    }
+  }, [skimPlatforms]);
+  
+  const filteredResults = skimFilter === 'all'
+    ? skimResults
+    : skimResults.filter(r => r.eligibility === skimFilter);
+  
+  // Mock data for initial production build (to be connected to collabService/presence)
+  const [activeStaff] = useState([
+    { id: 1, name: 'Catalyst', role: 'Founder', status: 'online', location: 'Command Hub', task: 'Architecting Ark' },
+    { id: 2, name: 'IvaTech Lead', role: 'Partner', status: 'online', location: 'Dev Ops', task: 'Platform Sync' },
+    { id: 3, name: 'Alibaba Team', role: 'Staff', status: 'away', location: 'External', task: 'Supply Chain API' },
+  ]);
+
+  const [notifications] = useState([
+    { id: 1, title: 'New Reconstruction', body: 'App "Project-X" ready for review', type: 'system' },
+    { id: 2, title: 'Partner Ping', body: 'IvaTech updated the shared workspace', type: 'collab' },
+  ]);
+
+  return (
+    <div className="min-h-screen bg-[#020205] text-white flex flex-col font-sans selection:bg-primary/30">
+      {/* Dynamic Background */}
+      <div className="fixed inset-0 pointer-events-none opacity-20">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/20 blur-[120px] rounded-full animate-pulse" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-500/20 blur-[120px] rounded-full animate-pulse" style={{ animationDelay: '2s' }} />
+      </div>
+
+      {/* Glass Header */}
+      <header className="h-16 border-b border-white/5 bg-black/40 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-50">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-pink-500 p-[1px]">
+            <div className="w-full h-full rounded-[11px] bg-black flex items-center justify-center">
+              <Command className="w-5 h-5 text-cyan-400" />
+            </div>
+          </div>
+          <div>
+            <h1 className="text-lg font-bold tracking-tight flex items-center gap-2">
+              NECHQ <span className="text-white/30 font-light">v.1</span>
+              <Badge variant="outline" className="text-[10px] border-cyan-500/30 text-cyan-400 bg-cyan-500/5">PRODUCTION</Badge>
+            </h1>
+            <p className="text-[10px] text-white/40 uppercase tracking-widest font-medium">Enterprise Command Center</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => {
+              setShowPrivacyScreen(!showPrivacyScreen);
+              toast(showPrivacyScreen ? "Privacy Screen Deactivated" : "Privacy Screen Activated: Internal Only");
+            }}
+            className={`p-2 rounded-lg transition-all ${showPrivacyScreen ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-white/40 hover:bg-white/5'}`}
+            title="Toggle Privacy Screen (Business Manager setting)"
+          >
+            <Lock className="w-5 h-5" />
+          </button>
+          
+          <div className="h-8 w-[1px] bg-white/5 mx-2" />
+          
+          <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-full pl-4 pr-1.5 py-1">
+            <div className="text-right">
+              <p className="text-xs font-bold leading-none">The Catalyst</p>
+              <p className="text-[9px] text-white/40 leading-none mt-1">Founder Role</p>
+            </div>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center text-xs font-bold border border-white/20">
+              C
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Command Area */}
+      <main className="flex-1 flex overflow-hidden relative">
+        
+        {/* Left Sidebar - Navigation & Quick Access */}
+        <nav className="w-64 border-r border-white/5 bg-black/20 flex flex-col p-4 gap-6">
+          <div className="space-y-1">
+            <p className="px-3 text-[10px] font-bold text-white/20 uppercase tracking-widest mb-2">Systems</p>
+            {[
+              { id: 'overview', label: 'Command Overview', icon: Layout },
+              { id: 'monitoring', label: 'Live Staff Feed', icon: Activity },
+              { id: 'channels', label: 'Communication Hub', icon: MessageSquare },
+              { id: 'calls', label: 'Novaura Live', icon: Video },
+              { id: 'assets', label: 'Asset Review', icon: Cpu },
+              { id: 'infrastructure', label: 'Cloud Infrastructure', icon: Globe },
+            ].map(item => (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
+                  activeTab === item.id 
+                    ? 'bg-primary/20 text-primary border border-primary/20' 
+                    : 'text-white/40 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <item.icon className="w-4 h-4" />
+                <span className="text-sm font-medium">{item.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-auto space-y-4">
+            <Card className="bg-gradient-to-br from-primary/10 to-purple-500/10 border-primary/20 p-4">
+              <p className="text-xs font-bold mb-2">NECHQ Security</p>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-2 h-2 rounded-full bg-green-400" />
+                <span className="text-[10px] text-white/60">Encrypted via VAPID/AES-256</span>
+              </div>
+              <Button size="sm" variant="outline" className="w-full text-[10px] h-7 border-white/10 hover:bg-white/5">
+                Audit Logs
+              </Button>
+            </Card>
+          </div>
+        </nav>
+
+        {/* Content Area */}
+        <section className="flex-1 flex flex-col overflow-hidden">
+          
+          {/* Active Tab View */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            
+            {activeTab === 'overview' && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-2xl font-bold tracking-tight">Executive Dashboard</h2>
+                  <div className="flex items-center gap-2 text-xs text-white/40 bg-white/5 px-3 py-1.5 rounded-lg border border-white/5">
+                    <Activity className="w-3 h-3 text-green-400" />
+                    System Status: 99.9% Uptime
+                  </div>
+                </div>
+
+                {/* Stats Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {[
+                    { label: 'Active Sessions', val: '12', trend: '+3', icon: Users, color: 'text-cyan-400' },
+                    { label: 'Pending Reviews', val: '4', trend: '-2', icon: Cpu, color: 'text-purple-400' },
+                    { label: 'Message Volume', val: '1.2k', trend: '+14%', icon: MessageSquare, color: 'text-pink-400' },
+                    { label: 'Network Latency', val: '18ms', trend: 'Stable', icon: Network, color: 'text-blue-400' },
+                  ].map((s, i) => (
+                    <Card key={i} className="bg-white/5 border-white/10 p-4 hover:bg-white/10 transition-colors cursor-default group">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-lg bg-black/40 ${s.color}`}>
+                          <s.icon className="w-4 h-4" />
+                        </div>
+                        <span className="text-[10px] font-bold text-white/20 uppercase">{s.trend}</span>
+                      </div>
+                      <p className="text-2xl font-bold">{s.val}</p>
+                      <p className="text-[10px] text-white/40 uppercase tracking-widest mt-1 font-bold">{s.label}</p>
+                    </Card>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Live Activity Feed */}
+                  <Card className="lg:col-span-2 bg-white/5 border-white/10 flex flex-col">
+                    <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-cyan-400" />
+                        Real-time Staff Activity
+                      </h3>
+                      <button className="text-xs text-primary hover:underline">View All</button>
+                    </div>
+                    <div className="p-0 overflow-hidden">
+                      <table className="w-full text-left text-sm">
+                        <thead className="bg-white/[0.02] text-[10px] uppercase font-bold text-white/30 border-b border-white/5">
+                          <tr>
+                            <th className="px-4 py-3">Member</th>
+                            <th className="px-4 py-3">Location</th>
+                            <th className="px-4 py-3">Current Action</th>
+                            <th className="px-4 py-3 text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {activeStaff.map(staff => (
+                            <tr key={staff.id} className="hover:bg-white/[0.02] transition-colors group">
+                              <td className="px-4 py-3 flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-white/10 to-white/5 flex items-center justify-center text-[10px] font-bold border border-white/10">
+                                  {staff.name[0]}
+                                </div>
+                                <div>
+                                  <p className="font-medium">{staff.name}</p>
+                                  <p className="text-[10px] text-white/30">{staff.role}</p>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-white/60 font-light">{staff.location}</td>
+                              <td className="px-4 py-3">
+                                <span className="text-xs py-1 px-2 rounded-md bg-white/5 border border-white/10 text-white/40">
+                                  {staff.task}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <Badge className={staff.status === 'online' ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-amber-500/20 text-amber-400 border-amber-500/30'}>
+                                  {staff.status}
+                                </Badge>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+
+                  {/* System Notifications */}
+                  <Card className="bg-white/5 border-white/10 flex flex-col">
+                    <div className="p-4 border-b border-white/10">
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <Bell className="w-4 h-4 text-pink-400" />
+                        System Alerts
+                      </h3>
+                    </div>
+                    <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+                      {notifications.map(n => (
+                        <div key={n.id} className="p-3 rounded-xl bg-white/5 border border-white/5 hover:border-white/10 transition-all cursor-pointer group">
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className={`w-1.5 h-1.5 rounded-full ${n.type === 'system' ? 'bg-cyan-400' : 'bg-purple-400'}`} />
+                            <p className="text-[11px] font-bold uppercase text-white/60">{n.title}</p>
+                          </div>
+                          <p className="text-xs text-white/40 font-light leading-relaxed group-hover:text-white/60 transition-colors">
+                            {n.body}
+                          </p>
+                        </div>
+                      ))}
+                      <Button variant="ghost" className="w-full text-[10px] text-white/20 hover:text-white/40 h-8 border border-white/5">
+                        Clear Notifications
+                      </Button>
+                    </div>
+                  </Card>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'channels' && (
+              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="h-full flex flex-col">
+                 <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Communication Hub</h2>
+                    <p className="text-sm text-white/40 mt-1">Multi-channel gateway for partners and core staff.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" className="gap-2 border-white/10">
+                      <Plus className="w-4 h-4" /> New Channel
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex-1 grid grid-cols-4 gap-6 h-[calc(100%-80px)]">
+                  {/* Conversation List */}
+                  <div className="col-span-1 space-y-2 overflow-y-auto pr-2">
+                    {[
+                      { name: 'General Command', last: 'Final build looks solid', unread: 2, icon: 'ðŸ›¡ï¸' },
+                      { name: 'IvaTech Sync', last: 'API endpoints updated', unread: 0, icon: 'ðŸ”‹' },
+                      { name: 'Alibaba Logistic', last: 'Awaiting shipping logs', unread: 5, icon: 'ðŸ“¦' },
+                      { name: 'Business Privacy', last: 'Confidential Strategy', unread: 0, icon: 'ðŸ’Ž', private: true },
+                    ].map((chat, i) => (
+                      <button key={i} className={`w-full p-3 rounded-xl border border-white/5 flex items-center gap-3 transition-all ${chat.private && showPrivacyScreen ? 'bg-amber-500/5 border-amber-500/20' : 'hover:bg-white/5'}`}>
+                        <div className="w-10 h-10 rounded-lg bg-black/40 flex items-center justify-center text-lg grayscale group-hover:grayscale-0">
+                          {chat.icon}
+                        </div>
+                        <div className="flex-1 text-left min-w-0">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-bold truncate">{chat.name}</p>
+                            {chat.unread > 0 && <Badge className="bg-primary text-white h-4 min-w-[16px] px-1 text-[9px]">{chat.unread}</Badge>}
+                          </div>
+                          <p className="text-[10px] text-white/30 truncate">{chat.last}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Active Chat */}
+                  <Card className="col-span-3 bg-white/5 border-white/10 flex flex-col overflow-hidden relative">
+                    <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/20">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-cyan-500/20 flex items-center justify-center text-cyan-400">
+                          <Users className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold">General Command</h4>
+                          <p className="text-[10px] text-green-400">4 Members Live</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button className="p-2 hover:bg-white/10 rounded-lg text-white/40"><Search className="w-4 h-4" /></button>
+                        <button className="p-2 hover:bg-white/10 rounded-lg text-white/40"><Video className="w-4 h-4" /></button>
+                        <button className="p-2 hover:bg-white/10 rounded-lg text-white/40"><MoreVertical className="w-4 h-4" /></button>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 p-6 space-y-4 overflow-y-auto">
+                      <div className="flex justify-center my-4">
+                        <Badge variant="outline" className="text-[9px] border-white/5 text-white/20 uppercase tracking-widest font-bold">Today</Badge>
+                      </div>
+                      
+                      <div className="flex gap-3 max-w-[80%]">
+                        <div className="w-8 h-8 rounded-lg bg-white/10 shrink-0" />
+                        <div className="p-3 rounded-2xl bg-white/5 border border-white/5 text-sm text-white/70 font-light leading-relaxed">
+                          The Alibaba team has verified the new integration. We are ready for the live demonstration with the partners.
+                          <p className="text-[9px] text-white/20 mt-2">12:45 PM â€¢ System Admin</p>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3 max-w-[80%] ml-auto flex-row-reverse">
+                        <div className="w-8 h-8 rounded-lg bg-primary/20 shrink-0" />
+                        <div className="p-3 rounded-2xl bg-primary/10 border border-primary/20 text-sm text-white/90 font-light leading-relaxed">
+                          Excellent. Prepare the Novaura Live stage. I want to personally present the ARK enhancements to IvaTech.
+                          <p className="text-[9px] text-primary/60 mt-2 text-right">Just now â€¢ The Catalyst</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 border-t border-white/10 bg-black/20">
+                      <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus-within:border-primary/50 transition-all">
+                        <input 
+                          placeholder="Type an enterprise directive..."
+                          className="flex-1 bg-transparent text-sm text-white placeholder-white/20 outline-none h-10"
+                        />
+                        <button className="p-2 bg-primary hover:bg-primary/80 text-white rounded-lg transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)]">
+                          <Send className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'calls' && (
+              <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="h-full flex flex-col">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Novaura Live</h2>
+                    <p className="text-sm text-white/40 mt-1">Encrypted enterprise conferencing & investor staging.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={() => setIsLiveCall(!isLiveCall)} variant={isLiveCall ? "destructive" : "default"} className="gap-2">
+                      {isLiveCall ? <><X className="w-4 h-4" /> End Call</> : <><Video className="w-4 h-4" /> Start Live Meeting</>}
+                    </Button>
+                  </div>
+                </div>
+
+                {!isLiveCall ? (
+                  <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-white/5 rounded-3xl bg-white/[0.01]">
+                    <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                      <Video className="w-10 h-10 text-primary" />
+                    </div>
+                    <h3 className="text-xl font-bold">No Active Conference</h3>
+                    <p className="text-sm text-white/30 mt-2 text-center max-w-sm">
+                      Host high-fidelity video calls, share enterprise assets live, and present in a premium environment.
+                    </p>
+                    <div className="flex gap-4 mt-8">
+                      <div className="text-center p-4">
+                        <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mx-auto mb-2 border border-white/10">
+                          <Lock className="w-5 h-5 text-white/40" />
+                        </div>
+                        <p className="text-[10px] font-bold text-white/20 uppercase">End-to-End</p>
+                      </div>
+                      <div className="text-center p-4">
+                        <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mx-auto mb-2 border border-white/10">
+                          <Maximize2 className="w-5 h-5 text-white/40" />
+                        </div>
+                        <p className="text-[10px] font-bold text-white/20 uppercase">Ultra HD</p>
+                      </div>
+                      <div className="text-center p-4">
+                        <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mx-auto mb-2 border border-white/10">
+                          <Smartphone className="w-5 h-5 text-white/40" />
+                        </div>
+                        <p className="text-[10px] font-bold text-white/20 uppercase">Omni-Channel</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 grid grid-cols-4 gap-6 h-[calc(100%-80px)]">
+                    <Card className="col-span-3 bg-black border-white/10 relative overflow-hidden flex flex-col group">
+                      {/* Main Video Stage */}
+                      <div className="flex-1 flex items-center justify-center bg-[#05050a] relative">
+                         <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent z-10 opacity-60" />
+                         <div className="flex flex-col items-center gap-4 z-20">
+                            <div className="w-32 h-32 rounded-full border-2 border-primary/40 p-1 animate-pulse">
+                              <div className="w-full h-full rounded-full bg-gradient-to-br from-primary/20 to-purple-500/20 flex items-center justify-center text-3xl font-bold">
+                                C
+                              </div>
+                            </div>
+                            <h4 className="text-xl font-bold">The Catalyst</h4>
+                            <p className="text-xs text-primary font-bold uppercase tracking-widest">Presenter â€¢ Live</p>
+                         </div>
+
+                         {/* Overlay Controls */}
+                         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4 opacity-0 group-hover:opacity-100 transition-all duration-500 transform group-hover:translate-y-0 translate-y-4">
+                            <button className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-white/20 transition-all"><Mic className="w-5 h-5" /></button>
+                            <button className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-white/20 transition-all"><Camera className="w-5 h-5" /></button>
+                            <button className="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-400 transition-all shadow-[0_0_30px_rgba(239,68,68,0.4)]"><PhoneOff className="w-6 h-6 text-white" /></button>
+                            <button className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-white/20 transition-all"><Share2 className="w-5 h-5" /></button>
+                            <button className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-white/20 transition-all"><Settings className="w-5 h-5" /></button>
+                         </div>
+                       </div>
+                    </Card>
+
+                    {/* Participants / Chat */}
+                    <div className="col-span-1 space-y-4 flex flex-col h-full">
+                       <Card className="flex-1 bg-white/5 border-white/10 p-4 overflow-y-auto space-y-4">
+                          <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Attendees (3)</p>
+                          {[
+                            { name: 'IvaTech Partner', role: 'External', mic: true, cam: true },
+                            { name: 'Alibaba Rep', role: 'External', mic: false, cam: true },
+                            { name: 'Business Mgr', role: 'Internal', mic: true, cam: false },
+                          ].map((p, i) => (
+                            <div key={i} className="flex items-center justify-between group">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center text-[10px]">
+                                  {p.name[0]}
+                                </div>
+                                <div>
+                                  <p className="text-xs font-bold">{p.name}</p>
+                                  <p className="text-[9px] text-white/30">{p.role}</p>
+                                </div>
+                              </div>
+                              <div className="flex gap-1">
+                                {p.mic ? <Mic className="w-3 h-3 text-white/20" /> : <MicOff className="w-3 h-3 text-red-500/50" />}
+                                {p.cam ? <Video className="w-3 h-3 text-white/20" /> : <VideoOff className="w-3 h-3 text-red-500/50" />}
+                              </div>
+                            </div>
+                          ))}
+                       </Card>
+                       <Card className="h-48 bg-white/5 border-white/10 p-4">
+                          <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Live Meeting Assets</p>
+                          <div className="space-y-2">
+                             <div className="p-2 rounded-lg bg-white/5 border border-white/5 flex items-center gap-2 cursor-pointer hover:bg-white/10 transition-all">
+                                <Cpu className="w-3.5 h-3.5 text-primary" />
+                                <span className="text-[10px] truncate">Project-X_Enhanced.os</span>
+            )}
+
+            {activeTab === 'assets' && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Relabeling Station</h2>
+                    <p className="text-sm text-white/40 mt-1">Review, brand, and deploy emergent reconstructions.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="gap-2 border-white/10">
+                      <History className="w-4 h-4" /> Deployment History
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Incoming Reconstructions */}
+                  <Card className="lg:col-span-2 bg-white/5 border-white/10 p-6">
+                    <div className="flex items-center justify-between mb-6">
+                      <h3 className="text-lg font-bold flex items-center gap-2">
+                        <Factory className="w-5 h-5 text-indigo-400" />
+                        Incoming Prototypes
+                      </h3>
+                      <Badge variant="outline" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20">3 PENDING</Badge>
+                    </div>
+
+                    <div className="space-y-4">
+                      {[
+                        { name: 'Project-X Reconstruction', source: 'git://github.com/open/project-x', status: 'Ready for Branding', complexity: 'High', date: '2h ago' },
+                        { name: 'Aura-Social-Lite', source: 'itch://market/social-template', status: 'Analysis Complete', complexity: 'Medium', date: '5h ago' },
+                        { name: 'Godot-White-Label-v2', source: 'godot://market/asset-442', status: 'Awaiting Review', complexity: 'Modular', date: 'Yesterday' },
+                      ].map((asset, i) => (
+                        <div key={i} className="group p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-primary/30 transition-all flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-black/40 flex items-center justify-center border border-white/10 text-xl">
+                              ðŸ“¦
+                            </div>
+                            <div>
+                              <h4 className="font-bold group-hover:text-primary transition-colors">{asset.name}</h4>
+                              <p className="text-[10px] text-white/30 font-mono mt-0.5">{asset.source}</p>
+                              <div className="flex gap-3 mt-2">
+                                <span className="text-[9px] text-indigo-400 font-bold uppercase tracking-tighter">{asset.status}</span>
+                                <span className="text-[9px] text-white/20">â€¢</span>
+                                <span className="text-[9px] text-white/40 uppercase tracking-tighter">Complexity: {asset.complexity}</span>
+                                <span className="text-[9px] text-white/20">â€¢</span>
+                                <span className="text-[9px] text-white/40 uppercase tracking-tighter">{asset.date}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Button size="sm" variant="ghost" className="text-[10px] h-8 px-3 border border-white/5 hover:bg-white/10">Inspect Code</Button>
+                            <Button size="sm" className="text-[10px] h-8 px-3 bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_15px_rgba(79,70,229,0.3)]">Deploy to Life</Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+
+                  {/* Asset Market & Templates */}
+                  <div className="space-y-6">
+                    <Card className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border-indigo-500/20 p-6">
+                      <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                        <GitBranch className="w-4 h-4 text-indigo-400" />
+                        Asset Strategies
+                      </h3>
+                      <div className="space-y-3">
+                        <div className="p-3 rounded-xl bg-black/40 border border-white/5">
+                          <p className="text-xs font-bold text-white/80">Automated Branding</p>
+                          <p className="text-[10px] text-white/40 mt-1 leading-relaxed">Inject NovAura rainbow logos and premium WebOS themes into white-label bases automatically.</p>
+                        </div>
+                        <div className="p-3 rounded-xl bg-black/40 border border-white/5 opacity-60">
+                          <p className="text-xs font-bold text-white/80">Market Conversion</p>
+                          <p className="text-[10px] text-white/40 mt-1 leading-relaxed">Bridge open-license itch.io assets into the NovAura ecosystem as premium templates.</p>
+                        </div>
+                      </div>
+                      <Button 
+                        onClick={() => setShowSkimmer(!showSkimmer)}
+                        className={`w-full mt-6 text-[11px] h-9 ${showSkimmer ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-white/5 hover:bg-white/10 border border-white/10'}`}
+                      >
+                        {showSkimmer ? 'âœ• Close Discovery' : 'ðŸ” Open Asset Discovery'}
+                      </Button>
+                    </Card>
+
+                    <Card className="bg-white/5 border-white/10 p-6">
+                      <h3 className="text-sm font-bold mb-4">Market Stats</h3>
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-end">
+                          <p className="text-[10px] text-white/40 uppercase font-bold tracking-widest">Total Assets</p>
+                          <p className="text-xl font-bold">1,248</p>
+                        </div>
+                        <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                          <div className="h-full bg-indigo-500 w-[65%]" />
+                        </div>
+                        <div className="flex justify-between items-end">
+                          <p className="text-[10px] text-white/40 uppercase font-bold tracking-widest">Free vs Paid</p>
+                          <p className="text-sm font-bold text-indigo-400">80 / 20</p>
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
+                </div>
+
+                {/* Live Skimmer Panel */}
+                <AnimatePresence>
+                  {showSkimmer && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <Card className="bg-gradient-to-br from-indigo-500/5 to-cyan-500/5 border-indigo-500/20 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-lg font-bold flex items-center gap-2">
+                            <Search className="w-5 h-5 text-cyan-400" />
+                            Multi-Platform Asset Discovery
+                          </h3>
+                          {skimMeta && (
+                            <div className="flex gap-2 text-[10px]">
+                              <Badge className="bg-green-500/10 text-green-400 border-green-500/20">
+                                {skimMeta.breakdown.whiteLabel} White-Label
+                              </Badge>
+                              <Badge className="bg-blue-500/10 text-blue-400 border-blue-500/20">
+                                {skimMeta.breakdown.redeployable} Redeployable
+                              </Badge>
+                              <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20">
+                                {skimMeta.breakdown.template} Template
+                              </Badge>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Search Bar */}
+                        <form onSubmit={(e) => { e.preventDefault(); runSkim(skimQuery); }} className="flex gap-2 mb-4">
+                          <Input
+                            value={skimQuery}
+                            onChange={(e) => setSkimQuery(e.target.value)}
+                            placeholder="Search HuggingFace, GitHub, Godot, itch.io, OpenSERP..."
+                            className="bg-black/30 border-white/10 text-white placeholder:text-white/30 h-10"
+                          />
+                          <Button type="submit" disabled={skimLoading || !skimQuery.trim()} className="bg-indigo-600 hover:bg-indigo-500 h-10 px-6">
+                            {skimLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                          </Button>
+                        </form>
+
+                        {/* Platform Toggles */}
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          {SKIMMER_PLATFORMS.map(p => (
+                            <button
+                              key={p.id}
+                              onClick={() => setSkimPlatforms(prev => 
+                                prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]
+                              )}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                                skimPlatforms.includes(p.id)
+                                  ? 'bg-white/10 text-white border-white/20'
+                                  : 'bg-black/20 text-white/30 border-white/5 hover:bg-white/5'
+                              }`}
+                            >
+                              <span>{p.icon}</span>
+                              {p.name}
+                            </button>
+                          ))}
+                          <div className="ml-auto flex gap-1">
+                            {['all', 'white-label', 'redeployable', 'template'].map(f => (
+                              <button
+                                key={f}
+                                onClick={() => setSkimFilter(f)}
+                                className={`px-2 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all ${
+                                  skimFilter === f
+                                    ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                                    : 'text-white/30 hover:text-white/50'
+                                }`}
+                              >
+                                {f}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Results */}
+                        {filteredResults.length > 0 && (
+                          <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                            {filteredResults.map((asset, i) => (
+                              <div key={asset.id || i} className="group p-3 rounded-xl bg-black/20 border border-white/5 hover:border-indigo-500/30 transition-all flex items-center justify-between">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <div className="w-10 h-10 rounded-lg bg-black/40 flex items-center justify-center border border-white/10 text-lg flex-shrink-0">
+                                    {asset.platform === 'huggingface' ? 'ðŸ¤—' 
+                                      : asset.platform === 'github' ? 'ðŸ™'
+                                      : asset.platform === 'godot' ? 'ðŸŽ®'
+                                      : asset.platform === 'itch.io' ? 'ðŸ•¹ï¸'
+                                      : 'ðŸ”'}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <h4 className="text-xs font-bold truncate group-hover:text-indigo-400 transition-colors">{asset.name}</h4>
+                                      <Badge className={`text-[8px] px-1.5 py-0 h-4 ${
+                                        asset.eligibility === 'white-label' ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                                        : asset.eligibility === 'redeployable' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                        : asset.eligibility === 'template' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                        : 'bg-white/5 text-white/30 border-white/10'
+                                      }`}>
+                                        {asset.eligibility}
+                                      </Badge>
+                                    </div>
+                                    <p className="text-[9px] text-white/30 truncate mt-0.5">{asset.author} â€¢ {asset.license} â€¢ â­{asset.stars} â€¢ â†“{asset.downloads}</p>
+                                    <p className="text-[9px] text-white/20 truncate">{asset.description?.slice(0, 80)}</p>
+                                  </div>
+                                </div>
+                                <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
+                                  <a href={asset.url} target="_blank" rel="noopener noreferrer">
+                                    <Button size="sm" variant="ghost" className="text-[9px] h-7 px-2 border border-white/5">
+                                      <ExternalLink className="w-3 h-3" />
+                                    </Button>
+                                  </a>
+                                  <Button size="sm" className="text-[9px] h-7 px-2 bg-indigo-600 hover:bg-indigo-500">
+                                    Stage
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {skimResults.length === 0 && !skimLoading && (
+                          <div className="text-center py-8 text-white/20">
+                            <Database className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                            <p className="text-xs">Search across platforms to discover eligible assets</p>
+                            <p className="text-[10px] mt-1 text-white/10">Try: "chat app", "image generation", "game engine", "text-to-speech"</p>
+                          </div>
+                        )}
+
+                        {skimMeta && (
+                          <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between text-[9px] text-white/20">
+                            <span>{skimMeta.totalResults} results across {skimMeta.platforms.join(', ')} in {skimMeta.durationMs}ms</span>
+                            <button onClick={() => runSkim(skimQuery)} className="flex items-center gap-1 hover:text-white/40 transition-colors">
+                              <RefreshCw className="w-3 h-3" /> Refresh
+                            </button>
+                          </div>
+                        )}
+                      </Card>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            )}
+
+            {activeTab === 'infrastructure' && (
+              <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="h-full flex flex-col">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Cloud Infrastructure</h2>
+                    <p className="text-sm text-white/40 mt-1">Manage global deployments, compute resources, and the Staff Toolbox.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Badge className="bg-green-500/10 text-green-400 border-green-500/20 px-3 py-1">ALL SYSTEMS OPERATIONAL</Badge>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Toolbox Section */}
+                  <Card className="col-span-1 bg-white/5 border-white/10 overflow-hidden flex flex-col">
+                    <div className="p-4 border-b border-white/10 bg-white/[0.02]">
+                      <h3 className="text-sm font-bold flex items-center gap-2 text-cyan-400">
+                        <Wand2 className="w-4 h-4" />
+                        Staff Toolbox
+                      </h3>
+                    </div>
+                    <div className="p-4 space-y-3 flex-1">
+                      {[
+                        { name: 'OpenRouter (Testing)', icon: 'ðŸ”€', desc: 'Free inference: Llama, Mistral, Gemma', owned: true },
+                        { name: 'Gemini 3.1 Pro', icon: 'âœ¨', desc: 'High-IQ code assistance', owned: true },
+                        { name: 'Ollama Local', icon: 'ðŸ¦™', desc: 'Private inference stage', owned: false },
+                        { name: 'LM Studio', icon: 'ðŸ–¥ï¸', desc: 'Local GGUF model runner', owned: false },
+                        { name: 'Vertex AI', icon: 'â˜ï¸', desc: 'Enterprise cloud inference', owned: false },
+                      ].map((tool, i) => (
+                        <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-black/20 border border-white/5 group hover:border-cyan-500/30 transition-all">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xl">{tool.icon}</span>
+                            <div>
+                              <p className="text-xs font-bold">{tool.name}</p>
+                              <p className="text-[9px] text-white/30">{tool.desc}</p>
+                            </div>
+                          </div>
+                          {tool.owned ? (
+                            <div className="w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                              <Check className="w-3.5 h-3.5 text-cyan-400" />
+                            </div>
+                          ) : (
+                            <button className="text-[9px] font-bold text-cyan-500 hover:underline uppercase tracking-tighter">Enable</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-4 bg-cyan-500/5 border-t border-cyan-500/10">
+                      <p className="text-[10px] text-cyan-400/60 leading-relaxed italic">
+                        "Set your OpenRouter API key in Settings to enable free-tier inference."
+                      </p>
+                    </div>
+                  </Card>
+
+                  {/* Resource Monitoring */}
+                  <Card className="col-span-2 bg-white/5 border-white/10 p-6 flex flex-col">
+                    <div className="flex items-center justify-between mb-8">
+                      <h3 className="text-lg font-bold">System Load & Deployment Nodes</h3>
+                      <div className="flex gap-4">
+                        <div className="text-center">
+                          <p className="text-[9px] text-white/30 uppercase font-bold mb-1">Global Traffic</p>
+                          <p className="text-sm font-bold text-primary">2.4m req/s</p>
+                        </div>
+                        <div className="text-center border-l border-white/10 pl-4">
+                          <p className="text-[9px] text-white/30 uppercase font-bold mb-1">Compute Cost</p>
+                          <p className="text-sm font-bold text-green-400">$0.04/hr</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex-1 grid grid-cols-2 gap-6">
+                      <div className="space-y-6">
+                        {[
+                          { label: 'Edge Capacity', val: '92%', color: 'from-cyan-500 to-blue-500' },
+                          { label: 'Database IOPS', val: '45%', color: 'from-purple-500 to-pink-500' },
+                          { label: 'AI Inference Pool', val: '14%', color: 'from-green-500 to-emerald-500' },
+                        ].map((m, i) => (
+                          <div key={i} className="space-y-2">
+                            <div className="flex justify-between text-[10px] font-bold text-white/40 uppercase">
+                              <span>{m.label}</span>
+                              <span className="text-white/80">{m.val}</span>
+                            </div>
+                            <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                              <motion.div initial={{ width: 0 }} animate={{ width: m.val }} className={`h-full bg-gradient-to-r ${m.color}`} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="bg-black/40 rounded-2xl border border-white/5 p-4 flex flex-col">
+                        <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-4">Active Deployment Map</p>
+                        <div className="flex-1 relative min-h-[120px]">
+                          <div className="absolute top-1/4 left-1/4 w-3 h-3 bg-cyan-400 rounded-full animate-ping" />
+                          <div className="absolute top-1/4 left-1/4 w-3 h-3 bg-cyan-500 rounded-full shadow-[0_0_10px_cyan]" />
+                          <div className="absolute top-1/2 left-3/4 w-2 h-2 bg-purple-400 rounded-full animate-ping" />
+                          <div className="absolute top-1/2 left-3/4 w-2 h-2 bg-purple-500 rounded-full" />
+                          <div className="absolute bottom-1/3 left-1/2 w-2 h-2 bg-primary rounded-full animate-ping" />
+                          <div className="absolute bottom-1/3 left-1/2 w-2 h-2 bg-primary rounded-full" />
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <Globe className="w-24 h-24 text-white/5" />
+                          </div>
+                        </div>
+                        <p className="text-[9px] text-white/20 text-center mt-4">Optimized for low-latency partner access (IvaTech/Alibaba)</p>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+
+                {/* Backend Integration Station */}
+                <div className="mt-6">
+                  <Card className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border-indigo-500/20 p-6">
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <h3 className="text-lg font-bold flex items-center gap-2">
+                          <Server className="w-5 h-5 text-indigo-400" />
+                          Backend Integration Station
+                        </h3>
+                        <p className="text-[10px] text-white/40 mt-1">Unified auto-provisioning for external services, domains, and AI models.</p>
+                      </div>
+                      <Button size="sm" variant="outline" className="text-[10px] h-8 border-indigo-500/30 text-indigo-400">
+                        + Add Provider
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {integrations.map((provider) => (
+                        <div key={provider.id} className="p-4 rounded-xl bg-black/40 border border-white/5 hover:border-indigo-500/30 transition-all flex flex-col justify-between">
+                          <div>
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl">{provider.icon}</span>
+                                <h4 className="font-bold text-sm">{provider.name}</h4>
+                              </div>
+                              <Badge className={`text-[8px] h-4 px-1.5 ${
+                                provider.status === 'ready' ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              }`}>
+                                {provider.status.toUpperCase()}
+                              </Badge>
+                            </div>
+                            <p className="text-[10px] text-white/40 mb-4 h-8">{provider.description}</p>
+                          </div>
+                          <div className="flex justify-between items-center mt-2 pt-3 border-t border-white/5">
+                            <span className="text-[9px] text-white/20 uppercase tracking-widest">{provider.category}</span>
+                            {provider.configured ? (
+                              <span className="text-[10px] text-cyan-400 font-bold flex items-center gap-1"><Check className="w-3 h-3" /> Connected</span>
+                            ) : (
+                              <Button size="sm" className="text-[9px] h-6 px-3 bg-white/10 hover:bg-white/20 text-white border border-white/10">
+                                Configure
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </div>
+              </motion.div>
+            )}
+
+          </div>
+        </section>
+      </main>
+      {/* Floating Privacy Indicator */}
+      <AnimatePresence>
+        {showPrivacyScreen && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-6 right-6 bg-amber-500/90 text-black font-bold px-6 py-3 rounded-2xl shadow-[0_0_40px_rgba(245,158,11,0.4)] z-[100] flex items-center gap-3 backdrop-blur-md"
+          >
+            <Shield className="w-5 h-5 animate-pulse" />
+            <span>PRIVACY MODE ACTIVE: BUSINESS MANAGER ONLY</span>
+            <button onClick={() => setShowPrivacyScreen(false)} className="ml-2 p-1 hover:bg-black/10 rounded-lg"><X className="w-4 h-4" /></button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+

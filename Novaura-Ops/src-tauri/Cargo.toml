@@ -1,0 +1,53 @@
+[package]
+name = "novaura-ops"
+version = "1.0.0"
+description = "NovAura internal ops command center"
+authors = ["NovAura"]
+license = "MIT"
+repository = ""
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.6", features = [
+  "shell-open", "shell-execute", "shell-sidecar",
+  "window-close", "window-hide", "window-show",
+  "window-maximize", "window-minimize", "window-unmaximize",
+  "window-unminimize", "window-start-dragging", "window-set-focus",
+  "window-set-title", "window-set-size", "window-set-position",
+  "path-all", "os-all",
+  "fs-all",
+  "http-all",
+  "clipboard-all",
+  "notification-all",
+  "global-shortcut-all",
+  "dialog-all",
+  "system-tray"
+]}
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+rusqlite = { version = "0.30", features = ["bundled", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+walkdir = "2.4"
+notify = "6.1"
+notify-rust = "4.10"
+sysinfo = "0.30"
+open = "5.0"
+dirs = "5.0"
+lazy_static = "1.4"
+regex = "1.10"
+base64 = "0.22"
+dotenvy = "0.15"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,85 +1,111 @@
 {
   "project": "NovAura Platform",
-  "master_status": "SYNCED - REPO LIVE FOR PARTNER COLLABORATION",
-  "last_session_summary": "Recovered and synced GitHub repo after 3-week push gap. Stripped Firebase admin SDK credentials from git tracking, added service account patterns to .gitignore, consolidated 5 unpushed commits into clean push (91 files, +7813/-2203). Created comprehensive PARTNER_ONBOARDING.md for incoming dev partners covering service accounts, env config, architecture, AI provider setup, and git workflow.",
+  "master_status": "ACTIVE — INFERENCE RESTORED, NOVAURA-OPS BUILT, DEPLOY PIPELINE FIXED",
+  "last_session_summary": "Restored all AI inference keys to functions/.env, fixed Claude model ID to claude-opus-4-7, built Novaura-Ops internal Tauri desktop app from scratch, wired OpenRouter as primary inference gateway with free→paid fallback, built OpenRouter Key Management admin panel, fixed build-combined.ps1 (removed dead _redirects, fixed step counter, added deploy prompt), fixed npm cache to Z drive.",
   "work_log": [
+    {
+      "timestamp": "2026-05-09T22:00:00Z",
+      "action": "Restored functions/.env and fixed inference pipeline",
+      "reason": "All AI providers were showing offline. functions/.env had been overwritten with blanks. Restored all keys from .env.backup and merged new OpenRouter inference key. Fixed Claude model ID (was 'claude-4.6', now 'claude-opus-4-7'). Added QWEN_API_KEY (70M tokens).",
+      "files_modified": [
+        "NovAura-WebOS/functions/.env",
+        "NovAura-WebOS/functions/src/api/routes/ai.ts"
+      ],
+      "signature": "Nova (Claude Sonnet 4.6)"
+    },
+    {
+      "timestamp": "2026-05-09T21:00:00Z",
+      "action": "Built Novaura-Ops internal Tauri v1 desktop app",
+      "reason": "Internal staff ops tool — voice conferencing (WebRTC + Firebase RTDB), company chat, AI orchestrator (OpenRouter/Claude/Gemini/Kimi), live code editor (Monaco), admin panel, system metrics, task assignments. Staff-gated via @novaura.xyz Google auth. Aura + Nova onboarding sprites.",
+      "files_modified": [
+        "Novaura-Ops/ (entire new project)"
+      ],
+      "signature": "Nova (Claude Sonnet 4.6)"
+    },
+    {
+      "timestamp": "2026-05-09T21:30:00Z",
+      "action": "Built OpenRouter Key Management system",
+      "reason": "Manager key (sk-or-v1-57bd...) used to provision/revoke/limit API keys per staff member and customer subscription tier. Rust backend module + Admin Panel Keys tab with usage bars, create/revoke UI, tier credit reference.",
+      "files_modified": [
+        "Novaura-Ops/src-tauri/src/openrouter_admin.rs",
+        "Novaura-Ops/src-tauri/src/main.rs",
+        "Novaura-Ops/src/components/admin/AdminPanel.tsx"
+      ],
+      "signature": "Nova (Claude Sonnet 4.6)"
+    },
+    {
+      "timestamp": "2026-05-09T20:00:00Z",
+      "action": "Fixed npm cache path and installed firebase-tools",
+      "reason": "npm was pointing cache at F:\\Cache\\npm (no write permission). Fixed .npmrc to use Z:\\npm-cache. Installed firebase-tools globally.",
+      "files_modified": ["C:/Users/Busin/.npmrc"],
+      "signature": "Nova (Claude Sonnet 4.6)"
+    },
+    {
+      "timestamp": "2026-05-09T22:30:00Z",
+      "action": "Fixed build-combined.ps1",
+      "reason": "Script had wrong step counter (1/5 → 2/4), dead _redirects file (Netlify syntax, ignored by Firebase), and no deploy step. Fixed counters, removed _redirects, added interactive deploy prompt with optional functions deploy.",
+      "files_modified": ["NovAura-WebOS/build-combined.ps1"],
+      "signature": "Nova (Claude Sonnet 4.6)"
+    },
+    {
+      "timestamp": "2026-05-07T09:21:00Z",
+      "action": "Fixed MD linting errors in YOUCOM_API_REFERENCE.md",
+      "reason": "Resolved formatting issues (MD022, MD032, MD009, MD031, MD058, MD060) to maintain documentation standards.",
+      "files_modified": ["NovAura-WebOS/YOUCOM_API_REFERENCE.md"],
+      "signature": "Antigravity (Google Deepmind)"
+    },
     {
       "timestamp": "2026-05-05T00:15:00Z",
       "action": "Repo recovery, secret stripping, GitHub sync, and partner onboarding doc",
-      "reason": "GitHub repo appeared missing — diagnosed as 3-week push gap. Stripped firebase-adminsdk JSON files from git tracking (push protection block). Consolidated all pending commits and pushed clean. Created PARTNER_ONBOARDING.md for incoming dev partners.",
+      "reason": "GitHub repo appeared missing — diagnosed as 3-week push gap. Stripped firebase-adminsdk JSON files from git tracking. Consolidated all pending commits and pushed clean. Created PARTNER_ONBOARDING.md.",
       "files_modified": [".gitignore", "PARTNER_ONBOARDING.md", "novaura_complete_overview_master.json"],
       "signature": "Antigravity (Google Deepmind)"
     },
     {
-      "timestamp": "2026-05-01T14:15:22Z",
-      "action": "Diagnosed and fixed Avatar text overflow in SocialNetworkWindow.jsx",
-      "reason": "Image URLs were being rendered as raw text, causing layout distortion (text across tabs).",
-      "files_modified": ["NovAura-WebOS/src/components/windows/SocialNetworkWindow.jsx"],
-      "signature": "Antigravity (Google Deepmind)"
-    },
-    {
-      "timestamp": "2026-05-01T14:28:15Z",
-      "action": "Completed Command Palette V2 expansion and AI integration",
-      "reason": "Enabled global Cmd+K functionality with 60+ app registry and AI intent support in App.jsx.",
-      "files_modified": ["NovAura-WebOS/src/components/CommandPalette.jsx", "NovAura-WebOS/src/App.jsx"],
+      "timestamp": "2026-05-02T11:55:00Z",
+      "action": "Stabilized About experience across ecosystem",
+      "reason": "Populated formerly empty About pages with Origin Story and Ecosystem Directory. Added AboutWindow to OS.",
+      "files_modified": [
+        "NovAura-WebOS/src/pages/AboutPage.jsx",
+        "NovAura-WebOS/platform/src/pages/public/AboutPage.tsx",
+        "NovAura-WebOS/src/components/windows/AboutWindow.jsx"
+      ],
       "signature": "Antigravity (Google Deepmind)"
     },
     {
       "timestamp": "2026-05-02T08:38:00Z",
       "action": "Standardized Avatar component and audited Revenue Pipeline",
-      "reason": "Extracted Avatar logic to src/components/avatar/Avatar.jsx and updated SocialNetworkWindow. Verified backend Stripe/Royalty logic exists but needs production tuning.",
+      "reason": "Extracted Avatar logic to src/components/avatar/Avatar.jsx. Verified backend Stripe/Royalty logic exists but needs production tuning.",
       "files_modified": [
         "NovAura-WebOS/src/components/avatar/Avatar.jsx",
-        "NovAura-WebOS/src/components/windows/SocialNetworkWindow.jsx",
-        "MASTER_AUDIT_TODO.md"
+        "NovAura-WebOS/src/components/windows/SocialNetworkWindow.jsx"
       ],
       "signature": "Antigravity (Google Deepmind)"
     },
     {
-      "date": "2026-05-02",
-      "action": "Implemented 'Backup Existence' persistence logic",
-      "details": "Added shadow-copy logic to backend assets/upload (main file duplicated to backups/ directory). Updated Order records to include redundant file paths and implemented automatic fallback in download routes. Wired up AdminAssets.tsx approval/rejection buttons to enable marketplace listing.",
-      "signature": "Antigravity"
-    },
-    {
-      "date": "2026-05-01",
-      "action": "Documentation Sanitization & Sync",
-      "details": "Resolved extensive MD linting errors across root audit files and synced repository state.",
-      "signature": "Antigravity"
-    },
-    {
-      "timestamp": "2026-05-02T08:42:00Z",
-      "action": "Shortened Toolbar labels and checked Git status",
-      "reason": "Addressed 'wording across the tab' by shortening 'Repo Station' and 'NovAura Platform' and adding truncate. Investigating '0 file changes' reported by user.",
-      "files_modified": ["NovAura-WebOS/src/components/Toolbar.jsx"],
-      "signature": "Antigravity (Google Deepmind)"
-    },
-    {
-      "timestamp": "2026-05-02T11:20:00Z",
-      "action": "Mass Markdown Lint Fix & Project Commit",
-      "reason": "Resolved 'blocked' status by fixing MD022, MD060, MD032, and MD036 errors in MASTER_AUDIT_TODO.md, SECURITY_AUDIT.md, and READMEs. Cleaned up git state for root repository.",
-      "files_modified": ["MASTER_AUDIT_TODO.md", "SECURITY_AUDIT.md", "NovAura-WebOS/functions/README.md", "NovAura-WebOS/MASTER_KEY_1.md"],
-      "signature": "Antigravity (Google Deepmind)"
-    },
-    {
-      "timestamp": "2026-05-02T11:55:00Z",
-      "action": "Stabilized 'About' experience across Ecosystem",
-      "reason": "Populated formerly 'empty' About pages with high-fidelity 'Origin Story' and 'Ecosystem Directory'. Added AboutWindow to OS and updated Toolbar/Registry. Linked all footers to the new premium content.",
-      "files_modified": [
-        "NovAura-WebOS/src/pages/AboutPage.jsx",
-        "NovAura-WebOS/platform/src/pages/public/AboutPage.tsx",
-        "NovAura-WebOS/src/App.jsx",
-        "NovAura-WebOS/src/components/windows/AboutWindow.jsx",
-        "NovAura-WebOS/src/components/Toolbar.jsx",
-        "NovAura-WebOS/src/pages/LandingPage.jsx"
-      ],
+      "timestamp": "2026-05-01T14:28:15Z",
+      "action": "Command Palette V2 expansion and AI integration",
+      "reason": "Enabled global Cmd+K functionality with 60+ app registry and AI intent support.",
+      "files_modified": ["NovAura-WebOS/src/components/CommandPalette.jsx", "NovAura-WebOS/src/App.jsx"],
       "signature": "Antigravity (Google Deepmind)"
     }
   ],
   "active_todo": [
-    "Finalize Stripe Webhook signature verification in functions/src/api/routes/stripe.ts",
+    "Deploy functions with restored .env keys — firebase deploy --only functions",
+    "Complete Firebase project setup for Novaura-Ops (paste VITE_FIREBASE_* into Novaura-Ops/.env)",
+    "Add download section to platform for Novaura-Ops Tauri installer",
+    "Push staff site to novaura.xyz domain",
+    "Finalize Stripe webhook signature verification in functions/src/api/routes/stripe.ts",
     "Audit CreatorUpload stream for file persistence (direct-to-storage)",
-    "Clean up remaining long lines in GamesArenaWindow.jsx (MD013)",
-    "Deploy validated backend functions to production"
-  ]
+    "Wire CYBENI_MODELS into default /ai/chat route (currently defaults to deprecated gemini-2.0-flash-001)"
+  ],
+  "key_infrastructure": {
+    "primary_inference": "OpenRouter (sk-or-v1-9adb... — gemma-4-31b-it:free → paid fallback)",
+    "manager_key": "OpenRouter provisioning key (sk-or-v1-57bd... — creates/revokes/limits keys per tier)",
+    "firebase_project": "novaura-life (novaura-life-8df2f)",
+    "staff_domain": "novaura.xyz",
+    "public_domain": "novaura.life",
+    "ops_app": "Novaura-Ops — Tauri v1.6 desktop, staff-only, @novaura.xyz auth gate",
+    "build_script": "NovAura-WebOS/build-combined.ps1 — builds all 3 frontends + functions, deploys to Firebase"
+  }
 }
