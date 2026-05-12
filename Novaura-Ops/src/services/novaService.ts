@@ -104,10 +104,11 @@ export async function investigateSource(
   sourceId: string,
   sourceType: 'ticket' | 'task',
   question: string,
-): Promise<{ alertId: string; analysis: string }> {
+): Promise<{ alertId: string; analysis: string; recommendedActions: string[]; urgency: string }> {
   const fn = httpsCallable(getFunctions(), 'novaInvestigate');
-  const result = await fn({ sourceId, sourceType, question });
-  return result.data as { alertId: string; analysis: string };
+  const user = auth.currentUser;
+  const result = await fn({ sourceId, sourceType, question, requestedBy: user?.uid });
+  return result.data as { alertId: string; analysis: string; recommendedActions: string[]; urgency: string };
 }
 
 export async function ringStaffMember(uid: string, alertId: string, message: string): Promise<void> {
