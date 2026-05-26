@@ -11,7 +11,7 @@ if (!stripeKey) {
   console.error('[Stripe] STRIPE_SECRET_KEY not set. Stripe features will be disabled.');
 }
 const stripe = stripeKey ? new Stripe(stripeKey, {
-  apiVersion: '2024-06-20', // Use a stable, real API version
+  apiVersion: '2026-03-25.dahlia',
 }) : null;
 
 const PLATFORM_URL = process.env.VITE_APP_URL || 'http://localhost:5173';

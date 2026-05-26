@@ -79,6 +79,10 @@ const MusicToolsWindow = lazy(() => import('./windows/MusicToolsWindow'));
 const FoundingFathersChatWindow = lazy(() => import('./windows/FoundingFathersChatWindow'));
 const DirectMessengerWindow = lazy(() => import('./windows/DirectMessengerWindow'));
 const PlatformWindow = lazy(() => import('./windows/PlatformWindow'));
+const DownloadCenterWindow = lazy(() => import('./windows/DownloadCenterWindow'));
+const AuraMailWindow = lazy(() => import('./windows/AuraMailWindow'));
+const AboutWindow = lazy(() => import('./windows/AboutWindow'));
+const CatalystCommandStation = lazy(() => import('./windows/CatalystCommandStation'));
 
 const windowComponents = {
   ide: IDEWindow,
@@ -86,7 +90,8 @@ const windowComponents = {
   browser: BrowserWindow,
   media: MediaWindow,
   'media-library': MediaLibraryWindow,
-  // 'chat' removed — Nova is the persistent floating companion
+  'chat': NovaChatWindow,
+  'local-nova': AICompanionWindow,
   voice: VoiceChatWindow,
   terminal: TerminalWindow,
   'ai-assistant': AuraChatWindow,
@@ -158,6 +163,10 @@ const windowComponents = {
   'founding-father-chat': FoundingFathersChatWindow,
   'direct-messenger': DirectMessengerWindow,
   'platform': PlatformWindow,
+  'download-center': DownloadCenterWindow,
+  'aura-mail': AuraMailWindow,
+  'about': AboutWindow,
+  'catalyst': CatalystCommandStation,
 };
 
 const defaultSizes = {
@@ -166,7 +175,8 @@ const defaultSizes = {
   browser: { width: 780, height: 520 },
   media: { width: 600, height: 420 },
   'media-library': { width: 700, height: 480 },
-  // 'chat' removed — Nova is persistent
+  'chat': { width: 500, height: 600 },
+  'local-nova': { width: 720, height: 560 },
   voice: { width: 500, height: 520 },
   terminal: { width: 700, height: 380 },
   'ai-assistant': { width: 420, height: 500 },
@@ -236,6 +246,10 @@ const defaultSizes = {
   'admin-key-hub': { width: 700, height: 520 },
   'user-key-hub': { width: 700, height: 520 },
   'platform': { width: 1100, height: 750 },
+  'download-center': { width: 900, height: 600 },
+  'aura-mail': { width: 900, height: 640 },
+  'about': { width: 680, height: 520 },
+  'catalyst': { width: 860, height: 620 },
 };
 
 // Get responsive size based on screen width

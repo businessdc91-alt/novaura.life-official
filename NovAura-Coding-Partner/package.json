@@ -2,7 +2,7 @@
   "name": "novaura-coding-partner",
   "displayName": "NovAura AI Coding Partner",
   "description": "Cybeni, Nova, and Aura directly inside your IDE. Synthesize code, rebrand templates, and push to the NovAura ecosystem autonomously.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "NovAuraLife",
   "engines": {
     "vscode": "^1.80.0"
@@ -17,6 +17,23 @@
   ],
   "main": "./src/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "NovAura AI Coding Partner",
+      "properties": {
+        "novaura.openrouterApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Your OpenRouter API key (overrides auto-discovery from .env files)",
+          "scope": "application"
+        },
+        "novaura.systemPrompt": {
+          "type": "string",
+          "default": "You are Nova, the NovAura AI Coding Partner. You help developers write, refactor, and deploy code. You have expertise in React, TypeScript, Firebase, Node.js, Python, Dart/Flutter, Rust, and the NovAura ecosystem. Be concise, helpful, and write clean code. When showing code, use markdown code blocks.",
+          "description": "System prompt sent to the AI on every conversation",
+          "scope": "application"
+        }
+      }
+    },
     "commands": [
       {
         "command": "novaura.synthesizeCurrentFile",
@@ -27,6 +44,21 @@
         "command": "novaura.deployToFirebase",
         "title": "NovAura: Quick Deploy to Firebase",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "novaura.setApiKey",
+        "title": "NovAura: Set OpenRouter API Key",
+        "icon": "$(key)"
+      },
+      {
+        "command": "novaura.askNova",
+        "title": "NovAura: Ask Nova...",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "novaura.clearChat",
+        "title": "NovAura: Clear Chat History",
+        "icon": "$(clear-all)"
       }
     ],
     "viewsContainers": {
@@ -52,6 +84,20 @@
         {
           "command": "novaura.synthesizeCurrentFile",
           "group": "novaura@1"
+        },
+        {
+          "command": "novaura.askNova",
+          "group": "novaura@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "novaura.setApiKey",
+          "when": "true"
+        },
+        {
+          "command": "novaura.clearChat",
+          "when": "true"
         }
       ]
     }

@@ -22,7 +22,9 @@ export default defineConfig({
         'isomorphic-git/http/web',
         /^isomorphic-git/,
         '@isomorphic-git/lightning-fs',
-        /^@isomorphic-git/
+        /^@isomorphic-git/,
+        /^@tauri-apps/,
+        /^@mlc-ai/,
       ],
     },
   },

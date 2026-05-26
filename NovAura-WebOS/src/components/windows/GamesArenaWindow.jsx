@@ -36,6 +36,8 @@ function GameSelector({ onSelect }) {
     { id: 'chess', name: 'Chess', icon: Crown, color: 'emerald', desc: 'Full chess with castling, en passant & promotion' },
     { id: 'checkers', name: 'Checkers', icon: Gamepad2, color: 'amber', desc: 'Classic checkers with forced jumps & kings' },
     { id: 'tictactoe', name: 'Tic Tac Toe', icon: Brain, color: 'purple', desc: 'Minimax AI with 4 difficulty levels' },
+    { id: 'monstertutor', name: 'Monster Tutor', icon: Sparkles, color: 'pink', desc: 'Full PC RPG. Launches native application.' },
+    { id: 'gwenntr', name: 'GWENNTR', icon: Sparkles, color: 'red', desc: 'Full PC Game. Launches native application.' },
   ];
   const colorMap = {
     cyan: 'from-cyan-600 to-blue-600',
@@ -638,6 +640,28 @@ function Btn({ active, color, onClick, children, className = '' }) {
 export default function GamesArenaWindow({ initialGame }) {
   const [game, setGame] = useState(initialGame || null);
 
+  const handleSetGame = async (id) => {
+    if (id === 'monstertutor' || id === 'gwenntr') {
+      if (window.__TAURI__) {
+        try {
+          const { invoke } = await import(/* @vite-ignore */ '@tauri-apps/api/tauri');
+          const paths = {
+            'monstertutor': 'I:\\NovauraSys\\Downloads\\monster-tutor-win-linux\\MonsterTutor-0.1.9-pc\\MonsterTutor.exe',
+            'gwenntr': 'I:\\NovauraSys\\Downloads\\GWENNTR-1.0.free-pc\\GWENNTR-1.0.free-pc\\GWENNTR.exe'
+          };
+          await invoke('launch_game', { path: paths[id] });
+        } catch (e) {
+          console.error("Failed to launch game", e);
+          alert(`Failed to launch game: ${e}`);
+        }
+      } else {
+        alert("Native games can only be launched from the Novaura Desktop application.");
+      }
+      return;
+    }
+    setGame(id);
+  };
+
   if (game === 'nova-strike') return <IframeGame src="/games/nova-strike.html" title="Nova Strike" onBack={() => setGame(null)} />;
   if (game === 'nova-net-battler') return <IframeGame src="/games/nova-net-battler.html" title="Nova Net Battler" onBack={() => setGame(null)} />;
   if (game === 'gilded-cage') return <IframeGame src="/games/gilded-cage/index.html" title="The Gilded Cage" onBack={() => setGame(null)} />;
@@ -645,5 +669,5 @@ export default function GamesArenaWindow({ initialGame }) {
   if (game === 'checkers') return <Checkers onBack={() => setGame(null)} />;
   if (game === 'tictactoe') return <TicTacToe onBack={() => setGame(null)} />;
 
-  return <GameSelector onSelect={setGame} />;
+  return <GameSelector onSelect={handleSetGame} />;
 }

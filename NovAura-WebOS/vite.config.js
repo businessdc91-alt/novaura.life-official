@@ -55,6 +55,8 @@ export default defineConfig(({ mode }) => ({
         /^isomorphic-git/,
         '@isomorphic-git/lightning-fs',
         /^@isomorphic-git/,
+        /^@tauri-apps/,
+        /^@mlc-ai/,
       ],
     },
   },

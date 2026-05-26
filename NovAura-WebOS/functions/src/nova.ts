@@ -1,28 +1,16 @@
 /**
  * Nova Autonomous Agent — Genkit-powered
- * Firebase triggers + custom tools are preserved.
- * AI reasoning runs through Genkit flows for type safety, structured output,
- * and observability traces in the Firebase console.
+ * All Genkit/Google AI imports are fully lazy (require inside getAi()) to avoid
+ * Firebase CLI deploy analysis timeouts caused by plugin initialization at module load.
  */
 
-import { genkit, z } from 'genkit';
-import { googleAI } from '@genkit-ai/google-genai';
-import { onCallGenkit } from 'firebase-functions/https';
+import { z } from 'zod';
 import { admin } from './init';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 
-// ── Genkit init ────────────────────────────────────────────────────────────
-
-const ai = genkit({
-  plugins: [googleAI({ apiKey: process.env.GEMINI_API_KEY })],
-});
-
-const db = admin.firestore();
-const rtdb = admin.database();
-
-// ── Output schemas ─────────────────────────────────────────────────────────
+// ── Zod output schemas ─────────────────────────────────────────────────────
 
 const TicketAnalysisSchema = z.object({
   severity:          z.enum(['info', 'warn', 'critical']).describe('Issue severity'),
@@ -39,25 +27,31 @@ const InvestigationOutputSchema = z.object({
   urgency:            z.enum(['low', 'medium', 'high']).describe('Attention urgency'),
 });
 
-// ── Genkit flows (AI reasoning layer) ─────────────────────────────────────
+// ── Fully lazy Genkit instance — nothing runs at module load time ──────────
 
-const analyzeTicketFlow = ai.defineFlow(
-  {
-    name: 'analyzeTicket',
-    inputSchema: z.object({
-      type:      z.string(),
-      subject:   z.string(),
-      message:   z.string(),
-      userName:  z.string(),
-      userEmail: z.string(),
-    }),
-    outputSchema: TicketAnalysisSchema,
-  },
-  async (ticket) => {
-    const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
-      output: { schema: TicketAnalysisSchema },
-      prompt: `You are Nova, the autonomous AI operations agent for NovAura platform. Analyze this customer support ticket.
+let _ai: any = null;
+function getAi() {
+  if (!_ai) {
+    // Dynamic requires prevent any Genkit/plugin code from running during
+    // Firebase CLI's deploy-time module analysis (which times out at 10s).
+    const { genkit } = require('genkit');
+    const { googleAI } = require('@genkit-ai/google-genai');
+    _ai = genkit({
+      plugins: [googleAI({ apiKey: process.env.GEMINI_API_KEY })],
+    });
+  }
+  return _ai;
+}
+
+// ── AI reasoning functions ─────────────────────────────────────────────────
+
+async function analyzeTicket(ticket: {
+  type: string; subject: string; message: string; userName: string; userEmail: string;
+}): Promise<z.infer<typeof TicketAnalysisSchema>> {
+  const { output } = await getAi().generate({
+    model: 'googleai/gemini-2.0-flash',
+    output: { schema: TicketAnalysisSchema },
+    prompt: `You are Nova, the autonomous AI operations agent for NovAura platform. Analyze this customer support ticket.
 
 Type: ${ticket.type}
 Subject: ${ticket.subject}
@@ -70,35 +64,27 @@ Severity rules:
 - "info": general questions, feature requests, how-to
 
 Set shouldCallStaff=true only for critical severity.`,
-    });
-    return output!;
-  },
-);
+  });
+  return output!;
+}
 
-const investigateContextFlow = ai.defineFlow(
-  {
-    name: 'investigateContext',
-    inputSchema: z.object({
-      context:  z.string().describe('Ticket or task data as formatted text'),
-      question: z.string().describe('What staff wants Nova to investigate'),
-    }),
-    outputSchema: InvestigationOutputSchema,
-  },
-  async ({ context, question }) => {
-    const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
-      output: { schema: InvestigationOutputSchema },
-      prompt: `You are Nova, the autonomous AI operations agent for NovAura platform.
+async function investigateContext(context: string, question: string): Promise<z.infer<typeof InvestigationOutputSchema>> {
+  const { output } = await getAi().generate({
+    model: 'googleai/gemini-2.0-flash',
+    output: { schema: InvestigationOutputSchema },
+    prompt: `You are Nova, the autonomous AI operations agent for NovAura platform.
 
 ${context ? `Context:\n${context}\n\n` : ''}Staff question: ${question || 'Provide a full analysis and recommended next steps.'}
 
 Be thorough, direct, and actionable. Include specific next steps.`,
-    });
-    return output!;
-  },
-);
+  });
+  return output!;
+}
 
-// ── Custom tools (fully preserved) ────────────────────────────────────────
+// ── Custom tools ───────────────────────────────────────────────────────────
+
+const db = admin.firestore();
+const rtdb = () => admin.database();
 
 async function getOwnerUids(): Promise<string[]> {
   const snap = await db.collection('ops_extensions').where('isOwner', '==', true).get();
@@ -106,7 +92,7 @@ async function getOwnerUids(): Promise<string[]> {
 }
 
 async function ringStaff(uid: string, alertId: string, message: string): Promise<void> {
-  await rtdb.ref(`phone_incoming/${uid}`).set({
+  await rtdb().ref(`phone_incoming/${uid}`).set({
     callId:      `nova_${Date.now()}`,
     callerId:    'nova_ai',
     callerName:  'Nova AI',
@@ -125,16 +111,16 @@ async function ringOwners(alertId: string, message: string): Promise<void> {
 }
 
 async function createAlert(data: {
-  type:              string;
-  severity:          string;
-  title:             string;
-  summary:           string;
-  details?:          string;
+  type:               string;
+  severity:           string;
+  title:              string;
+  summary:            string;
+  details?:           string;
   suggestedResponse?: string;
-  sourceId?:         string;
-  sourceType?:       string;
-  tags?:             string[];
-  requestedBy?:      string;
+  sourceId?:          string;
+  sourceType?:        string;
+  tags?:              string[];
+  requestedBy?:       string;
 }): Promise<string> {
   const ref = db.collection('nova_alerts').doc();
   await ref.set({
@@ -157,8 +143,7 @@ export const onSupportTicketCreated = onDocumentCreated(
     if (!ticket) return;
 
     try {
-      // Genkit flow handles AI call with structured output — no more regex JSON parsing
-      const analysis = await analyzeTicketFlow({
+      const analysis = await analyzeTicket({
         type:      ticket.type      || '',
         subject:   ticket.subject   || '',
         message:   ticket.message   || '',
@@ -190,7 +175,7 @@ export const onSupportTicketCreated = onDocumentCreated(
         await ringOwners(alertId, analysis.callReason || `Critical ticket: "${ticket.subject}"`);
       }
 
-      await rtdb.ref('nova_status').update({
+      await rtdb().ref('nova_status').update({
         lastCheck:    Date.now(),
         currentFocus: `Analyzed ticket: ${ticket.subject}`,
       });
@@ -201,7 +186,7 @@ export const onSupportTicketCreated = onDocumentCreated(
   },
 );
 
-// ── Firebase trigger: scheduled monitor (no AI, preserved as-is) ──────────
+// ── Scheduled monitor (no AI calls) ───────────────────────────────────────
 
 export const novaScheduledMonitor = onSchedule(
   { schedule: 'every 15 minutes', memory: '256MiB', timeoutSeconds: 120 },
@@ -209,7 +194,6 @@ export const novaScheduledMonitor = onSchedule(
     const now = Date.now();
 
     try {
-      // Stalled tasks: in_progress with no update in 3 days
       const staleMs = now - 3 * 24 * 60 * 60 * 1000;
       const stalledSnap = await db.collection('ops_tasks')
         .where('status', '==', 'in_progress')
@@ -229,7 +213,6 @@ export const novaScheduledMonitor = onSchedule(
         });
       }
 
-      // Urgent tickets unresponded for 2+ hours
       const urgentCutoff = admin.firestore.Timestamp.fromMillis(now - 2 * 60 * 60 * 1000);
       const urgentSnap = await db.collection('support_tickets')
         .where('status', '==', 'new')
@@ -256,41 +239,31 @@ export const novaScheduledMonitor = onSchedule(
         await db.collection('nova_alerts').where('acknowledged', '==', false).count().get()
       ).data().count;
 
-      await rtdb.ref('nova_status').set({
-        isActive:              true,
-        lastCheck:             now,
-        currentFocus:          stalledSnap.size > 0 || urgentSnap.size > 0
+      await rtdb().ref('nova_status').set({
+        isActive:             true,
+        lastCheck:            now,
+        currentFocus:         stalledSnap.size > 0 || urgentSnap.size > 0
           ? 'Issues detected — alerts posted'
           : 'All clear — no issues found',
-        unacknowledgedAlerts:  unackCount,
+        unacknowledgedAlerts: unackCount,
       });
 
     } catch (e) {
       console.error('[Nova] scheduled monitor error:', e);
-      await rtdb.ref('nova_status').update({ lastCheck: now, currentFocus: 'Monitor error — check logs' });
+      await rtdb().ref('nova_status').update({ lastCheck: now, currentFocus: 'Monitor error — check logs' });
     }
   },
 );
 
-// ── onCallGenkit: investigate (Genkit flow exposed as callable) ────────────
+// ── On-demand investigation ────────────────────────────────────────────────
 
-const novaInvestigateFlow = ai.defineFlow(
-  {
-    name: 'novaInvestigate',
-    inputSchema: z.object({
-      sourceId:    z.string().optional(),
-      sourceType:  z.enum(['ticket', 'task']).optional(),
-      question:    z.string(),
-      requestedBy: z.string().optional(),
-    }),
-    outputSchema: z.object({
-      alertId:            z.string(),
-      analysis:           z.string(),
-      recommendedActions: z.array(z.string()),
-      urgency:            z.enum(['low', 'medium', 'high']),
-    }),
-  },
-  async ({ sourceId, sourceType, question, requestedBy }) => {
+export const novaInvestigate = onCall(
+  { memory: '512MiB', timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Auth required');
+
+    const { sourceId, sourceType, question, requestedBy } = request.data;
+
     let context = '';
     if (sourceId && sourceType) {
       try {
@@ -306,17 +279,17 @@ const novaInvestigateFlow = ai.defineFlow(
       } catch {}
     }
 
-    const result = await investigateContextFlow({ context, question });
+    const result = await investigateContext(context, question || '');
 
     const alertId = await createAlert({
       type:        'manual',
       severity:    'info',
-      title:       question.slice(0, 80) || `Investigation: ${sourceType} ${sourceId}`,
+      title:       (question || '').slice(0, 80) || `Investigation: ${sourceType} ${sourceId}`,
       summary:     result.analysis.slice(0, 300),
       details:     result.analysis,
       sourceId,
       sourceType,
-      requestedBy,
+      requestedBy: requestedBy || request.auth.uid,
       tags:        ['investigation'],
     });
 
@@ -329,16 +302,11 @@ const novaInvestigateFlow = ai.defineFlow(
   },
 );
 
-// Auth policy: any authenticated staff member
-export const novaInvestigate = onCallGenkit(
-  { authPolicy: (auth: any) => !!auth },
-  novaInvestigateFlow,
-);
+// ── Nova Call — platform-native calling, routes via RTDB ─────────────────
+// Future: any user → any user via Nova numbers, no carrier required.
 
-// ── Ring staff (preserved as regular onCall — no AI, stays lean) ──────────
-
-export const novaRingStaff = onCall(
-  { memory: '128MiB' },
+export const novaCall = onCall(
+  { memory: '256MiB', timeoutSeconds: 30 },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Auth required');
     const { uid, alertId, message } = request.data;

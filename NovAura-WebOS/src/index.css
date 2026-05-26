@@ -1394,3 +1394,173 @@
     0%, 100% { box-shadow: 0 0 8px rgba(217, 70, 239, 0.4), 0 0 16px rgba(168, 85, 247, 0.2); }
     50% { box-shadow: 0 0 16px rgba(217, 70, 239, 0.6), 0 0 32px rgba(168, 85, 247, 0.3); }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE LAYOUT UTILITIES
+   Safe areas, touch optimizations, mobile-specific effects
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Safe area insets for notched phones */
+.pt-safe { padding-top: env(safe-area-inset-top); }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+.pl-safe { padding-left: env(safe-area-inset-left); }
+.pr-safe { padding-right: env(safe-area-inset-right); }
+
+.mt-safe { margin-top: env(safe-area-inset-top); }
+.mb-safe { margin-bottom: env(safe-area-inset-bottom); }
+
+/* Mobile status bar height approximation */
+.mobile-status-bar {
+    height: env(safe-area-inset-top, 0px);
+    min-height: 24px;
+}
+
+/* Bottom nav safe area */
+.mobile-bottom-nav {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+}
+
+/* Touch optimizations */
+.no-tap-highlight {
+    -webkit-tap-highlight-color: transparent;
+    tap-highlight-color: transparent;
+}
+
+/* Prevent text selection on UI chrome */
+.no-select {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Smooth momentum scrolling on iOS */
+.momentum-scroll {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: auto;
+}
+
+/* Mobile app grid */
+.mobile-app-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    padding: 16px;
+}
+
+@media (min-width: 390px) {
+    .mobile-app-grid {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+        padding: 20px;
+    }
+}
+
+/* Spring bounce animation for mobile interactions */
+@keyframes spring-bounce {
+    0% { transform: scale(0.96); opacity: 0; }
+    50% { transform: scale(1.02); }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-spring {
+    animation: spring-bounce 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Bottom sheet drag handle */
+.sheet-drag-handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.2);
+    margin: 8px auto;
+}
+
+/* Mobile glass card - more opaque for outdoor visibility */
+.mobile-glass {
+    background: rgba(10, 10, 15, 0.85);
+    backdrop-filter: blur(20px) saturate(1.2);
+    -webkit-backdrop-filter: blur(20px) saturate(1.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Active app indicator glow */
+.mobile-nav-active {
+    position: relative;
+}
+.mobile-nav-active::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: hsl(var(--primary));
+    box-shadow: 0 0 8px hsl(var(--primary) / 0.6);
+}
+
+/* Edge swipe hint */
+@keyframes edge-pulse {
+    0%, 100% { opacity: 0; }
+    50% { opacity: 0.3; }
+}
+
+.edge-swipe-hint {
+    animation: edge-pulse 2s ease-in-out infinite;
+}
+
+/* Mobile window transition */
+.mobile-window-enter {
+    animation: mobileWindowIn 0.35s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+@keyframes mobileWindowIn {
+    from { transform: translateY(20px) scale(0.97); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* Navi avatar pulse */
+@keyframes navi-pulse {
+    0%, 100% { 
+        box-shadow: 0 0 20px rgba(0, 240, 255, 0.3), 0 0 60px rgba(139, 92, 246, 0.15);
+        transform: scale(1);
+    }
+    50% { 
+        box-shadow: 0 0 30px rgba(0, 240, 255, 0.5), 0 0 80px rgba(139, 92, 246, 0.25);
+        transform: scale(1.02);
+    }
+}
+
+.navi-avatar-glow {
+    animation: navi-pulse 3s ease-in-out infinite;
+}
+
+/* Typing indicator dots */
+@keyframes typing-dot {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-4px); }
+}
+
+.typing-dot {
+    animation: typing-dot 1.4s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Haptic feedback simulation (visual) */
+@keyframes haptic-tap {
+    0% { transform: scale(1); }
+    40% { transform: scale(0.92); }
+    100% { transform: scale(1); }
+}
+
+.haptic-tap:active {
+    animation: haptic-tap 0.15s ease-out;
+}
+
+/* Mobile keyboard avoidance */
+@supports (padding-bottom: env(keyboard-inset-height)) {
+    .keyboard-aware {
+        padding-bottom: env(keyboard-inset-height, 0px);
+    }
+}

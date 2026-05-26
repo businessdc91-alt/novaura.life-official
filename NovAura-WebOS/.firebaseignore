@@ -1,0 +1,13 @@
+**/node_modules/**
+**/.git/**
+**/target/**
+
+# Large media files — serve these from Firebase Storage or R2, not hosting
+**/*.mp3
+**/*.mp4
+**/*.wav
+**/*.flac
+**/*.mov
+**/*.pptx
+**/*.psd
+**/*.ai

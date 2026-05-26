@@ -11,7 +11,7 @@ dotenv.config();
 // MUST import init first — initializes Firebase Admin before any route modules
 import { admin } from './init';
 
-export { onSupportTicketCreated, novaScheduledMonitor, novaInvestigate, novaRingStaff } from './nova';
+export { onSupportTicketCreated, novaScheduledMonitor, novaInvestigate, novaCall } from './nova';
 
 // Gen 2 Imports
 import { onRequest, HttpsError } from 'firebase-functions/v2/https';

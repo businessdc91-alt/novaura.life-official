@@ -19,6 +19,8 @@ import AuraChatHistory from './components/AuraChatHistory';
 import { useCommandPalette } from './hooks/useCommandPalette';
 import { useLayoutMode } from './hooks/useLayoutMode';
 import { MessageSquare, Shield, Smartphone } from 'lucide-react';
+import DownloadPage from './pages/DownloadPage';
+import StaffPage from './pages/StaffPage';
 import AIOrchestrator from './utils/AIOrchestrator';
 import { smartChat } from './services/aiService';
 import { auth, isFirebaseConfigured, db } from './config/firebase';
@@ -110,6 +112,10 @@ const windowComponents = {
   'aura-mail': lazy(() => import('./components/windows/AuraMailWindow')),
   'about': lazy(() => import('./components/windows/AboutWindow')),
   'catalyst': lazy(() => import('./components/windows/CatalystCommandStation')),
+  'direct-messenger': lazy(() => import('./components/windows/DirectMessengerWindow')),
+  'download-center': lazy(() => import('./components/windows/DownloadCenterWindow')),
+  'chat': lazy(() => import('./components/windows/NovaChatWindow')),
+  'local-nova': lazy(() => import('./components/windows/AICompanionWindow')),
 };
 
 export default function App() {
@@ -640,6 +646,16 @@ export default function App() {
     }
   }, [isSetupComplete, pendingWindow]);
 
+  // Download Center — public path, login-gated inside the page
+  if (window.location.pathname.startsWith('/download')) {
+    return <DownloadPage />;
+  }
+
+  // Staff Command Center — restricted path
+  if (window.location.pathname.startsWith('/staff')) {
+    return <StaffPage />;
+  }
+
   // About Page Route
   if (window.location.pathname === '/about' || window.location.pathname === '/about/') {
     return (
@@ -699,10 +715,7 @@ export default function App() {
   if (isMobile) {
     return (
       <div className="relative w-screen h-screen overflow-hidden bg-background">
-        {/* Particle Background - simplified for mobile */}
-        <ParticleBackground config="idle" theme={theme} />
-        
-        {/* Mobile Layout */}
+        {/* Mobile Layout — Net Navi Edition */}
         <MobileLayout
           windows={windows}
           onOpenWindow={openWindow}

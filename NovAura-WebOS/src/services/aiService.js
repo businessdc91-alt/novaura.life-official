@@ -633,14 +633,9 @@ async function discoverLocalModel(baseUrl, type) {
 }
 
 /**
- * Chat with a local LLM (Ollama or LM Studio) directly from the browser
+ * Chat with a local LLM (Ollama, LM Studio, or WebGPU/WebLLM) directly from the browser
  * @param {string} message - User message
- * @param {object} config - { url, type, model }
- */
-/**
- * Chat with a local LLM (Ollama or LM Studio) directly from the browser
- * @param {string} message - User message
- * @param {object} config - { url, type, model, systemPrompt, conversation }
+ * @param {object} config - { url, type, model, systemPrompt, conversation, progressCallback }
  */
 export async function chatLocal(message, config) {
   let user = null;
@@ -690,6 +685,49 @@ export async function chatLocal(message, config) {
   } else if (!isPremium && !config.isIDE) {
     // Regular local chat is free for everyone, but we still verify access exists
     // (Local AI Chat is permitted for free users as long as it's not IDE)
+  }
+
+  if (config.type === 'webllm') {
+    try {
+      // Dynamically import WebLLM to avoid bloating the main bundle
+      const { CreateMLCEngine } = await import('@mlc-ai/web-llm');
+      
+      const selectedModel = config.model || 'Llama-3-8B-Instruct-q4f32_1-MLC';
+      
+      // We keep a simple cache of the engine so we don't reload the 4GB+ weights every message
+      if (!window.__webllmEngine || window.__webllmModel !== selectedModel) {
+        if (config.progressCallback) {
+          config.progressCallback({ text: 'Initializing WebGPU Engine...' });
+        }
+        window.__webllmEngine = await CreateMLCEngine(selectedModel, {
+          initProgressCallback: config.progressCallback || console.log
+        });
+        window.__webllmModel = selectedModel;
+      }
+
+      const messages = [];
+      if (config.systemPrompt) {
+        messages.push({ role: 'system', content: config.systemPrompt });
+      }
+      if (config.conversation?.length) {
+        messages.push(...config.conversation);
+      }
+      messages.push({ role: 'user', content: message });
+
+      const reply = await window.__webllmEngine.chat.completions.create({
+        messages,
+        temperature: config.temperature ?? 0.7,
+        max_tokens: config.maxTokens || 8192,
+      });
+
+      return {
+        response: reply.choices[0].message.content,
+        source: `webllm-webgpu (${selectedModel})`,
+        model: selectedModel,
+      };
+    } catch (e) {
+      throw new Error(`WebLLM Error: ${e.message}. Note: WebGPU requires Chrome/Edge 113+ or Tauri.`);
+    }
   }
 
   const target = resolveLocalTarget(config.url, config.type);
@@ -856,6 +894,13 @@ export function resolveProvider(taskCategory = 'general', llmConfig = {}) {
       model: routing.model || llmConfig.lmstudioModels?.[0] || 'local-model',
     };
   }
+  if (routing.provider === 'webllm') {
+    return {
+      type: 'local',
+      localType: 'webllm',
+      model: routing.model || 'Llama-3-8B-Instruct-q4f32_1-MLC',
+    };
+  }
   if (['gemini', 'vertex'].includes(routing.provider)) {
     return { type: 'cloud', provider: routing.provider, model: routing.model };
   }
@@ -941,7 +986,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
     try {
       return await chatCloud(message, {
         provider: 'openrouter',
-        model: OR_MODELS.QWEN_CODER,
+        model: OR_MODELS.QWEN_480B,
         conversation: llmConfig.conversation,
         maxTokens: 8192,
       });
@@ -949,7 +994,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
       try {
         return await chatCloud(message, {
           provider: 'openrouter',
-          model: OR_MODELS.HERMES,
+          model: OR_MODELS.HERMES_405B,
           conversation: llmConfig.conversation,
           maxTokens: 8192,
         });
@@ -975,8 +1020,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
   }
 
   // ── General: OpenRouter free pool → Gemini fallback ───────────────────────
-  // Try Nemotron → Qwen3 80B → GPT OSS → Gemini
-  const generalPool = [OR_MODELS.NEMOTRON, OR_MODELS.QWEN_80B, OR_MODELS.GPT_OSS];
+  const generalPool = [OR_MODELS.NEMOTRON_SUPER, OR_MODELS.QWEN_235B, OR_MODELS.LING_1T];
   for (const orModel of generalPool) {
     try {
       return await chatCloud(message, {

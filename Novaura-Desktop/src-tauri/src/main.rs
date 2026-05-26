@@ -110,6 +110,15 @@ mod commands {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
         })
     }
+
+    #[command]
+    pub async fn launch_game(path: String) -> Result<(), String> {
+        std::process::Command::new(&path)
+            .current_dir(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("")))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 // AppState
@@ -179,6 +188,7 @@ fn main() {
             commands::get_app_data_dir,
             commands::show_notification,
             commands::get_system_info,
+            commands::launch_game,
             // Terminal control commands
             terminal::terminal_execute,
             terminal::project_scan_errors,

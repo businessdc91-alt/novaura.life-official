@@ -112,6 +112,6 @@ export async function investigateSource(
 }
 
 export async function ringStaffMember(uid: string, alertId: string, message: string): Promise<void> {
-  const fn = httpsCallable(getFunctions(), 'novaRingStaff');
+  const fn = httpsCallable(getFunctions(), 'novaCall');
   await fn({ uid, alertId, message });
 }

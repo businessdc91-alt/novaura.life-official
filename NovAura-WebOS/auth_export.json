@@ -1,0 +1,37 @@
+{"users": [
+{
+  "localId": "RyOqYkJNgHhJ23Gvmjco0BLx9Ng1",
+  "email": "business.dc91@gmail.com",
+  "emailVerified": true,
+  "displayName": "Dillan Copeland",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocK48UPcSAzLOnYYtg4M70ZQTAUfZWmajweKyYBVGpqMpMgu=s96-c",
+  "lastSignedInAt": "1776307573247",
+  "createdAt": "1776293168403",
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "114034498380816306457",
+      "email": "business.dc91@gmail.com",
+      "displayName": "Dillan Copeland",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocK48UPcSAzLOnYYtg4M70ZQTAUfZWmajweKyYBVGpqMpMgu=s96-c"
+    }
+  ]
+},
+{
+  "localId": "SNhd9CwFYqbQVfADWFZPJaZKRd82",
+  "email": "lostitonce420@gmail.com",
+  "emailVerified": true,
+  "displayName": "Dillan Copeland",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocKnbyO1DVokZTG2lN-WmaXc9H--oQzVDTtdTNuh2RcKrcQjOQ=s96-c",
+  "lastSignedInAt": "1776306964069",
+  "createdAt": "1776283846630",
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "111476645973641765884",
+      "email": "dillan.copeland@novaura.xyz",
+      "displayName": "Dillan Copeland",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocKnbyO1DVokZTG2lN-WmaXc9H--oQzVDTtdTNuh2RcKrcQjOQ=s96-c"
+    }
+  ]
+}]}

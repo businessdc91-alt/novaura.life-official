@@ -16,7 +16,7 @@ import {
   BellRing, Grid as GridIcon, Shield, Briefcase, Sparkles,
   CloudSun, Bitcoin, Calculator, Package, Smile,
   // Logout icons
-  LogOut, AlertTriangle, X, Mail,
+  LogOut, AlertTriangle, X, Mail, Download,
   // Platform icons
   ExternalLink, ArrowLeftFromLine,
   // Layout icons
@@ -77,12 +77,12 @@ const APP_CATEGORIES = [
     apps: [
       { type: 'social', label: 'Social Network', icon: MessageSquare },
       { type: 'direct-messenger', label: 'Contact Founder', icon: Mail },
-      { type: 'chat', label: 'Chat', icon: MessageSquare },
+      { type: 'aura-mail', label: 'Aura Mail', icon: Mail },
       { type: 'voice', label: 'Voice', icon: Phone },
       { type: 'live-ai', label: 'Nova Live', icon: Radio },
       { type: 'ai-assistant', label: 'Assistant', icon: Brain },
       { type: 'ai-companion', label: 'Nova AI', icon: Bot },
-      { type: 'local-nova', label: 'Local Nova', icon: Zap },
+      { type: 'nova-chat', label: 'Nova Chat', icon: Bot },
       { type: 'vertex', label: 'Vertex AI', icon: Palette },
       { type: 'imagen', label: 'Imagen', icon: Sparkles },
       { type: 'bg-remover', label: 'BG Remove', icon: Eraser },
@@ -104,6 +104,7 @@ const APP_CATEGORIES = [
       { type: 'notifications', label: 'Alerts', icon: BellRing },
       { type: 'profile', label: 'Profile', icon: User },
       { type: 'appstore', label: 'Repo Station', icon: Store },
+      { type: 'download-center', label: 'Downloads', icon: Download },
       { type: 'platform', label: 'NovAura Platform', icon: ShoppingBag },
     ],
   },

@@ -62,19 +62,35 @@
       },
       {
         "source": "/os",
-        "destination": "/os/os.html"
+        "destination": "/os/index.html"
       },
       {
         "source": "/os/**",
-        "destination": "/os/os.html"
+        "destination": "/os/index.html"
       },
       {
         "source": "/system",
-        "destination": "/os/os.html"
+        "destination": "/os/index.html"
       },
       {
         "source": "/system/**",
-        "destination": "/os/os.html"
+        "destination": "/os/index.html"
+      },
+      {
+        "source": "/download",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/download/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/staff",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/staff/**",
+        "destination": "/index.html"
       },
       {
         "source": "**",

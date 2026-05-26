@@ -1,0 +1,48 @@
+nrxvuqsd_novauralife  <--- Alibaba admin enterprise account
+
+novaura-life 
+
+adc1aa28-af31-4940-9b1e-67163147aad9  <---- organization name and id
+
+login url  https://signin.alibabacloud.com/Novaura.life.onaliyun.com/login.htm
+
+Novaura.life.onaliyun.com   <-- default domain
+
+5185774267715024  <--- Principal
+
+administrator@Novaura.life.onaliyun.com   <--- login name
+
+AP:67f52cfb-abc9-4fc9-b335-78548ad3cf7e   <-- password
+
+https://signin.alibabacloud.com/login.htm?username=Catalyst%40Novaura.life.onaliyun.com&defaultShowQrCode=false  <-- Alibaba console admin login url
+
+Agent bay service management api key -->  ako-6e346131-0146-4f47-a78b-3a7863c40779
+
+pip install -U dashscope
+
+
+
+
+
+
+
+qwen role playing parameter adjustments 
+
+When using the Character model for role-playing, you can configure the following aspects of System Message:
+
+Optimizing the Prompt template can enable large models to perform specific tasks more accurately and reliably. Please refer to [link/reference needed] for details.PromptAutomatic optimization .
+Character details
+
+This includes name, age, personality, occupation, brief introduction, and relationships with others.
+
+Other information about the character
+
+Provide more detailed descriptions of the character's experiences and interests. Use tags to separate different categories of content and describe them in text.
+
+Supplementary dialogue scenarios
+
+Clearly define the background of the production scene and the relationships between the characters, give the characters clear instructions and requirements, and let the characters engage in dialogue according to the instructions.
+
+Supplementary language style
+
+Provide hints about the style the character should adopt and the length of their speech; you can also provide hints if the character needs to exhibit any special behaviors, such as actions or facial expressions.

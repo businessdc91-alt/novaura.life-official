@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { kernelStorage } from '../kernel/kernelStorage.js';
 
 /**
  * Hook to provide real-time system telemetry.
@@ -109,9 +110,9 @@ export function useSystemTelemetry() {
         const token = kernelStorage.getItem('auth_token') || '';
         
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        const res = await fetch(`${backendUrl}/ai/health-check`, {
+        const res = await fetch(`${backendUrl}/health`, {
           headers: { 'Authorization': `Bearer ${token}` },
           signal: controller.signal
         });

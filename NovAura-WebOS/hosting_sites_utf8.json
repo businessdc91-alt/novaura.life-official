@@ -1,0 +1,12 @@
+﻿{
+  "status": "success",
+  "result": {
+    "sites": [
+      {
+        "name": "projects/novaura-systems/sites/novaura-systems",
+        "defaultUrl": "https://novaura-systems.web.app",
+        "type": "DEFAULT_SITE"
+      }
+    ]
+  }
+}

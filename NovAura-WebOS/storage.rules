@@ -1,10 +1,127 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Permit any logged in user to read or write any file
-    // This stops Firebase from blocking user uploads/saves
-    match /{allPaths=**} {
-      allow read, write: if request.auth != null;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function isAuthed() {
+      return request.auth != null;
     }
+
+    function isOwner(uid) {
+      return isAuthed() && request.auth.uid == uid;
+    }
+
+    function isStaff() {
+      return isAuthed() && request.auth.token.email in [
+        'business.dc91@gmail.com'
+      ];
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isAudio() {
+      return request.resource.contentType.matches('audio/.*');
+    }
+
+    function isVideo() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    function isDoc() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'application/zip',
+        'application/octet-stream'
+      ];
+    }
+
+    function under50MB() {
+      return request.resource.size < 50 * 1024 * 1024;
+    }
+
+    function under200MB() {
+      return request.resource.size < 200 * 1024 * 1024;
+    }
+
+    function under500MB() {
+      return request.resource.size < 500 * 1024 * 1024;
+    }
+
+    // ── Downloads — client binaries ──────────────────────────────────────────
+    // Authenticated reads; staff-only for the ops tool
+    match /downloads/staff/{file} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /downloads/{category}/{file} {
+      allow read:  if isAuthed();
+      allow write: if isStaff();
+    }
+
+    // ── User Avatars ──────────────────────────────────────────────────────────
+    // Public read (needed for social features); only the owner can write
+    match /avatars/{uid}/{file} {
+      allow read:  if true;
+      allow write: if isOwner(uid) && isImage() && under50MB();
+    }
+
+    // ── User Uploads — private per-user storage ───────────────────────────────
+    match /user-uploads/{uid}/{allPaths=**} {
+      allow read:  if isOwner(uid);
+      allow write: if isOwner(uid) && under200MB();
+    }
+
+    // ── Marketplace Assets ────────────────────────────────────────────────────
+    // Preview files are publicly readable for browsing
+    // Full/source files require authentication (purchase checked in app logic)
+    match /marketplace/{assetId}/preview/{file} {
+      allow read:  if true;
+      allow write: if isAuthed() && (isImage() || isAudio() || isVideo()) && under50MB();
+    }
+
+    match /marketplace/{assetId}/full/{file} {
+      allow read:  if isAuthed();
+      allow write: if isAuthed() && under200MB();
+    }
+
+    match /marketplace/{assetId}/source/{file} {
+      allow read:  if isStaff();
+      allow write: if isAuthed() && under500MB();
+    }
+
+    // ── Platform Assets — music, images, media served by the platform ─────────
+    // Public reads; only staff can upload
+    match /platform/{allPaths=**} {
+      allow read:  if true;
+      allow write: if isStaff() && under200MB();
+    }
+
+    // ── Aetherium TCG card assets ─────────────────────────────────────────────
+    match /aetherium/{cardId}/{file} {
+      allow read:  if true;
+      allow write: if isStaff() && isImage() && under50MB();
+    }
+
+    // ── Showcase — public presentation files ──────────────────────────────────
+    match /showcase/{file} {
+      allow read:  if true;
+      allow write: if isStaff() && under200MB();
+    }
+
+    // ── BuilderBot project snapshots ─────────────────────────────────────────
+    match /builder/{uid}/{projectId}/{allPaths=**} {
+      allow read:  if isOwner(uid);
+      allow write: if isOwner(uid) && under500MB();
+    }
+
+    // ── Temp — auto-cleaned by scheduled function ─────────────────────────────
+    match /temp/{uid}/{allPaths=**} {
+      allow read:  if isOwner(uid);
+      allow write: if isOwner(uid) && under50MB();
+    }
+
   }
 }

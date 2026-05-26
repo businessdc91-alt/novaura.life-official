@@ -13,7 +13,9 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // Cloud Functions auto-provides credentials — no service account needed
-admin.initializeApp();
+admin.initializeApp({
+  databaseURL: process.env.FIREBASE_DATABASE_URL || 'https://novaura-life-8df2f-default-rtdb.firebaseio.com',
+});
 
 export { admin };
 // Deployed: 03/29/2026 02:13:06
