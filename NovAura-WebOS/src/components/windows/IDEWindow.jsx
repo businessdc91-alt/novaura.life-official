@@ -28,7 +28,7 @@ import PackageManagerPanel from './builderbot/PackageManagerPanel';
 import DebuggerPanel from './builderbot/DebuggerPanel';
 import { CodebaseAIEngine } from './builderbot/CodebaseAIEngine';
 import { DeployEngine, DEPLOYMENT_TARGETS } from './builderbot/DeployEngine';
-import { CollaborationEngine } from './builderbot/CollaborationEngine';
+
 import SwarmPanel from './builderbot/SwarmPanel';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -86,7 +86,6 @@ export default function IDEWindow() {
   const [deployTargets, setDeployTargets] = useState([]);
 
   // ── Collaboration ───────────────────────────────
-  const [collabEngine, setCollabEngine] = useState(null);
   const [participants, setParticipants] = useState([]);
   const [isLiveShare, setIsLiveShare] = useState(false);
 
@@ -137,14 +136,6 @@ export default function IDEWindow() {
     // Load deployment targets
     const connected = deployEngine.getConnectedTargets();
     setDeployTargets(connected);
-
-    // Initialize collaboration
-    const collabEng = new CollaborationEngine({
-      userId: userId,
-      userName: 'You',
-      sessionId: null
-    });
-    setCollabEngine(collabEng);
 
     // Listen for file changes to update git status
     const interval = setInterval(() => {
@@ -252,26 +243,15 @@ export default function IDEWindow() {
   }, [collab, projectName, flattenFiles]);
 
   const startCollaboration = async () => {
-    if (!collabEngine) return;
-    
-    // Generate session ID
-    const sessionId = `cybeni-${Date.now()}-${Math.random().toString(36).substr(2, 8)}`;
-    
     try {
-      await collabEngine.connect(sessionId);
-      setIsLiveShare(true);
-      toast.success('Collaboration session started');
-      
-      // Listen for participants
-      collabEngine.on('participant-join', (user) => {
-        setParticipants(prev => [...prev, user]);
-        toast.info(`${user.userName} joined the session`);
-      });
-      
-      collabEngine.on('participant-leave', (user) => {
-        setParticipants(prev => prev.filter(p => p.userId !== user.userId));
-        toast.info(`${user.userName} left the session`);
-      });
+      const files = flattenFiles ? flattenFiles() : [];
+      const sessionId = await collab.create(projectName || 'Untitled Project', files);
+      if (sessionId) {
+        setIsLiveShare(true);
+        toast.success(`Live session started — share ID: ${sessionId}`);
+      } else {
+        toast.error('Could not start session. Check Firebase config.');
+      }
     } catch (err) {
       toast.error('Failed to start collaboration: ' + err.message);
     }
@@ -436,11 +416,12 @@ export default function IDEWindow() {
           }}
         />;
       case 'collab':
-        return <CollabPanel 
-          participants={participants}
-          isLiveShare={isLiveShare}
+        return <CollabPanel
+          participants={collab.participants.length > 0 ? collab.participants : participants}
+          isLiveShare={isLiveShare || collab.connected}
           onStartSession={startCollaboration}
-          collabEngine={collabEngine}
+          sessionId={collab.sessionId}
+          collab={collab}
         />;
       case 'settings':
         return <SettingsPanel />;
@@ -1053,8 +1034,27 @@ function AIActionsPanel({ onRefactor, onAnalyze, codebaseSummary }) {
   );
 }
 
-// Collab Panel
-function CollabPanel({ participants, isLiveShare, onStartSession, collabEngine }) {
+// Collab Panel — wired to Firebase collabService
+function CollabPanel({ participants, isLiveShare, onStartSession, sessionId, collab }) {
+  const [joinId, setJoinId] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleJoin = async () => {
+    if (!joinId.trim() || !collab) return;
+    setJoining(true);
+    await collab.join(joinId.trim());
+    setJoining(false);
+  };
+
+  const copySessionId = () => {
+    if (sessionId) {
+      navigator.clipboard.writeText(sessionId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-[#1e1e2e] text-gray-300">
       <div className="px-3 py-2 border-b border-[#2a2a4a]">
@@ -1064,39 +1064,83 @@ function CollabPanel({ participants, isLiveShare, onStartSession, collabEngine }
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto p-2 space-y-3">
         {!isLiveShare ? (
-          <div className="text-center py-8">
-            <Radio className="w-8 h-8 mx-auto mb-2 text-gray-600" />
-            <p className="text-[11px] text-gray-500 mb-2">Start live collaboration</p>
-            <button
-              onClick={onStartSession}
-              className="px-3 py-1.5 bg-green-400/20 text-green-400 rounded text-[10px] hover:bg-green-400/30"
-            >
-              Start Session
-            </button>
+          <div className="space-y-3">
+            <div className="text-center py-4">
+              <Radio className="w-8 h-8 mx-auto mb-2 text-gray-600" />
+              <p className="text-[11px] text-gray-500 mb-3">Start or join a live session</p>
+              <button
+                onClick={onStartSession}
+                className="w-full px-3 py-1.5 bg-green-400/20 text-green-400 rounded text-[10px] hover:bg-green-400/30 mb-2"
+              >
+                Start New Session
+              </button>
+            </div>
+            <div className="border-t border-[#2a2a4a] pt-3">
+              <p className="text-[10px] text-gray-500 mb-2">Join existing session</p>
+              <input
+                value={joinId}
+                onChange={e => setJoinId(e.target.value)}
+                placeholder="Session ID..."
+                className="w-full px-2 py-1.5 bg-[#252540] border border-[#3a3a5a] rounded text-[11px] text-white placeholder-gray-600 focus:outline-none focus:border-green-400/50 mb-2"
+              />
+              <button
+                onClick={handleJoin}
+                disabled={!joinId.trim() || joining}
+                className="w-full px-3 py-1.5 bg-blue-400/20 text-blue-400 rounded text-[10px] hover:bg-blue-400/30 disabled:opacity-50"
+              >
+                {joining ? 'Joining...' : 'Join Session'}
+              </button>
+            </div>
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 mb-3 px-2 py-1 bg-green-400/10 rounded">
+            <div className="flex items-center gap-2 px-2 py-1.5 bg-green-400/10 rounded">
               <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
               <span className="text-[10px] text-green-400">Live Session Active</span>
             </div>
 
-            <p className="text-[10px] text-gray-500 mb-1">Participants</p>
-            <div className="space-y-1">
-              {participants.map(p => (
-                <div key={p.userId} className="flex items-center gap-2 p-1.5 rounded bg-[#252540]">
-                  <div 
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold"
-                    style={{ backgroundColor: p.userColor }}
-                  >
-                    {p.userName[0]}
+            {sessionId && (
+              <div className="px-2 py-1.5 bg-[#252540] rounded flex items-center justify-between gap-2">
+                <span className="text-[10px] font-mono text-gray-400 truncate">{sessionId}</span>
+                <button onClick={copySessionId} className="text-[10px] text-blue-400 hover:text-blue-300 flex-shrink-0">
+                  {copied ? '✓' : 'Copy'}
+                </button>
+              </div>
+            )}
+
+            <div>
+              <p className="text-[10px] text-gray-500 mb-1">
+                Participants ({participants.length})
+              </p>
+              <div className="space-y-1">
+                {participants.map((p, i) => (
+                  <div key={p.userId || i} className="flex items-center gap-2 p-1.5 rounded bg-[#252540]">
+                    <div
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold flex-shrink-0"
+                      style={{ backgroundColor: p.color || p.userColor || '#4ade80' }}
+                    >
+                      {(p.userName || p.userId || '?')[0].toUpperCase()}
+                    </div>
+                    <span className="text-[10px] truncate">{p.userName || p.userId}</span>
+                    {p.online === false && <span className="text-[9px] text-gray-600 ml-auto">away</span>}
                   </div>
-                  <span className="text-[10px]">{p.userName}</span>
-                </div>
-              ))}
+                ))}
+                {participants.length === 0 && (
+                  <p className="text-[10px] text-gray-600 text-center py-2">Waiting for others to join...</p>
+                )}
+              </div>
             </div>
+
+            {collab && (
+              <button
+                onClick={() => collab.leave()}
+                className="w-full px-3 py-1.5 bg-red-400/10 text-red-400 rounded text-[10px] hover:bg-red-400/20"
+              >
+                Leave Session
+              </button>
+            )}
           </>
         )}
       </div>
