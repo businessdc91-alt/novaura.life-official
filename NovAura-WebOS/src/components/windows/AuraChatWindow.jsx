@@ -253,7 +253,7 @@ export default function AuraChatWindow({ userTier, isPopout = false, onClose }) 
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4 space-y-2 scrollbar-custom">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-2 scrollbar-custom">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center max-w-sm mx-auto">
             <div className="w-20 h-20 rounded-full bg-amber-500/5 flex items-center justify-center mb-6 border border-amber-500/10">

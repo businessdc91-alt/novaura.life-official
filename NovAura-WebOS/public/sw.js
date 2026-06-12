@@ -1,4 +1,4 @@
-const CACHE_NAME = 'novaura-os-v3';
+const CACHE_NAME = 'novaura-os-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

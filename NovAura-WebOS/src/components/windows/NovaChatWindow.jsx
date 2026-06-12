@@ -574,7 +574,7 @@ export default function NovaChatWindow({ kernel: kernelProp, isPopout = false, o
       {showContext && <ContextBar context={context} />}
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3" style={isPopout ? { maxHeight: 340 } : {}}>
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-3" style={isPopout ? { maxHeight: 340 } : {}}>
         {showGreeting && (
           <div className="flex flex-col items-center justify-center h-full text-center p-4">
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-cyan-400/30 via-blue-500/20 to-purple-500/20 flex items-center justify-center mb-4">

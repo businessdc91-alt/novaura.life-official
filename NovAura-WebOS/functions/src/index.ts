@@ -16,7 +16,6 @@ export { onSupportTicketCreated, novaScheduledMonitor, novaInvestigate, novaCall
 // Gen 2 Imports
 import { onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { onCall } from 'firebase-functions/v2/https';
-import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import * as v1 from 'firebase-functions/v1';
 import apiApp from './api/app';
@@ -111,60 +110,64 @@ export const unregisterFCMToken = onCall({ memory: '256MiB' }, async (request) =
 });
 
 // Social Triggers
-export const onDirectMessageCreated = onDocumentCreated('social_dm_threads/{threadId}/messages/{messageId}', async (event) => {
-  const message = event.data?.data();
-  if (!message) return;
+export const onDirectMessageCreated = v1.firestore
+  .document('social_dm_threads/{threadId}/messages/{messageId}')
+  .onCreate(async (snap, context) => {
+    const message = snap.data();
+    if (!message) return;
 
-  const threadDoc = await db.collection('social_dm_threads').doc(event.params.threadId).get();
-  if (!threadDoc.exists) return;
-  
-  const recipientId = threadDoc.data()?.participants?.find((id: string) => id !== message.senderId);
-  if (!recipientId) return;
+    const threadDoc = await db.collection('social_dm_threads').doc(context.params.threadId).get();
+    if (!threadDoc.exists) return;
 
-  const senderDoc = await db.collection('social_profiles').doc(message.senderId).get();
-  const senderName = senderDoc.exists ? senderDoc.data()?.displayName || 'Someone' : 'Someone';
+    const recipientId = threadDoc.data()?.participants?.find((id: string) => id !== message.senderId);
+    if (!recipientId) return;
 
-  const tokensSnapshot = await db.collection('user_fcm_tokens').doc(recipientId).collection('tokens').get();
-  if (tokensSnapshot.empty) return;
+    const senderDoc = await db.collection('social_profiles').doc(message.senderId).get();
+    const senderName = senderDoc.exists ? senderDoc.data()?.displayName || 'Someone' : 'Someone';
 
-  const tokens = tokensSnapshot.docs.map(doc => doc.id);
-  await messaging.sendEachForMulticast({
-    notification: { title: senderName, body: message.text?.slice(0, 100) + (message.text?.length > 100 ? '...' : '') },
-    data: { type: 'direct_message', threadId: event.params.threadId, senderId: message.senderId },
-    tokens
-  });
-});
+    const tokensSnapshot = await db.collection('user_fcm_tokens').doc(recipientId).collection('tokens').get();
+    if (tokensSnapshot.empty) return;
 
-export const onPostCreated = onDocumentCreated('social_posts/{postId}', async (event) => {
-  const post = event.data?.data();
-  if (!post) return;
-
-  const followersDoc = await db.collection('social_followers').doc(post.authorId).get();
-  if (!followersDoc.exists) return;
-  
-  const followers: string[] = followersDoc.data()?.followers || [];
-  if (followers.length === 0) return;
-
-  const authorDoc = await db.collection('social_profiles').doc(post.authorId).get();
-  const authorName = authorDoc.exists ? authorDoc.data()?.displayName || 'Someone' : 'Someone';
-
-  for (let i = 0; i < followers.length; i += 500) {
-    const batch = followers.slice(i, i + 500);
-    const tokenPromises = batch.map(async (followerId) => {
-      const snap = await db.collection('user_fcm_tokens').doc(followerId).collection('tokens').limit(3).get();
-      return snap.docs.map(d => d.id);
-    });
-    
-    const allTokens = (await Promise.all(tokenPromises)).flat();
-    if (allTokens.length === 0) continue;
-
+    const tokens = tokensSnapshot.docs.map(doc => doc.id);
     await messaging.sendEachForMulticast({
-      notification: { title: `${authorName} posted`, body: post.text?.slice(0, 100) },
-      data: { type: 'new_post', postId: event.params.postId, authorId: post.authorId },
-      tokens: allTokens
+      notification: { title: senderName, body: message.text?.slice(0, 100) + (message.text?.length > 100 ? '...' : '') },
+      data: { type: 'direct_message', threadId: context.params.threadId, senderId: message.senderId },
+      tokens
     });
-  }
-});
+  });
+
+export const onPostCreated = v1.firestore
+  .document('social_posts/{postId}')
+  .onCreate(async (snap, context) => {
+    const post = snap.data();
+    if (!post) return;
+
+    const followersDoc = await db.collection('social_followers').doc(post.authorId).get();
+    if (!followersDoc.exists) return;
+
+    const followers: string[] = followersDoc.data()?.followers || [];
+    if (followers.length === 0) return;
+
+    const authorDoc = await db.collection('social_profiles').doc(post.authorId).get();
+    const authorName = authorDoc.exists ? authorDoc.data()?.displayName || 'Someone' : 'Someone';
+
+    for (let i = 0; i < followers.length; i += 500) {
+      const batch = followers.slice(i, i + 500);
+      const tokenPromises = batch.map(async (followerId) => {
+        const snap2 = await db.collection('user_fcm_tokens').doc(followerId).collection('tokens').limit(3).get();
+        return snap2.docs.map(d => d.id);
+      });
+
+      const allTokens = (await Promise.all(tokenPromises)).flat();
+      if (allTokens.length === 0) continue;
+
+      await messaging.sendEachForMulticast({
+        notification: { title: `${authorName} posted`, body: post.text?.slice(0, 100) },
+        data: { type: 'new_post', postId: context.params.postId, authorId: post.authorId },
+        tokens: allTokens
+      });
+    }
+  });
 
 export const onUserCreated = v1.auth.user().onCreate(async (user) => {
   await db.collection('social_profiles').doc(user.uid).set({

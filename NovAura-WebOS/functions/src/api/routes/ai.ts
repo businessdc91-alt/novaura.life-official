@@ -93,13 +93,23 @@ const PROVIDERS: Record<string, any> = {
     parseResponse: (data: any) => data.choices?.[0]?.message?.content || ''
   },
   gemini: {
-    url: (key: string, model?: string) => `https://generativelanguage.googleapis.com/v1beta/${model || 'models/gemini-2.0-flash'}:generateContent`,
+    url: (key: string, model?: string) => {
+      const m = model || 'gemini-2.0-flash';
+      const modelPath = m.startsWith('models/') ? m : `models/${m}`;
+      return `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent`;
+    },
     headers: (key: string) => ({
       'Content-Type': 'application/json',
       'X-goog-api-key': key
     }),
-    formatBody: (prompt: string, maxTokens: number, temp: number) => ({
-      contents: [{ parts: [{ text: prompt }] }],
+    formatBody: (prompt: string, maxTokens: number, temp: number, _model?: string, conversation?: any[]) => ({
+      contents: [
+        ...(conversation || []).map((m: any) => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.text || m.content || '' }]
+        })),
+        { role: 'user', parts: [{ text: prompt }] }
+      ],
       generationConfig: { temperature: temp, maxOutputTokens: maxTokens }
     }),
     parseResponse: (data: any) => data.candidates?.[0]?.content?.parts?.[0]?.text || ''
@@ -420,9 +430,66 @@ router.post('/chat', async (req, res) => {
         });
         return;
       } catch (orErr: any) {
-        console.error('[OpenRouter SDK] Error:', orErr.message);
-        res.status(502).json({ error: 'OpenRouter error', detail: orErr.message });
-        return;
+        console.warn('[OpenRouter] Failed, cascading to AIML API:', orErr.message);
+        // ── Internal cascade: OpenRouter failed → try AIML API ──────────────
+        try {
+          const aimlKey = process.env.AIML_API_KEY;
+          if (!aimlKey) throw new Error('AIML_API_KEY not set');
+          const aimlMessages = [
+            ...(conversation || []).map((m: any) => ({
+              role: m.role === 'assistant' ? 'assistant' : 'user',
+              content: m.text || m.content || '',
+            })),
+            { role: 'user', content: prompt },
+          ];
+          const aimlRes = await fetch('https://api.aimlapi.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aimlKey}` },
+            body: JSON.stringify({
+              model: 'google/gemma-3-27b-it',
+              messages: aimlMessages,
+              max_tokens: maxTokens,
+              temperature,
+            }),
+            signal: AbortSignal.timeout(30000),
+          });
+          if (!aimlRes.ok) throw new Error(`AIML ${aimlRes.status}`);
+          const aimlData = await aimlRes.json();
+          const aimlContent = aimlData.choices?.[0]?.message?.content || '';
+          if (!aimlContent) throw new Error('Empty AIML response');
+          res.json({ success: true, response: aimlContent, provider: 'aiml', model: 'google/gemma-3-27b-it', source: 'aiml/fallback' });
+          return;
+        } catch (aimlErr: any) {
+          console.warn('[AIML] Also failed:', aimlErr.message, '— trying Gemini');
+          // ── Final cascade: AIML failed → try Gemini ────────────────────
+          try {
+            const geminiKey = process.env.GEMINI_API_KEY;
+            if (!geminiKey) throw new Error('GEMINI_API_KEY not set');
+            const geminiModel = 'models/gemini-2.0-flash';
+            const geminiRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/${geminiModel}:generateContent`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-goog-api-key': geminiKey },
+                body: JSON.stringify({
+                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                  generationConfig: { temperature, maxOutputTokens: maxTokens },
+                }),
+                signal: AbortSignal.timeout(30000),
+              }
+            );
+            if (!geminiRes.ok) throw new Error(`Gemini ${geminiRes.status}`);
+            const geminiData = await geminiRes.json();
+            const geminiContent = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (!geminiContent) throw new Error('Empty Gemini response');
+            res.json({ success: true, response: geminiContent, provider: 'gemini', model: geminiModel, source: 'gemini/cascade-fallback' });
+            return;
+          } catch (geminiErr: any) {
+            console.error('[Cascade] All providers failed:', geminiErr.message);
+            res.status(502).json({ error: 'All providers unavailable', detail: `OR: ${orErr.message} | AIML: ${aimlErr.message} | Gemini: ${geminiErr.message}` });
+            return;
+          }
+        }
       }
     }
 

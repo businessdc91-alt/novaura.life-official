@@ -303,12 +303,16 @@ function ParticleBackgroundCanvas({ config = 'idle', theme = 'cosmic', settings 
   const attractorsRef = useRef([]);
   const microAttractorsRef = useRef([]);
   const themeRef = useRef(theme);
-  
+  const configRef = useRef(config);
+
   // Theme-specific refs
   const rainRef = useRef([]);
   const starsRef = useRef([]);
   const sparksRef = useRef([]);
   const meshNodesRef = useRef([]);
+
+  // Sync config to ref — never restarts the animation, just adjusts live speed
+  useEffect(() => { configRef.current = config; }, [config]);
 
   // Update theme ref and recolor particles when prop changes
   useEffect(() => {
@@ -337,10 +341,10 @@ function ParticleBackgroundCanvas({ config = 'idle', theme = 'cosmic', settings 
     
     const baseParticleCount = settings.particles.count;
     const baseMicroCount = settings.particles.microCount;
-    const particleCount = config === 'active' ? Math.floor(baseParticleCount * 1.4) : baseParticleCount;
-    const microCount = config === 'active' ? Math.floor(baseMicroCount * 1.4) : baseMicroCount;
-    
-    const baseSpeed = config === 'active' ? 2.0 : 0.8;
+    const particleCount = baseParticleCount;
+    const microCount = baseMicroCount;
+
+    const baseSpeed = 0.8;
     const linkDistance = 150;
     const enableLinks = settings.particles.links;
     const enableColorCycling = settings.particles.colorCycling;
@@ -1017,7 +1021,7 @@ function ParticleBackgroundCanvas({ config = 'idle', theme = 'cosmic', settings 
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('mouseleave', handleMouseLeave);
     };
-  }, [config, getThemeConfig, settings]);
+  }, [getThemeConfig, settings]);
 
   return (
     <canvas

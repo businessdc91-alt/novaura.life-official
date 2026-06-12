@@ -725,4 +725,32 @@ These take < 1 day each but have high perceived value:
 
 ---
 
-*This document is a living reference. Update it as features are completed. Last updated: 2026-05-01*
+---
+
+## 15. SESSION LOG
+
+### 2026-05-26 (Session — Dillan + Claude Sonnet 4.6)
+**Completed:**
+- [x] **Firebase Functions — ALL 12 DEPLOYED** (was the #1 blocker)
+  - `api` (all AI/auth/stripe/domain/generation routes) ✅
+  - `onSupportTicketCreated`, `novaScheduledMonitor`, `novaCall`, `novaInvestigate` ✅
+  - `sendPushNotification`, `registerFCMToken`, `unregisterFCMToken` ✅
+  - `onUserCreated`, `onUserDeleted` ✅
+  - `onDirectMessageCreated`, `onPostCreated` ✅ (converted from broken v2 → v1)
+- [x] **Firebase Storage rules deployed** — full bucket structure (avatars, marketplace, platform, aetherium, downloads, builder, temp)
+- [x] **`/download` route** — customer download page added (`src/pages/DownloadPage.jsx`)
+- [x] **`/staff` route** — staff command center added (`src/pages/StaffPage.jsx`)
+- [x] **Firebase Hosting deployed** with all routes, `.firebaseignore` for large media
+- [x] **`functions/.env` synced** — all keys from root `.env` merged in; Stripe key added
+- [x] **Removed Firebase Secret Manager dependency** — reverted to plain `.env` (avoids GCP IAM issues)
+- [x] **OS routing fix** — `/os/index.html` path corrected in `firebase.json`
+- [x] **Build fix** — `@tauri-apps/api` and `@mlc-ai/web-llm` marked as external in Vite configs
+- [x] **`CLAUDE.md` created** — session startup instructions at repo root
+- [x] **This audit file updated**
+
+**Still needed (Sprint 0 from audit):**
+- [ ] Rotate PixAI API key (exposed in root `.env` which Vite may bundle — verify `VITE_PIXAI_API_KEY` is NOT in frontend `.env`)
+- [ ] `STRIPE_WEBHOOK_SECRET` — get `whsec_...` from Stripe Dashboard → add to `functions/.env` → redeploy functions
+- [ ] Register webhook endpoint `https://novaura.life/api/stripe/webhook` in Stripe Dashboard
+
+*This document is a living reference. Update it as features are completed. Last updated: 2026-05-26*

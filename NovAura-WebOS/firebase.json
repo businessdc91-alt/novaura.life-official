@@ -62,19 +62,19 @@
       },
       {
         "source": "/os",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/os/**",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/system",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/system/**",
-        "destination": "/os/index.html"
+        "destination": "/os/os.html"
       },
       {
         "source": "/download",

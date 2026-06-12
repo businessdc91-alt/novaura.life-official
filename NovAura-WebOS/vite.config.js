@@ -47,7 +47,10 @@ export default defineConfig(({ mode }) => ({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        index: path.resolve(__dirname, 'os.html'),
+        // Key MUST stay 'os' — Vite derives the output filename from the source
+        // filename (os.html → dist/os/os.html). firebase.json points to os.html.
+        // DO NOT rename to 'index' or change firebase.json to index.html — it breaks every time.
+        os: path.resolve(__dirname, 'os.html'),
       },
       external: [
         'isomorphic-git',

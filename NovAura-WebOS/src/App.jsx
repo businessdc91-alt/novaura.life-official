@@ -338,9 +338,6 @@ export default function App() {
     setWindows(prev => [...prev, newWindow]);
     setNextZIndex(prev => prev + 1);
 
-    setParticleConfig('active');
-    setTimeout(() => setParticleConfig('idle'), 2000);
-
     return newWindow.id;
   }, [nextZIndex]);
 
@@ -364,9 +361,6 @@ export default function App() {
   };
 
   const handleChatSubmit = async (message) => {
-    setParticleConfig('active');
-    setTimeout(() => setParticleConfig('idle'), 1500);
-
     // Add user message to history
     const userMsg = { role: 'user', text: message, timestamp: Date.now() };
     setAuraHistory(prev => [...prev, userMsg]);

@@ -6,7 +6,7 @@ import {
   Wand2, Blocks, Shuffle, Briefcase, Swords, Image, Shirt,
   Sparkles, UserCircle, Users, Bot, Radio, PenTool, Library,
   CreditCard, FileText, Bell, Trophy, PieChart, Layers, Shield,
-  Mic, Guitar, Crown, ShoppingBag, Mail, Info
+  Mic, Guitar, Crown, ShoppingBag, Mail, Info, Cpu
 } from 'lucide-react';
 import { kernelStorage } from '../kernel/kernelStorage.js';
 
