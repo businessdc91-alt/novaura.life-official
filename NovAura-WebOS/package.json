@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --open /os/",
-    "build": "vite build && vite build --config vite.landing.config.js && cd platform && npm run build",
+    "build": "vite build && vite build --config vite.landing.config.js && node scripts/build-platform.mjs",
+    "build:platform": "node scripts/build-platform.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
