@@ -1168,6 +1168,126 @@ router.post('/alibaba/chat', async (req, res) => {
 });
 
 /**
+ * Kimi (Moonshot) BYOK proxy — moonshot.cn blocks browser CORS,
+ * so the frontend routes user-key requests through here.
+ */
+router.post('/kimi/chat', async (req, res) => {
+  try {
+    const { prompt, apiKey, model = 'moonshot-v1-8k', maxTokens = 4096, temperature = 0.7, conversation = [] } = req.body;
+    if (!prompt || !apiKey) {
+      res.status(400).json({ error: 'Missing prompt or Kimi API key' });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    let response;
+    try {
+      response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            ...conversation.map((m: any) => ({ role: m.role, content: m.text || m.content || '' })),
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: maxTokens,
+          temperature,
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      res.status(response.status).json({ error: `Kimi error: ${response.status}`, detail: err.error?.message || err.message });
+      return;
+    }
+
+    const data = await response.json();
+    res.json({ success: true, response: data.choices?.[0]?.message?.content || '', provider: 'kimi', model });
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      res.status(504).json({ error: 'Kimi request timed out' });
+      return;
+    }
+    console.error('Kimi error:', err);
+    res.status(500).json({ error: 'Kimi request failed', detail: err.message });
+  }
+});
+
+/**
+ * Azure OpenAI BYOK proxy — Azure endpoints don't send CORS headers,
+ * so browser-direct calls fail. Mirrors the frontend's URL resolution.
+ */
+router.post('/azure/chat', async (req, res) => {
+  try {
+    const { prompt, apiKey, endpoint, model = 'gpt-4o', maxTokens = 4096, temperature = 0.7, conversation = [] } = req.body;
+    if (!prompt || !apiKey || !endpoint) {
+      res.status(400).json({ error: 'Missing prompt, Azure API key, or endpoint' });
+      return;
+    }
+
+    const apiVersion = '2024-05-01-preview';
+    const baseUrl = endpoint.endsWith('/') ? endpoint : `${endpoint}/`;
+    let url: string;
+    if (baseUrl.includes('/openai/deployments/')) {
+      url = baseUrl.includes('api-version=') ? baseUrl : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api-version=${apiVersion}`;
+    } else if (baseUrl.includes('.services.ai.azure.com')) {
+      url = `${baseUrl}models/chat/completions?api-version=${apiVersion}`;
+    } else {
+      url = `${baseUrl}openai/deployments/${model}/chat/completions?api-version=${apiVersion}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': apiKey,
+        },
+        body: JSON.stringify({
+          messages: [
+            ...conversation.map((m: any) => ({ role: m.role, content: m.text || m.content || '' })),
+            { role: 'user', content: prompt },
+          ],
+          max_tokens: maxTokens,
+          temperature,
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      res.status(response.status).json({ error: `Azure error: ${response.status}`, detail: err.error?.message || err.message });
+      return;
+    }
+
+    const data = await response.json();
+    res.json({ success: true, response: data.choices?.[0]?.message?.content || '', provider: 'azure', model });
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      res.status(504).json({ error: 'Azure request timed out' });
+      return;
+    }
+    console.error('Azure error:', err);
+    res.status(500).json({ error: 'Azure request failed', detail: err.message });
+  }
+});
+
+/**
  * Code/Website Builder endpoint
  * Specialized for generating code, websites, and projects
  */

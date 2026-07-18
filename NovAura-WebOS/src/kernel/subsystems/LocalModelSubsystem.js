@@ -111,33 +111,51 @@ class LocalModelSubsystem {
         this._webllm = await import(/* @vite-ignore */ 'https://esm.run/@mlc-ai/web-llm@0.2.80');
       }
 
-      // Step 2: Find best available model
+      // Step 2: Try each candidate in order — fall through on failure so a
+      // 2GB model failing on a small GPU still lands on the 376MB one.
       this._setState(STATE.DOWNLOADING);
-      const modelId = await this._pickModel();
-
-      if (!modelId) {
+      const candidates = this._candidateModels();
+      if (candidates.length === 0) {
         throw new Error('No compatible model found');
       }
 
-      this._modelId = modelId;
-      this._kernel.ipc.emit('localmodel:status', { ...this._snapshot(), label: `Downloading ${modelId}...` });
-
-      // Step 3: Create engine (downloads + compiles model, cached in IndexedDB)
-      this._engine = await this._webllm.CreateMLCEngine(modelId, {
-        initProgressCallback: (progress) => {
-          this._progress = Math.round((progress.progress || 0) * 100);
-          this._kernel.ipc.emit('localmodel:progress', {
-            progress: this._progress,
-            text: progress.text || '',
-            modelId,
+      let lastErr = null;
+      this._engine = null;
+      for (const modelId of candidates) {
+        this._modelId = modelId;
+        this._kernel.ipc.emit('localmodel:status', { ...this._snapshot(), label: `Downloading ${modelId}...` });
+        try {
+          // Create engine (downloads + compiles model, cached in browser)
+          this._engine = await this._webllm.CreateMLCEngine(modelId, {
+            initProgressCallback: (progress) => {
+              this._progress = Math.round((progress.progress || 0) * 100);
+              this._kernel.ipc.emit('localmodel:progress', {
+                progress: this._progress,
+                text: progress.text || '',
+                modelId,
+              });
+            },
           });
-        },
-      });
+          break; // success
+        } catch (err) {
+          lastErr = err;
+          console.warn(`[LocalModel] ${modelId} failed (${err.message}) — trying smaller model...`);
+          this._progress = 0;
+          this._kernel.ipc.emit('localmodel:status', {
+            ...this._snapshot(),
+            label: `${modelId} failed — trying smaller model...`,
+          });
+        }
+      }
+
+      if (!this._engine) {
+        throw lastErr || new Error('All local models failed to load');
+      }
 
       this._setState(STATE.READY);
       this._progress = 100;
       this._kernel.ipc.emit('localmodel:status', this._snapshot());
-      this._kernel.ipc.emit('localmodel:ready', { modelId });
+      this._kernel.ipc.emit('localmodel:ready', { modelId: this._modelId });
 
     } catch (err) {
       this._error = err.message;
@@ -264,20 +282,15 @@ class LocalModelSubsystem {
 
   // ─── Internals ────────────────────────────────────────────────────────────
 
-  async _pickModel() {
-    if (!this._webllm) return null;
-
-    for (const id of MODEL_CANDIDATES) {
-      try {
-        // Check if the model is in WebLLM's model list
-        const available = this._webllm.prebuiltAppConfig?.model_list || [];
-        const found = available.find(m => m.model_id === id || m.local_id === id);
-        if (found) return id;
-      } catch {}
-    }
-
-    // Fallback: try first candidate anyway — WebLLM may fetch it
-    return MODEL_CANDIDATES[0];
+  /** Ordered list of candidates that exist in this WebLLM build's registry. */
+  _candidateModels() {
+    if (!this._webllm) return [];
+    const available = this._webllm.prebuiltAppConfig?.model_list || [];
+    const known = MODEL_CANDIDATES.filter(id =>
+      available.some(m => m.model_id === id || m.local_id === id)
+    );
+    // If the registry lookup found nothing (API change), try them all anyway
+    return known.length > 0 ? known : [...MODEL_CANDIDATES];
   }
 
   _setState(newState) {

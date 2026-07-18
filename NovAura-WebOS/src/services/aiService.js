@@ -124,51 +124,31 @@ export async function ensureActionTokens(isIDE = false) {
 export async function chatCloud(prompt, options = {}) {
   const isPremium = await ensureActionTokens(options.isIDE);
 
-  // ── Kimi (Moonshot) BYOK ────────────────────────────────────────────────
+  // ── Kimi (Moonshot) BYOK — proxied through backend (moonshot blocks browser CORS)
   const userKimiKey = kernelStorage.getItem('kimi_key');
   if (userKimiKey && options.provider === 'kimi') {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-    try {
-      const res = await fetch('https://api.moonshot.cn/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${userKimiKey}`,
-        },
-        body: JSON.stringify({
-          model: options.model || 'moonshot-v1-8k',
-          messages: [
-            ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
-            { role: 'user', content: prompt }
-          ],
-          max_tokens: options.maxTokens || 4096,
-          temperature: options.temperature || 0.7,
-        }),
-        signal: controller.signal
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(`Kimi Error: ${res.status} - ${errorData.error?.message || 'Unknown Error'}`);
-      }
-
-      const data = await res.json();
-      return {
-        response: data.choices[0].message.content,
-        source: 'kimi (BYOK)',
+    const res = await fetch(`${BACKEND_URL}/ai/kimi/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({
+        prompt,
+        apiKey: userKimiKey,
         model: options.model || 'moonshot-v1-8k',
-      };
-    } catch (err) {
-      if (err.name === 'AbortError') throw new Error('Kimi request timed out (45s)');
-      throw err;
-    } finally {
-      clearTimeout(timeoutId);
-    }
+        maxTokens: options.maxTokens || 4096,
+        temperature: options.temperature ?? 0.7,
+        conversation: options.conversation || [],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.error || 'Kimi request failed');
+    return {
+      response: data.response,
+      source: 'kimi (BYOK)',
+      model: options.model || 'moonshot-v1-8k',
+    };
   }
 
-  // ── Azure OpenAI BYOK ───────────────────────────────────────────────────
+  // ── Azure OpenAI BYOK — proxied through backend (Azure endpoints block browser CORS)
   const userAzureData = kernelStorage.getItem('azure_key') || kernelStorage.getItem('user_azure_key');
   if (userAzureData && options.provider === 'azure') {
     let azureKey = userAzureData;
@@ -181,61 +161,34 @@ export async function chatCloud(prompt, options = {}) {
     }
 
     const deployment = options.model || 'gpt-4o';
-    const apiVersion = '2024-05-01-preview';
-    const baseUrl = azureEndpoint.endsWith('/') ? azureEndpoint : `${azureEndpoint}/`;
-
-    let url;
-    if (baseUrl.includes('/openai/deployments/')) {
-      url = baseUrl.includes('api-version=') ? baseUrl : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}api-version=${apiVersion}`;
-    } else if (baseUrl.includes('.services.ai.azure.com')) {
-      url = `${baseUrl}models/chat/completions?api-version=${apiVersion}`;
-    } else {
-      url = `${baseUrl}openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': azureKey,
-        },
-        body: JSON.stringify({
-          messages: [
-            ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
-            { role: 'user', content: prompt }
-          ],
-          max_tokens: options.maxTokens || 4096,
-          temperature: options.temperature || 0.7,
-        }),
-        signal: controller.signal
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(`Azure Error: ${res.status} - ${errorData.error?.message || 'Unknown Error'}`);
-      }
-
-      const data = await res.json();
-      return {
-        response: data.choices[0].message.content,
-        source: 'azure (BYOK)',
+    const res = await fetch(`${BACKEND_URL}/ai/azure/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({
+        prompt,
+        apiKey: azureKey,
+        endpoint: azureEndpoint,
         model: deployment,
-      };
-    } catch (err) {
-      if (err.name === 'AbortError') throw new Error('Azure request timed out (45s)');
-      throw err;
-    } finally {
-      clearTimeout(timeoutId);
-    }
+        maxTokens: options.maxTokens || 4096,
+        temperature: options.temperature ?? 0.7,
+        conversation: options.conversation || [],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.error || 'Azure request failed');
+    return {
+      response: data.response,
+      source: 'azure (BYOK)',
+      model: deployment,
+    };
   }
 
   const userOpenAIKey = kernelStorage.getItem('openai_api_key') || kernelStorage.getItem('user_openai_key');
 
-  if (userOpenAIKey && (options.provider === 'openai' || !options.provider)) {
+  // Only take the BYOK-OpenAI path when explicitly requested, or by default for
+  // premium users. Non-premium users with a saved key fall through to the
+  // platform's free routing instead of erroring on every chat.
+  if (userOpenAIKey && (options.provider === 'openai' || (!options.provider && isPremium))) {
     if (!isPremium) {
       throw new Error('Catalyst Membership ($29.99) required for BYOK access.');
     }
@@ -249,7 +202,7 @@ export async function chatCloud(prompt, options = {}) {
       body: JSON.stringify({
         model: options.model || 'gpt-4o',
         messages: [
-          ...options.conversation.map(m => ({ role: m.role, content: m.text || m.content })),
+          ...(options.conversation || []).map(m => ({ role: m.role, content: m.text || m.content })),
           { role: 'user', content: prompt }
         ],
         max_tokens: options.maxTokens || 8192,
@@ -941,7 +894,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
     try {
       return await chatCloud(message, {
         provider: 'openrouter',
-        model: OR_MODELS.QWEN_CODER,
+        model: OR_MODELS.QWEN_480B,
         conversation: llmConfig.conversation,
         maxTokens: 8192,
       });
@@ -949,7 +902,7 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
       try {
         return await chatCloud(message, {
           provider: 'openrouter',
-          model: OR_MODELS.HERMES,
+          model: OR_MODELS.HERMES_405B,
           conversation: llmConfig.conversation,
           maxTokens: 8192,
         });
@@ -975,8 +928,8 @@ export async function smartChat(message, taskCategory = 'general', llmConfig = {
   }
 
   // ── General: OpenRouter free pool → Gemini fallback ───────────────────────
-  // Try Nemotron → Qwen3 80B → GPT OSS → Gemini
-  const generalPool = [OR_MODELS.NEMOTRON, OR_MODELS.QWEN_80B, OR_MODELS.GPT_OSS];
+  // Try Nemotron Super → Qwen3 235B → Ling 1T → Gemini
+  const generalPool = [OR_MODELS.NEMOTRON_SUPER, OR_MODELS.QWEN_235B, OR_MODELS.LING_1T];
   for (const orModel of generalPool) {
     try {
       return await chatCloud(message, {
