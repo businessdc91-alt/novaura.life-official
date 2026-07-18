@@ -28,7 +28,20 @@ export default function ArtGalleryWindow() {
         const response = await fetch(`${BACKEND_URL}/assets`);
         if (response.ok) {
           const data = await response.json();
-          setCommunityPieces(data.assets || []);
+          // Normalize marketplace assets into gallery display shape
+          const normalized = (data.assets || []).map(a => ({
+            id: a.id,
+            title: a.title || 'Untitled',
+            type: a.category || 'sprite',
+            tags: Array.isArray(a.tags) ? a.tags : [],
+            author: a.creatorUsername || a.creatorId || 'Community',
+            featured: !!a.featured,
+            likes: a.salesCount || a.downloadCount || 0,
+            art: '🎨',
+            color: 'from-pink-900/40 to-slate-900',
+            dataUrl: a.thumbnailUrl || null,
+          }));
+          setCommunityPieces(normalized);
         }
       } catch (err) {
         console.error('Failed to load assets:', err);
@@ -48,7 +61,7 @@ export default function ArtGalleryWindow() {
   const filtered = allPieces.filter(p => {
     if (filter === 'featured') return p.featured;
     if (filter !== 'all' && p.type !== filter) return false;
-    if (search && !p.title.toLowerCase().includes(search.toLowerCase()) && !p.tags.some(t => t.includes(search.toLowerCase()))) return false;
+    if (search && !p.title.toLowerCase().includes(search.toLowerCase()) && !(p.tags || []).some(t => t.includes(search.toLowerCase()))) return false;
     return true;
   }).sort((a, b) => {
     if (sortBy === 'popular') return (b.likes || 0) - (a.likes || 0);
@@ -73,8 +86,10 @@ export default function ArtGalleryWindow() {
           <span className="text-sm font-medium">{selected.title}</span>
         </div>
         <div className="flex-1 flex items-center justify-center p-6">
-          <div className={`w-64 h-64 rounded-2xl bg-gradient-to-br ${selected.color} border border-slate-700 flex items-center justify-center`}>
-            <span className="text-8xl">{selected.art}</span>
+          <div className={`w-64 h-64 rounded-2xl bg-gradient-to-br ${selected.color} border border-slate-700 flex items-center justify-center overflow-hidden`}>
+            {selected.dataUrl
+              ? <img src={selected.dataUrl} alt={selected.title} className="w-full h-full object-contain" />
+              : <span className="text-8xl">{selected.art}</span>}
           </div>
         </div>
         <div className="px-4 py-3 bg-black/30 border-t border-slate-800 space-y-2">
@@ -88,13 +103,22 @@ export default function ArtGalleryWindow() {
                 className={`p-2 rounded-lg transition-all ${liked.has(selected.id) ? 'bg-red-600/30 text-red-400' : 'bg-slate-800 text-slate-400 hover:text-red-400'}`}>
                 <Heart className={`w-4 h-4 ${liked.has(selected.id) ? 'fill-current' : ''}`} />
               </button>
-              <button className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
+              <button
+                onClick={() => {
+                  if (!selected.dataUrl) return;
+                  const a = document.createElement('a');
+                  a.href = selected.dataUrl;
+                  a.download = `${selected.title.replace(/[^a-z0-9]+/gi, '-')}.png`;
+                  a.click();
+                }}
+                disabled={!selected.dataUrl}
+                className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30">
                 <Download className="w-4 h-4" />
               </button>
             </div>
           </div>
           <div className="flex gap-1 flex-wrap">
-            {selected.tags.map(t => <span key={t} className="px-2 py-0.5 bg-slate-800 rounded-full text-[9px] text-slate-400">{t}</span>)}
+            {(selected.tags || []).map(t => <span key={t} className="px-2 py-0.5 bg-slate-800 rounded-full text-[9px] text-slate-400">{t}</span>)}
           </div>
         </div>
       </div>
@@ -185,7 +209,9 @@ export default function ArtGalleryWindow() {
             {filtered.map(piece => (
               <button key={piece.id} onClick={() => setSelected(piece)}
                 className="w-full flex items-center gap-3 p-2 rounded-lg bg-slate-900/50 hover:bg-slate-800/50 border border-slate-800/50 transition-all text-left">
-                <span className="text-2xl">{piece.art}</span>
+                {piece.dataUrl
+                  ? <img src={piece.dataUrl} alt="" className="w-8 h-8 rounded object-cover" />
+                  : <span className="text-2xl">{piece.art}</span>}
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium truncate">{piece.title}</div>
                   <div className="text-[9px] text-slate-400 capitalize">{piece.type} · by {piece.author}</div>

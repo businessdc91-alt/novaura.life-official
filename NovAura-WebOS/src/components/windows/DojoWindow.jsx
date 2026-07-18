@@ -105,27 +105,53 @@ export default function DojoWindow({ onAIChat }) {
   // KNOWLEDGE BASE MANAGEMENT
   // ═══════════════════════════════════════════════════════════════════════════════
 
-  const handleFileUpload = useCallback(async (files) => {
-    const newFiles = Array.from(files).map(file => ({
-      id: Date.now() + Math.random(),
-      name: file.name,
-      size: file.size,
-      type: file.type || 'application/octet-stream',
-      category: categorizeFile(file.name),
-      uploadDate: new Date().toISOString(),
-      // In real implementation, upload to Firebase Storage
-      status: 'uploaded'
-    }));
+  const TEXT_CATEGORIES = ['code', 'other'];
+  const MAX_TEXT_BYTES = 256 * 1024; // read up to 256KB of text per file for AI context
 
-    setUploadedFiles(prev => [...prev, ...newFiles]);
-    
-    // Simulate upload progress
-    setUploadProgress(0);
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise(r => setTimeout(r, 100));
-      setUploadProgress(i);
+  const handleFileUpload = useCallback(async (files) => {
+    const fileArr = Array.from(files);
+    const newFiles = [];
+
+    for (let i = 0; i < fileArr.length; i++) {
+      const file = fileArr[i];
+      const category = categorizeFile(file.name);
+      const entry = {
+        id: Date.now() + Math.random(),
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        category,
+        uploadDate: new Date().toISOString(),
+        content: null,
+        status: 'uploaded',
+      };
+
+      // Read text-like files so generation prompts can include real content
+      if (TEXT_CATEGORIES.includes(category) && file.size <= MAX_TEXT_BYTES) {
+        try {
+          entry.content = await file.text();
+        } catch { /* binary or unreadable — keep as metadata reference */ }
+      }
+
+      newFiles.push(entry);
+      setUploadProgress(Math.round(((i + 1) / fileArr.length) * 100));
     }
+
+    setUploadedFiles(prev => {
+      const next = [...prev, ...newFiles];
+      // Persist knowledge base across sessions (content capped, so this stays small)
+      try { localStorage.setItem('dojo_knowledge_files', JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
     setUploadProgress(0);
+  }, []);
+
+  // Restore knowledge base on mount
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('dojo_knowledge_files') || '[]');
+      if (saved.length > 0) setUploadedFiles(saved);
+    } catch { /* corrupt — start fresh */ }
   }, []);
 
   const categorizeFile = (filename) => {
@@ -140,7 +166,11 @@ export default function DojoWindow({ onAIChat }) {
   };
 
   const removeFile = (id) => {
-    setUploadedFiles(prev => prev.filter(f => f.id !== id));
+    setUploadedFiles(prev => {
+      const next = prev.filter(f => f.id !== id);
+      try { localStorage.setItem('dojo_knowledge_files', JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
   };
 
   // ═══════════════════════════════════════════════════════════════════════════════
@@ -198,7 +228,9 @@ Provide:
       const worldConfig = WORLD_GENERATORS.find(w => w.id === selectedWorldType);
       
       const knowledgeContext = useKnowledgeBase && uploadedFiles.length > 0
-        ? `\n\nReference Assets Available:\n${uploadedFiles.map(f => `- ${f.name} (${f.category})`).join('\n')}`
+        ? `\n\nReference Assets Available:\n${uploadedFiles.map(f => `- ${f.name} (${f.category})`).join('\n')}` +
+          uploadedFiles.filter(f => f.content).slice(0, 5)
+            .map(f => `\n\n--- ${f.name} ---\n${f.content.slice(0, 4000)}`).join('')
         : '';
 
       const prompt = `Generate a complete ${worldSize} ${worldConfig.name} for ${currentEngine.label}.
@@ -245,8 +277,11 @@ This should be a complete, runnable world that can be dropped into a project.`;
 
     setGenerating(true);
     try {
-      const knowledgeContext = useKnowledgeBase && uploadedFiles.length > 0
-        ? `\n\nReference Code Snippets:\n${uploadedFiles.filter(f => f.category === 'code').map(f => `- ${f.name}`).join('\n')}`
+      const codeFiles = uploadedFiles.filter(f => f.category === 'code');
+      const knowledgeContext = useKnowledgeBase && codeFiles.length > 0
+        ? `\n\nReference Code Snippets:\n${codeFiles.map(f => `- ${f.name}`).join('\n')}` +
+          codeFiles.filter(f => f.content).slice(0, 5)
+            .map(f => `\n\n--- ${f.name} ---\n${f.content.slice(0, 4000)}`).join('')
         : '';
 
       const prompt = `Generate production-ready ${currentAsset.label} for ${currentEngine.label} in ${currentEngine.lang}.
@@ -871,107 +906,485 @@ Generated with NovAura Dojo 🎮
 
 function generateWorldTemplate(engine, worldType, size, complexity) {
   const world = WORLD_GENERATORS.find(w => w.id === worldType);
-  
-  if (engine === 'godot') {
-    return `# ${world.name} - Godot 4
-# Size: ${size} | Complexity: ${complexity}
+  const dim = size === 'small' ? 128 : size === 'medium' ? 256 : 512;
+  const freq = complexity === 'simple' ? 0.01 : complexity === 'balanced' ? 0.02 : 0.04;
+  const octaves = complexity === 'simple' ? 3 : complexity === 'balanced' ? 5 : 8;
+  const propCount = complexity === 'simple' ? 100 : complexity === 'balanced' ? 400 : 1200;
+  // Per-world-type tuning: height scale and biome color bands
+  const heightScale = worldType === 'mountain' ? 80 : worldType === 'desert' ? 12 : worldType === 'ocean' ? 20 : 30;
 
+  if (engine === 'godot') {
+    return `# ${world.name} — Godot 4 procedural world
+# Size: ${size} (${dim}x${dim}) | Complexity: ${complexity}
+# Biomes: ${world.biomes.join(', ')}
 extends Node3D
 
-@export var world_size: int = ${size === 'small' ? 256 : size === 'medium' ? 512 : 1024}
-@export var chunk_size: int = 64
+@export var world_size: int = ${dim}
+@export var height_scale: float = ${heightScale}.0
+@export var prop_count: int = ${propCount}
 
-var noise = FastNoiseLite.new()
-var chunks = {}
+var noise := FastNoiseLite.new()
+var biome_noise := FastNoiseLite.new()
 
-func _ready():
-    setup_noise()
-    generate_world()
-    setup_lighting()
-    
-func setup_noise():
+func _ready() -> void:
+    _setup_noise()
+    _generate_terrain()
+    _scatter_props()
+    _setup_lighting()
+    _spawn_player()
+
+func _setup_noise() -> void:
     noise.seed = randi()
-    noise.frequency = ${complexity === 'simple' ? '0.01' : complexity === 'balanced' ? '0.02' : '0.04'}
-    noise.fractal_octaves = ${complexity === 'simple' ? '3' : complexity === 'balanced' ? '5' : '8'}
+    noise.frequency = ${freq}
+    noise.fractal_octaves = ${octaves}
+    biome_noise.seed = noise.seed + 1
+    biome_noise.frequency = ${(freq / 4).toFixed(4)}  # broad biome regions
 
-func generate_world():
-    print("Generating ${world.name}...")
-    # Procedural generation logic here
-    # Biomes: ${world.biomes.join(', ')}
-    
-func setup_lighting():
+func _height_at(x: float, z: float) -> float:
+    return noise.get_noise_2d(x, z) * height_scale
+
+func _biome_at(x: float, z: float) -> int:
+    # 0..${world.biomes.length - 1} => ${world.biomes.join(' / ')}
+    var b := (biome_noise.get_noise_2d(x, z) + 1.0) * 0.5
+    return clampi(int(b * ${world.biomes.length}), 0, ${world.biomes.length - 1})
+
+func _generate_terrain() -> void:
+    var st := SurfaceTool.new()
+    st.begin(Mesh.PRIMITIVE_TRIANGLES)
+    for z in world_size:
+        for x in world_size:
+            var h00 := _height_at(x, z)
+            var h10 := _height_at(x + 1, z)
+            var h01 := _height_at(x, z + 1)
+            var h11 := _height_at(x + 1, z + 1)
+            var c := _biome_color(_biome_at(x, z), h00)
+            st.set_color(c)
+            # two triangles per grid cell
+            st.add_vertex(Vector3(x, h00, z))
+            st.add_vertex(Vector3(x + 1, h10, z))
+            st.add_vertex(Vector3(x, h01, z + 1))
+            st.add_vertex(Vector3(x + 1, h10, z))
+            st.add_vertex(Vector3(x + 1, h11, z + 1))
+            st.add_vertex(Vector3(x, h01, z + 1))
+    st.generate_normals()
+    var mesh_instance := MeshInstance3D.new()
+    mesh_instance.mesh = st.commit()
+    var mat := StandardMaterial3D.new()
+    mat.vertex_color_use_as_albedo = true
+    mesh_instance.material_override = mat
+    mesh_instance.create_trimesh_collision()
+    add_child(mesh_instance)
+
+func _biome_color(biome: int, h: float) -> Color:
+    var base: Color
+    match biome:
+${world.biomes.map((b, i) => `        ${i}: base = Color(${(0.2 + i * 0.15).toFixed(2)}, ${(0.5 - i * 0.1).toFixed(2)}, ${(0.25 + i * 0.05).toFixed(2)})  # ${b}`).join('\n')}
+        _: base = Color(0.4, 0.4, 0.4)
+    # lighten with altitude
+    return base.lerp(Color.WHITE, clampf(h / height_scale, 0.0, 0.6))
+
+func _scatter_props() -> void:
+    # MultiMesh scatter — swap the box for your tree/rock/prop scene
+    var mm := MultiMesh.new()
+    mm.transform_format = MultiMesh.TRANSFORM_3D
+    var box := BoxMesh.new()
+    box.size = Vector3(0.6, 2.0, 0.6)
+    mm.mesh = box
+    mm.instance_count = prop_count
+    for i in prop_count:
+        var x := randf() * world_size
+        var z := randf() * world_size
+        var t := Transform3D(Basis().rotated(Vector3.UP, randf() * TAU), Vector3(x, _height_at(x, z) + 1.0, z))
+        mm.set_instance_transform(i, t)
+    var mmi := MultiMeshInstance3D.new()
+    mmi.multimesh = mm
+    add_child(mmi)
+
+func _setup_lighting() -> void:
     # ${world.features.join(', ')}
-    var light = DirectionalLight3D.new()
+    var light := DirectionalLight3D.new()
+    light.rotation_degrees = Vector3(-50, -30, 0)
     light.shadow_enabled = true
     add_child(light)
+    var env := WorldEnvironment.new()
+    var e := Environment.new()
+    e.background_mode = Environment.BG_SKY
+    e.sky = Sky.new()
+    e.sky.sky_material = ProceduralSkyMaterial.new()
+    e.fog_enabled = true
+    e.fog_density = ${complexity === 'complex' ? '0.005' : '0.002'}
+    env.environment = e
+    add_child(env)
 
-# Features to implement:
-# - ${world.features.join('\n# - ')}
+func _spawn_player() -> void:
+    var spawn := Marker3D.new()
+    spawn.name = "PlayerSpawn"
+    var cx := world_size * 0.5
+    spawn.position = Vector3(cx, _height_at(cx, cx) + 2.0, cx)
+    add_child(spawn)
 `;
   }
-  
+
   if (engine === 'unity') {
     return `using UnityEngine;
 
-// ${world.name} Generator
-// Size: ${size} | Complexity: ${complexity}
-
+// ${world.name} — Unity procedural world
+// Size: ${size} (${dim}x${dim}) | Complexity: ${complexity}
+// Biomes: ${world.biomes.join(', ')}
+[RequireComponent(typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider))]
 public class WorldGenerator : MonoBehaviour
 {
     [Header("World Settings")]
-    public int worldSize = ${size === 'small' ? '256' : size === 'medium' ? '512' : '1024'};
-    public int chunkSize = 64;
-    
+    public int worldSize = ${dim};
+    public float heightScale = ${heightScale}f;
+    public int propCount = ${propCount};
+
     [Header("Noise Settings")]
-    public float noiseScale = ${complexity === 'simple' ? '0.01f' : complexity === 'balanced' ? '0.02f' : '0.04f'};
-    public int octaves = ${complexity === 'simple' ? '3' : complexity === 'balanced' ? '5' : '8'};
-    
+    public float noiseScale = ${freq}f;
+    public int octaves = ${octaves};
+
+    [Header("Props")]
+    public GameObject propPrefab; // assign a tree/rock prefab; falls back to cubes
+
+    private float seedX, seedZ;
+
     void Start()
     {
-        GenerateWorld();
+        seedX = Random.Range(0f, 9999f);
+        seedZ = Random.Range(0f, 9999f);
+        GenerateTerrain();
+        ScatterProps();
         SetupLighting();
     }
-    
-    void GenerateWorld()
+
+    float HeightAt(float x, float z)
     {
-        Debug.Log("Generating ${world.name}...");
-        // Biomes: ${world.biomes.join(', ')}
-        
-        // TODO: Implement procedural mesh generation
-        // TODO: Implement biome system
-        // TODO: Implement object placement
+        float amp = 1f, f = noiseScale, h = 0f, norm = 0f;
+        for (int o = 0; o < octaves; o++)
+        {
+            h += Mathf.PerlinNoise(seedX + x * f, seedZ + z * f) * amp;
+            norm += amp;
+            amp *= 0.5f; f *= 2f;
+        }
+        return (h / norm) * heightScale;
     }
-    
+
+    int BiomeAt(float x, float z)
+    {
+        float b = Mathf.PerlinNoise(seedX + x * noiseScale * 0.25f, seedZ + z * noiseScale * 0.25f);
+        return Mathf.Clamp((int)(b * ${world.biomes.length}), 0, ${world.biomes.length - 1});
+    }
+
+    Color BiomeColor(int biome, float h)
+    {
+        // ${world.biomes.join(' / ')}
+        Color[] bases = {
+${world.biomes.map((b, i) => `            new Color(${(0.2 + i * 0.15).toFixed(2)}f, ${(0.5 - i * 0.1).toFixed(2)}f, ${(0.25 + i * 0.05).toFixed(2)}f), // ${b}`).join('\n')}
+        };
+        return Color.Lerp(bases[biome], Color.white, Mathf.Clamp01(h / heightScale) * 0.6f);
+    }
+
+    void GenerateTerrain()
+    {
+        var verts = new Vector3[(worldSize + 1) * (worldSize + 1)];
+        var colors = new Color[verts.Length];
+        var tris = new int[worldSize * worldSize * 6];
+
+        for (int z = 0, i = 0; z <= worldSize; z++)
+            for (int x = 0; x <= worldSize; x++, i++)
+            {
+                float h = HeightAt(x, z);
+                verts[i] = new Vector3(x, h, z);
+                colors[i] = BiomeColor(BiomeAt(x, z), h);
+            }
+
+        for (int z = 0, t = 0, v = 0; z < worldSize; z++, v++)
+            for (int x = 0; x < worldSize; x++, v++, t += 6)
+            {
+                tris[t] = v; tris[t + 1] = v + worldSize + 1; tris[t + 2] = v + 1;
+                tris[t + 3] = v + 1; tris[t + 4] = v + worldSize + 1; tris[t + 5] = v + worldSize + 2;
+            }
+
+        var mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+        mesh.vertices = verts; mesh.colors = colors; mesh.triangles = tris;
+        mesh.RecalculateNormals();
+        GetComponent<MeshFilter>().mesh = mesh;
+        GetComponent<MeshCollider>().sharedMesh = mesh;
+        // Use a vertex-color shader (URP: create one via Shader Graph) on the renderer material.
+    }
+
+    void ScatterProps()
+    {
+        var parent = new GameObject("Props").transform;
+        parent.SetParent(transform, false);
+        for (int i = 0; i < propCount; i++)
+        {
+            float x = Random.Range(0f, worldSize);
+            float z = Random.Range(0f, worldSize);
+            var pos = new Vector3(x, HeightAt(x, z), z);
+            var rot = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+            if (propPrefab != null) Instantiate(propPrefab, pos, rot, parent);
+            else
+            {
+                var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                cube.transform.SetPositionAndRotation(pos + Vector3.up, rot);
+                cube.transform.localScale = new Vector3(0.6f, 2f, 0.6f);
+                cube.transform.SetParent(parent, true);
+            }
+        }
+    }
+
     void SetupLighting()
     {
         // ${world.features.join(', ')}
-        var light = gameObject.AddComponent<Light>();
+        var lightGO = new GameObject("Sun");
+        var light = lightGO.AddComponent<Light>();
         light.type = LightType.Directional;
         light.shadows = LightShadows.Soft;
+        lightGO.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+        RenderSettings.fog = ${complexity === 'complex' ? 'true' : 'false'};
+        RenderSettings.fogDensity = 0.005f;
     }
 }
 `;
   }
-  
-  return `// ${world.name} World Template
-// Engine: ${engine}
-// Size: ${size}
-// Complexity: ${complexity}
-// Biomes: ${world.biomes.join(', ')}
-// Features: ${world.features.join(', ')}
 
-// TODO: Implement world generation for ${engine}
+  // Unreal Engine 5 (and default): complete C++ actor
+  return `// ${world.name} — Unreal Engine 5 procedural world
+// Size: ${size} (${dim}x${dim}) | Complexity: ${complexity}
+// Biomes: ${world.biomes.join(', ')}
+// Requires the ProceduralMeshComponent module (add "ProceduralMeshComponent" to Build.cs).
+
+#include "WorldGenerator.h"
+#include "ProceduralMeshComponent.h"
+#include "Kismet/KismetMathLibrary.h"
+
+AWorldGenerator::AWorldGenerator()
+{
+    PrimaryActorTick.bCanEverTick = false;
+    Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("TerrainMesh"));
+    RootComponent = Mesh;
+    WorldSize = ${dim};
+    HeightScale = ${heightScale}.f;
+    NoiseScale = ${freq}f;
+    PropCount = ${propCount};
+}
+
+float AWorldGenerator::HeightAt(float X, float Y) const
+{
+    float Amp = 1.f, Freq = NoiseScale, H = 0.f, Norm = 0.f;
+    for (int32 O = 0; O < ${octaves}; ++O)
+    {
+        H += FMath::PerlinNoise2D(FVector2D(X * Freq, Y * Freq)) * Amp;
+        Norm += Amp; Amp *= 0.5f; Freq *= 2.f;
+    }
+    return (H / Norm) * HeightScale;
+}
+
+void AWorldGenerator::BeginPlay()
+{
+    Super::BeginPlay();
+    TArray<FVector> Vertices;
+    TArray<int32> Triangles;
+    TArray<FVector> Normals;
+    TArray<FVector2D> UVs;
+    TArray<FLinearColor> Colors;
+    TArray<FProcMeshTangent> Tangents;
+
+    for (int32 Y = 0; Y <= WorldSize; ++Y)
+        for (int32 X = 0; X <= WorldSize; ++X)
+        {
+            const float H = HeightAt(X, Y);
+            Vertices.Add(FVector(X * 100.f, Y * 100.f, H * 100.f)); // cm units
+            UVs.Add(FVector2D(X, Y));
+            const float T = FMath::Clamp(H / HeightScale, 0.f, 1.f);
+            Colors.Add(FLinearColor::LerpUsingHSV(FLinearColor(0.2f, 0.5f, 0.25f), FLinearColor::White, T * 0.6f));
+        }
+
+    for (int32 Y = 0; Y < WorldSize; ++Y)
+        for (int32 X = 0; X < WorldSize; ++X)
+        {
+            const int32 I = Y * (WorldSize + 1) + X;
+            Triangles.Append({ I, I + WorldSize + 1, I + 1, I + 1, I + WorldSize + 1, I + WorldSize + 2 });
+        }
+
+    Mesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, Colors, Tangents, true);
+
+    // Scatter props (swap for your foliage/ISM setup — features: ${world.features.join(', ')})
+    for (int32 i = 0; i < PropCount; ++i)
+    {
+        const float X = FMath::FRandRange(0.f, (float)WorldSize);
+        const float Y = FMath::FRandRange(0.f, (float)WorldSize);
+        const FVector Loc(X * 100.f, Y * 100.f, HeightAt(X, Y) * 100.f + 100.f);
+        // SpawnActor<AYourPropActor>(Loc, FRotator(0, FMath::FRandRange(0.f, 360.f), 0));
+    }
+}
 `;
 }
 
 function generatePlaceholder(engine, assetType) {
   const asset = ASSET_TYPES.find(a => a.id === assetType);
-  return `// ${asset?.label || 'Game Asset'}
-// Engine: ${engine}
+  const label = asset?.label || 'Game Asset';
+  const className = label.replace(/[^a-zA-Z0-9]/g, '');
+
+  // Fully-implemented character controller per engine — the most-requested asset
+  if (assetType === 'character-controller') {
+    if (engine === 'godot') {
+      return `# Character Controller — Godot 4
+extends CharacterBody3D
+
+@export var speed: float = 5.5
+@export var sprint_speed: float = 8.5
+@export var jump_velocity: float = 4.8
+@export var mouse_sensitivity: float = 0.002
+
+@onready var camera: Camera3D = $Camera3D
+
+func _ready() -> void:
+    Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+func _unhandled_input(event: InputEvent) -> void:
+    if event is InputEventMouseMotion:
+        rotate_y(-event.relative.x * mouse_sensitivity)
+        camera.rotate_x(-event.relative.y * mouse_sensitivity)
+        camera.rotation.x = clampf(camera.rotation.x, -1.4, 1.4)
+    if event.is_action_pressed("ui_cancel"):
+        Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _physics_process(delta: float) -> void:
+    if not is_on_floor():
+        velocity += get_gravity() * delta
+    if Input.is_action_just_pressed("ui_accept") and is_on_floor():
+        velocity.y = jump_velocity
+
+    var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+    var direction := (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
+    var current_speed := sprint_speed if Input.is_action_pressed("sprint") else speed
+    if direction:
+        velocity.x = direction.x * current_speed
+        velocity.z = direction.z * current_speed
+    else:
+        velocity.x = move_toward(velocity.x, 0, current_speed)
+        velocity.z = move_toward(velocity.z, 0, current_speed)
+    move_and_slide()
+`;
+    }
+    if (engine === 'unity') {
+      return `using UnityEngine;
+
+// Character Controller — Unity (attach to a capsule with a CharacterController component)
+[RequireComponent(typeof(CharacterController))]
+public class PlayerController : MonoBehaviour
+{
+    [Header("Movement")]
+    public float speed = 5.5f;
+    public float sprintSpeed = 8.5f;
+    public float jumpHeight = 1.4f;
+    public float gravity = -19.6f;
+
+    [Header("Look")]
+    public Transform cameraTransform;
+    public float mouseSensitivity = 2f;
+
+    private CharacterController controller;
+    private Vector3 velocity;
+    private float pitch;
+
+    void Start()
+    {
+        controller = GetComponent<CharacterController>();
+        Cursor.lockState = CursorLockMode.Locked;
+    }
+
+    void Update()
+    {
+        // Look
+        float mx = Input.GetAxis("Mouse X") * mouseSensitivity;
+        float my = Input.GetAxis("Mouse Y") * mouseSensitivity;
+        transform.Rotate(Vector3.up * mx);
+        pitch = Mathf.Clamp(pitch - my, -80f, 80f);
+        if (cameraTransform) cameraTransform.localEulerAngles = new Vector3(pitch, 0, 0);
+
+        // Move
+        bool grounded = controller.isGrounded;
+        if (grounded && velocity.y < 0) velocity.y = -2f;
+        Vector3 move = transform.right * Input.GetAxis("Horizontal") + transform.forward * Input.GetAxis("Vertical");
+        float s = Input.GetKey(KeyCode.LeftShift) ? sprintSpeed : speed;
+        controller.Move(move * s * Time.deltaTime);
+        if (grounded && Input.GetButtonDown("Jump"))
+            velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
+        velocity.y += gravity * Time.deltaTime;
+        controller.Move(velocity * Time.deltaTime);
+    }
+}
+`;
+    }
+  }
+
+  // Structured, compilable skeleton for everything else
+  const lang = engine === 'godot' ? 'gdscript' : engine === 'unity' ? 'csharp' : 'cpp';
+  if (lang === 'gdscript') {
+    return `# ${label} — Godot 4 scaffold
+# ${asset?.desc || ''}
+# Complexity: ${asset?.complexity || 'unknown'}
+extends Node
+
+signal ${className.toLowerCase()}_ready
+
+func _ready() -> void:
+    _initialize()
+    ${className.toLowerCase()}_ready.emit()
+
+func _initialize() -> void:
+    # Core setup for: ${asset?.desc || label}
+    pass
+
+# Connect an AI provider in Dojo settings for a complete,
+# production-ready implementation generated to your spec.
+`;
+  }
+  if (lang === 'csharp') {
+    return `using UnityEngine;
+
+/// <summary>
+/// ${label} — ${asset?.desc || ''}
+/// Complexity: ${asset?.complexity || 'unknown'}
+/// </summary>
+public class ${className} : MonoBehaviour
+{
+    void Awake()
+    {
+        Initialize();
+    }
+
+    void Initialize()
+    {
+        // Core setup for: ${asset?.desc || label}
+    }
+
+    // Connect an AI provider in Dojo settings for a complete,
+    // production-ready implementation generated to your spec.
+}
+`;
+  }
+  return `// ${label} — Unreal Engine 5 scaffold
+// ${asset?.desc || ''}
 // Complexity: ${asset?.complexity || 'unknown'}
-//
-// TODO: Implement ${asset?.desc || 'asset'}
-//
-// This is a placeholder. Connect an AI provider to generate
-// production-ready code.`;
+
+#include "${className}.h"
+
+A${className}::A${className}()
+{
+    PrimaryActorTick.bCanEverTick = false;
+}
+
+void A${className}::BeginPlay()
+{
+    Super::BeginPlay();
+    // Core setup for: ${asset?.desc || label}
+}
+
+// Connect an AI provider in Dojo settings for a complete,
+// production-ready implementation generated to your spec.
+`;
 }

@@ -5,12 +5,31 @@ import {
   MoreVertical, Paperclip, Smile
 } from 'lucide-react';
 import { db } from '../../config/firebase';
-import { 
-  collection, query, orderBy, limit, onSnapshot, 
-  addDoc, serverTimestamp, where, doc, getDocs 
+import {
+  collection, query, orderBy, limit, onSnapshot,
+  addDoc, serverTimestamp, where, doc, updateDoc, increment
 } from 'firebase/firestore';
 import { useAuth } from '../../hooks/useAuth';
 import { toast } from 'sonner';
+
+// Format a Firestore timestamp as short relative time ("2m", "3h", "5d")
+function relativeTime(ts) {
+  const date = ts?.toDate?.();
+  if (!date) return '';
+  const diff = Date.now() - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function clockTime(ts) {
+  const date = ts?.toDate?.();
+  if (!date) return '';
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 
 export default function DirectMessengerWindow() {
   const { user, isOwner } = useAuth();
@@ -62,6 +81,11 @@ export default function DirectMessengerWindow() {
 
   useEffect(() => {
     if (!activeConv || !db) return;
+
+    // Opening a thread as owner marks it read
+    if (isOwner && activeConv.unreadCount > 0) {
+      updateDoc(doc(db, 'support_threads', activeConv.id), { unreadCount: 0 }).catch(() => {});
+    }
 
     const msgQuery = query(
       collection(db, `support_threads/${activeConv.id}/messages`),
@@ -118,10 +142,13 @@ export default function DirectMessengerWindow() {
         isOwner: isOwner
       });
 
-      // Update thread preview
-      const threadRef = doc(db, 'support_threads', threadId);
-      // We don't use updateDoc here for simplicity in the demo/scratch, 
-      // but in production we'd update lastMessage and timestamp
+      // Update thread preview so the inbox list stays fresh
+      await updateDoc(doc(db, 'support_threads', threadId), {
+        lastMessage: text,
+        lastMessageAt: serverTimestamp(),
+        // Owner replies clear the unread counter; user messages bump it
+        unreadCount: isOwner ? 0 : increment(1),
+      });
     } catch (error) {
       console.error('Failed to send message:', error);
       toast.error('Failed to send message');
@@ -152,7 +179,7 @@ export default function DirectMessengerWindow() {
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-0.5">
                     <span className="text-[11px] font-bold truncate">{conv.username}</span>
-                    <span className="text-[8px] text-white/20 whitespace-nowrap">2m</span>
+                    <span className="text-[8px] text-white/20 whitespace-nowrap">{relativeTime(conv.lastMessageAt)}</span>
                   </div>
                   <p className="text-[10px] text-white/40 truncate">{conv.lastMessage}</p>
                 </div>
@@ -221,7 +248,7 @@ export default function DirectMessengerWindow() {
                       {msg.text}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1 px-1 opacity-30">
-                       <span className="text-[8px] font-mono">12:45 PM</span>
+                       <span className="text-[8px] font-mono">{clockTime(msg.timestamp)}</span>
                        {isMe && <CheckCheck className="w-3 h-3" />}
                     </div>
                   </div>
