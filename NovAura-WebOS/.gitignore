@@ -7,7 +7,9 @@ node_modules/
 dist/
 dist-ssr/
 *.local
-lib/
+# Only ignore a top-level build-output lib/, NOT src/lib (which holds
+# utils.js, imported by 42 UI components — ignoring it broke fresh-clone builds)
+/lib/
 
 # Environment files
 .env
