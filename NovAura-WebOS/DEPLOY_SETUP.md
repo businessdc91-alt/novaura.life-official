@@ -54,11 +54,42 @@ Once the secrets are in, push to a covered branch (or hit **Run workflow**).
 The Actions tab shows the build + deploy; on success, novaura-life-8df2f.web.app
 serves the new bundle.
 
-## Not covered here: Cloud Functions
+## Cloud Functions (backend API)
 
-This workflow deploys **hosting only**. The backend API (`functions/`) —
-including the AI-inference and Stripe fixes — deploys separately with
-`firebase deploy --only functions` and needs its **server-side** secrets set
-(`OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `STRIPE_SECRET_KEY`,
-`STRIPE_WEBHOOK_SECRET`, …). Ask and I can add a `deploy-functions.yml` on the
-same pattern.
+The backend API (`functions/`) — AI inference, Stripe, orders, royalties,
+email — deploys via `.github/workflows/deploy-functions.yml`. It reuses the
+`FIREBASE_SERVICE_ACCOUNT` secret above, plus one more:
+
+### `FUNCTIONS_ENV_FILE` secret
+
+This one secret holds the **entire contents** of `functions/.env` — all the
+server-side keys, one per line. Add it as an Actions repository secret named
+`FUNCTIONS_ENV_FILE`, pasting a block like:
+
+```
+OPENROUTER_API_KEY=sk-or-v1-<fresh key>
+GEMINI_API_KEY=<fresh key>
+GEMINI_API_KEY_BACKUP=<fresh key>
+STRIPE_SECRET_KEY=sk_live_<your live key>
+STRIPE_WEBHOOK_SECRET=whsec_<from Stripe dashboard>
+ANTHROPIC_API_KEY=sk-ant-<key>
+KIMI_API_KEY=<key>
+AZURE_OPENAI_KEY=<key>
+AZURE_OPENAI_ENDPOINT=https://<resource>.services.ai.azure.com/
+SMTP_HOST=<host>
+SMTP_USER=<user>
+SMTP_PASS=<pass>
+VAULT_ENCRYPTION_SECRET=<random 32+ char string>
+USER_KEY_ENCRYPTION_SECRET=<random 32+ char string>
+INTERNAL_SERVICE_TOKEN=<random string>
+```
+
+See `functions/.env.example` for the full list of recognized keys. Anything
+you omit just disables that one provider/feature — the deploy still succeeds.
+
+Then run **Deploy Cloud Functions** from the Actions tab. Once it succeeds, the
+AI-inference fixes and Stripe webhook go live.
+
+> ⚠️ **Never commit real keys.** They belong only in these Actions secrets (or
+> your local, git-ignored `functions/.env`). Keys committed to this **public**
+> repo are exposed the instant they're pushed and must be regenerated.

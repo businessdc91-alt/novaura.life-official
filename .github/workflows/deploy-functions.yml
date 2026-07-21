@@ -1,0 +1,52 @@
+name: Deploy Cloud Functions (backend API)
+
+# Builds and deploys NovAura-WebOS/functions (the Express API: AI inference,
+# Stripe, orders, royalties, email…) to Firebase project novaura-life.
+# Manual by default — run it from the Actions tab after you've set the secrets,
+# or on pushes that touch functions/. See NovAura-WebOS/DEPLOY_SETUP.md.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master, main]
+    paths:
+      - 'NovAura-WebOS/functions/**'
+      - '.github/workflows/deploy-functions.yml'
+
+jobs:
+  deploy-functions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: NovAura-WebOS/functions
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: NovAura-WebOS/functions/package-lock.json
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Write .env from secret
+        # FUNCTIONS_ENV_FILE holds the full contents of functions/.env
+        # (OPENROUTER_API_KEY=..., GEMINI_API_KEY=..., STRIPE_SECRET_KEY=..., etc.)
+        # It is never committed — it lives only in GitHub Actions secrets.
+        run: |
+          printf '%s' "${{ secrets.FUNCTIONS_ENV_FILE }}" > .env
+          echo "Wrote .env ($(wc -l < .env) lines)"
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Write service account & deploy
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx firebase-tools@latest deploy --only functions --project novaura-life --non-interactive
+          rm -f "$RUNNER_TEMP/sa.json"
