@@ -754,3 +754,27 @@ These take < 1 day each but have high perceived value:
 - [ ] Register webhook endpoint `https://novaura.life/api/stripe/webhook` in Stripe Dashboard
 
 *This document is a living reference. Update it as features are completed. Last updated: 2026-05-26*
+
+---
+
+## §19. ROADMAP — NovaSweep (AI drive utility, post-Ivan-handoff project)
+
+**Concept (2026-08-03):** AI-driven drive care app — productizes the proven 2026-08 session
+playbook (C: rescue, E: triage/salvage, wipe station). Tauri (Rust core + webview UI),
+AI judgment via existing Gemini/Claude backend cascade. Distributed from a new "Tools"
+section on the landing page (free download = lead magnet; NovAura account unlocks AI features).
+
+**Modules — ship strictly in this order:**
+1. **Cleaner** (MVP, ~2 wks): scan C:, classify files → regenerable / redownloadable /
+   user data (never auto-touched) / unknown (AI-assisted). Safety invariant:
+   propose → user approves → move to quarantine on another drive → auto-delete after 30 days.
+   Nothing destroyed in one step. Playbook targets: hiberfil, temp, npm/pip/cargo caches,
+   browser caches, installers, model weights, build artifacts.
+2. **Finder**: all-drives instant search via direct NTFS MFT read (Everything-style) +
+   image/video filters (type/date/EXIF) + AI natural-language → structured query layer.
+3. **Wiper** (last — highest risk): Clear-Disk + full format + free-space cipher pass.
+   HARD-BLOCKED from boot drive. Confirm by typing drive label. Generates wipe report
+   (serial, method, date, verification) — refurb/flipper market feature.
+
+**Name:** NovaSweep (alternates: AuraSweep, DriveMedic, NovaJanitor)
+**Status:** approved for roadmap 2026-08-03; build starts after Ivan/IvaTech handoff completes.
