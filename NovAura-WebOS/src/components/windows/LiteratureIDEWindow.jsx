@@ -3,7 +3,7 @@ import { LiteratureProvider, useLiterature } from './literature/LiteratureContex
 import LiteratureLibrary from './literature/LiteratureLibrary';
 import ManuscriptEditor from './literature/ManuscriptEditor';
 import MuseSidebar from './literature/MuseSidebar';
-import { PanelLeft, PanelRight, Library, Sparkles, BookOpen } from 'lucide-react';
+import { PanelLeft, PanelRight, Library, Sparkles, BookOpen, Cloud, RefreshCw, CheckCircle2, AlertCircle, Database } from 'lucide-react';
 import EbookPublisherModal from './literature/EbookPublisherModal';
 
 /**
@@ -15,7 +15,8 @@ function LiteratureIDEContent() {
   const { 
     isSidebarOpen, setIsSidebarOpen,
     isMuseOpen, setIsMuseOpen,
-    activeSidebarTab, setActiveSidebarTab
+    activeSidebarTab, setActiveSidebarTab,
+    cloudSyncStatus, lastSyncedAt, forceCloudSync
   } = useLiterature();
 
   const [isEbookModalOpen, setIsEbookModalOpen] = React.useState(false);
@@ -47,23 +48,56 @@ function LiteratureIDEContent() {
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          {/* Active Status */}
-          <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
-            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-tighter">Unified State: Active</span>
-          </div>
+        <div className="flex items-center gap-4">
+          {/* Cloud Persistence Status */}
+          <button 
+            onClick={forceCloudSync}
+            title={lastSyncedAt ? `Last cloud sync: ${new Date(lastSyncedAt).toLocaleTimeString()}` : 'Sync with Firestore cloud'}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 hover:border-white/20 transition-all text-[9px] font-mono cursor-pointer"
+          >
+            {cloudSyncStatus === 'saving' && (
+              <>
+                <RefreshCw className="w-3 h-3 text-cyan-400 animate-spin" />
+                <span className="text-cyan-400 uppercase font-bold tracking-wider">Cloud Saving...</span>
+              </>
+            )}
+            {cloudSyncStatus === 'synced' && (
+              <>
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400 uppercase font-bold tracking-wider">Cloud Synced</span>
+              </>
+            )}
+            {cloudSyncStatus === 'offline' && (
+              <>
+                <Database className="w-3 h-3 text-amber-400" />
+                <span className="text-amber-400 uppercase font-bold tracking-wider">Local DB</span>
+              </>
+            )}
+            {cloudSyncStatus === 'error' && (
+              <>
+                <AlertCircle className="w-3 h-3 text-rose-400" />
+                <span className="text-rose-400 uppercase font-bold tracking-wider">Sync Retry</span>
+              </>
+            )}
+            {cloudSyncStatus === 'idle' && (
+              <>
+                <Cloud className="w-3 h-3 text-gray-400" />
+                <span className="text-gray-400 uppercase font-bold tracking-wider">Cloud Ready</span>
+              </>
+            )}
+          </button>
+
           <div className="h-4 w-px bg-white/10" />
           <button 
             onClick={() => setIsEbookModalOpen(true)}
             className="flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition-all text-gray-300"
           >
             <BookOpen className="w-3 h-3" />
-            <span className="text-[9px] font-bold uppercase">Publish eBook</span>
+            <span className="text-[9px] font-bold uppercase">Publish / Export</span>
           </button>
           <button className="flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/20 rounded-full hover:bg-primary/20 transition-all">
             <Sparkles className="w-3 h-3 text-primary" />
-            <span className="text-[9px] font-bold text-primary uppercase">Ghostwriter Beta</span>
+            <span className="text-[9px] font-bold text-primary uppercase">Ghostwriter</span>
           </button>
         </div>
       </div>

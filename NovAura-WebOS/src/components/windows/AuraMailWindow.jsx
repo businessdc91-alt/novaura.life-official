@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { smartChat } from '../../services/aiService';
 import { 
   Mail, Inbox, Send, File, Trash2, 
   Plus, Search, Star, Archive, 
@@ -158,11 +159,33 @@ const AuraMailWindow = ({ onClose }) => {
     setSummarizing(true);
     setSummary('');
     
-    // Simulate Aura Intelligence
-    setTimeout(() => {
-      setSummary(`Aura Analysis: This email confirms the successful deployment of the NovAura inference bridge. No critical action required.`);
+    try {
+      const sender = selectedMail.from?.name ? `${selectedMail.from.name} <${selectedMail.from.address}>` : (selectedMail.from?.address || selectedMail.from || 'Unknown');
+      const emailContent = `From: ${sender}
+Subject: ${selectedMail.subject || 'No Subject'}
+Date: ${selectedMail.receivedAt?.seconds ? new Date(selectedMail.receivedAt.seconds * 1000).toLocaleString() : 'Recent'}
+
+Content:
+${selectedMail.snippet || selectedMail.body || selectedMail.text || ''}`;
+
+      const prompt = `You are Aura Intelligence, the sovereign executive AI assistant. Analyze and summarize this email concisely with high fidelity.
+Structure your analysis with:
+1. Executive Brief (1-2 sentences)
+2. Action Items (bullet points, or "None required")
+3. Priority/Tone (e.g. Normal / Urgent / Action Required)
+
+Email:
+${emailContent}`;
+
+      const aiResponse = await smartChat(prompt, 'general');
+      const responseText = typeof aiResponse === 'string' ? aiResponse : (aiResponse?.text || aiResponse?.content || JSON.stringify(aiResponse));
+      setSummary(responseText);
+    } catch (err) {
+      console.error('[AuraMail] Summary generation failed:', err);
+      setSummary(`Aura Analysis: Unable to complete inference (${err?.message || 'Check AI gateway connection'}).`);
+    } finally {
       setSummarizing(false);
-    }, 1500);
+    }
   };
 
   const handleSendEmail = async () => {
@@ -438,7 +461,7 @@ const AuraMailWindow = ({ onClose }) => {
                     <div className="flex items-center gap-2 text-[#4c65ff] text-[10px] font-bold uppercase tracking-widest mb-2">
                       <Zap className="w-3 h-3" /> Aura Intelligence
                     </div>
-                    <p className="text-sm text-[#aaa] italic leading-relaxed">{summary}</p>
+                    <p className="text-sm text-[#ddd] leading-relaxed whitespace-pre-wrap">{summary}</p>
                   </div>
                 )}
 

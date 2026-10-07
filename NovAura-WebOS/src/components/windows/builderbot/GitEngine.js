@@ -539,6 +539,40 @@ export class GitEngine {
       hasRemote: !!this.remote
     };
   }
+
+  /**
+   * Sync virtual workspace files into LightningFS so Git can track and commit them
+   */
+  async syncWorkspaceFiles(files) {
+    if (!files) return;
+    const fileList = Array.isArray(files) 
+      ? files 
+      : Object.entries(files).map(([p, c]) => ({ path: p, content: typeof c === 'string' ? c : c?.content || '' }));
+
+    for (const file of fileList) {
+      const rawPath = (file.path || file.name || '').replace(/^\/+/, '');
+      if (!rawPath) continue;
+
+      const fullPath = `${this.dir}/${rawPath}`;
+      const dirParts = rawPath.split('/').slice(0, -1);
+      
+      let curDir = this.dir;
+      for (const part of dirParts) {
+        curDir = `${curDir}/${part}`;
+        try {
+          await this.fs.mkdir(curDir);
+        } catch {
+          // ignore directory existing
+        }
+      }
+
+      try {
+        await this.fs.writeFile(fullPath, file.content || '', { encoding: 'utf8' });
+      } catch (err) {
+        console.warn(`[GitEngine] Failed to write ${rawPath} to LightningFS:`, err);
+      }
+    }
+  }
 }
 
 export default GitEngine;

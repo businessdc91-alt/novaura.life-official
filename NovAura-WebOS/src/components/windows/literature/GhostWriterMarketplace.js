@@ -12,6 +12,11 @@
 
 import { BACKEND_URL } from '../../../services/aiService';
 import axios from 'axios';
+import { db, isFirebaseConfigured } from '../../../config/firebase';
+import { 
+  collection, doc, getDoc, getDocs, setDoc, updateDoc, 
+  query, where, orderBy, serverTimestamp 
+} from 'firebase/firestore';
 
 export const COMMISSION_TYPES = {
   GAME_DIALOGUE: {
@@ -204,6 +209,15 @@ export class GhostWriterMarketplace {
     };
 
     this.commissions.set(commission.id, commission);
+
+    if (isFirebaseConfigured && db) {
+      setDoc(doc(db, 'ghostwriter_commissions', commission.id), {
+        ...commission,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }).catch(err => console.error('[GhostWriter] Cloud save error:', err));
+    }
+
     return commission;
   }
 
@@ -513,6 +527,19 @@ export class GhostWriterMarketplace {
   }
 
   async searchCommissions(filters = {}) {
+    if (isFirebaseConfigured && db) {
+      try {
+        const colRef = collection(db, 'ghostwriter_commissions');
+        const snap = await getDocs(colRef);
+        snap.forEach(d => {
+          const data = d.data();
+          this.commissions.set(data.id, data);
+        });
+      } catch (err) {
+        console.warn('[GhostWriter] Cloud fetch error:', err);
+      }
+    }
+
     let commissions = Array.from(this.commissions.values())
       .filter(c => c.status === 'open');
 

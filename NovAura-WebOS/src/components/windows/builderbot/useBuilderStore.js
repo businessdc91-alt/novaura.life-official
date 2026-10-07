@@ -379,6 +379,23 @@ const useBuilderStore = create((set, get) => {
       get()._persist();
     },
 
+    loadFullProject(projectData) {
+      if (!projectData) return;
+      const name = projectData.name || 'Untitled Project';
+      const tree = projectData.tree || defaultProject().tree;
+      const allFiles = flattenFiles(tree);
+      const firstFile = allFiles[0];
+
+      set({
+        projectName: name,
+        tree,
+        openTabs: firstFile ? [firstFile.id] : [],
+        activeTab: firstFile?.id || null,
+        dirty: {}
+      });
+      get()._persist();
+    },
+
     // ── File tree actions ──
     createFile(parentId, name, type = 'file') {
       const newNode = type === 'folder'

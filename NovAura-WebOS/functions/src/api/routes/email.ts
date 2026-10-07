@@ -118,7 +118,6 @@ router.post('/send', requireAuth, rateLimitMiddleware('email'), async (req, res)
     const validation = validateEmailInput(req.body);
     if (!validation.valid) {
       return res.status(400).json({ error: validation.error });
-      return;
     }
 
     const { to, subject, body, html, fromName } = req.body;
@@ -180,17 +179,14 @@ router.post('/accounts', requireAuth, async (req, res) => {
 
     if (!provider || !['gmail', 'outlook', 'imap'].includes(provider)) {
       return res.status(400).json({ error: 'Invalid or missing provider. Must be gmail, outlook, or imap' });
-      return;
     }
 
     if (!email || !EMAIL_REGEX.test(email)) {
       return res.status(400).json({ error: 'Valid email address is required' });
-      return;
     }
 
     if (!credentials || typeof credentials !== 'object') {
       return res.status(400).json({ error: 'Credentials are required' });
-      return;
     }
 
     const accountId = await inboxService.addExternalAccount(userId, {
@@ -221,11 +217,9 @@ router.patch('/messages/:id', requireAuth, async (req, res) => {
     const msgDoc = await admin.firestore().collection('user_emails').doc(id).get();
     if (!msgDoc.exists) {
       return res.status(404).json({ error: 'Message not found' });
-      return;
     }
     if (msgDoc.data()?.userId !== userId) {
       return res.status(403).json({ error: 'Forbidden' });
-      return;
     }
 
     if (isRead !== undefined) await inboxService.markAsRead(id, isRead);
@@ -233,7 +227,6 @@ router.patch('/messages/:id', requireAuth, async (req, res) => {
       const validFolders = ['inbox', 'sent', 'drafts', 'spam', 'trash'];
       if (!validFolders.includes(folder)) {
         return res.status(400).json({ error: `Invalid folder. Must be one of: ${validFolders.join(', ')}` });
-        return;
       }
       await inboxService.moveToFolder(id, folder);
     }

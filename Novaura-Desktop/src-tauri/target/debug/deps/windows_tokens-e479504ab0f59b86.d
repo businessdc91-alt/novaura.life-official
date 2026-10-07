@@ -1,0 +1,10 @@
+Z:\Novaura platform\Novaura-Desktop\src-tauri\target\debug\deps\windows_tokens-e479504ab0f59b86.d: C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\lib.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\to_tokens.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\token_stream.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\runtime.rs
+
+Z:\Novaura platform\Novaura-Desktop\src-tauri\target\debug\deps\libwindows_tokens-e479504ab0f59b86.rlib: C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\lib.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\to_tokens.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\token_stream.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\runtime.rs
+
+Z:\Novaura platform\Novaura-Desktop\src-tauri\target\debug\deps\libwindows_tokens-e479504ab0f59b86.rmeta: C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\lib.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\to_tokens.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\token_stream.rs C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\runtime.rs
+
+C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\lib.rs:
+C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\to_tokens.rs:
+C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\token_stream.rs:
+C:\Users\Busin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-tokens-0.39.0\src\runtime.rs:

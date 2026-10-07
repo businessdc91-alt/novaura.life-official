@@ -3,7 +3,7 @@ import { BookOpen, Headphones, Play, Download, X, Music, RefreshCw, Sparkles } f
 import { useLiterature } from './LiteratureContext';
 
 export default function EbookPublisherModal({ isOpen, onClose }) {
-  const { activeFile } = useLiterature();
+  const { activeFile, exportManuscript } = useLiterature();
   const [step, setStep] = useState('config'); // config, processing, ready
   const [options, setOptions] = useState({
     voice: 'nova',
@@ -17,7 +17,11 @@ export default function EbookPublisherModal({ isOpen, onClose }) {
     setStep('processing');
     setTimeout(() => {
       setStep('ready');
-    }, 3000); // Mock processing time
+    }, 1500);
+  };
+
+  const handleDownload = () => {
+    exportManuscript(options.format || 'epub');
   };
 
   const handleReset = () => {
@@ -43,11 +47,25 @@ export default function EbookPublisherModal({ isOpen, onClose }) {
               
               <div className="space-y-4">
                 <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 block">Export Format</label>
+                  <select 
+                    value={options.format} 
+                    onChange={e => setOptions({...options, format: e.target.value})}
+                    className="w-full bg-[#0a0a14] border border-white/10 rounded-lg px-4 py-2 text-sm outline-none focus:border-primary/50 text-white"
+                  >
+                    <option value="epub">ePub (.epub e-Reader package)</option>
+                    <option value="html">Interactive Web Book (.html)</option>
+                    <option value="markdown">Markdown (.md)</option>
+                    <option value="json">Full Archive Backup (.json)</option>
+                  </select>
+                </div>
+
+                <div>
                   <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 block">Narrator Voice (TTS)</label>
                   <select 
                     value={options.voice} 
                     onChange={e => setOptions({...options, voice: e.target.value})}
-                    className="w-full bg-[#0a0a14] border border-white/10 rounded-lg px-4 py-2 text-sm outline-none focus:border-primary/50"
+                    className="w-full bg-[#0a0a14] border border-white/10 rounded-lg px-4 py-2 text-sm outline-none focus:border-primary/50 text-white"
                   >
                     <option value="nova">Aura (Female, Expressive)</option>
                     <option value="echo">Echo (Male, Deep)</option>
@@ -60,7 +78,7 @@ export default function EbookPublisherModal({ isOpen, onClose }) {
                   <select 
                     value={options.music} 
                     onChange={e => setOptions({...options, music: e.target.value})}
-                    className="w-full bg-[#0a0a14] border border-white/10 rounded-lg px-4 py-2 text-sm outline-none focus:border-primary/50"
+                    className="w-full bg-[#0a0a14] border border-white/10 rounded-lg px-4 py-2 text-sm outline-none focus:border-primary/50 text-white"
                   >
                     <option value="ambient_1">Cinematic Ambient (Sci-Fi)</option>
                     <option value="fantasy_1">Tavern Strings (Fantasy)</option>
@@ -75,7 +93,7 @@ export default function EbookPublisherModal({ isOpen, onClose }) {
             <div className="py-12 flex flex-col items-center justify-center space-y-4 text-center">
               <RefreshCw className="w-12 h-12 text-primary animate-spin" />
               <p className="text-sm font-bold text-gray-200">Synthesizing Audio & Compiling...</p>
-              <p className="text-xs text-gray-500 max-w-[250px]">The AI is generating speech and mixing the background tracks for '{activeFile?.name || 'Untitled'}'.</p>
+              <p className="text-xs text-gray-500 max-w-[250px]">Compiling chapter hierarchy and mixing tracks for '{activeFile?.name || 'Untitled'}'.</p>
             </div>
           )}
 
@@ -86,14 +104,20 @@ export default function EbookPublisherModal({ isOpen, onClose }) {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-emerald-400 mb-1">eBook Ready!</h3>
-                <p className="text-sm text-gray-400">Your immersive experience is compiled.</p>
+                <p className="text-sm text-gray-400">Your immersive package is compiled and ready for download.</p>
               </div>
               <div className="flex gap-4">
-                <button className="flex items-center gap-2 px-6 py-2 bg-primary text-white rounded-full font-bold hover:bg-primary/90 transition-all shadow-[0_0_15px_rgba(var(--primary-rgb),0.3)]">
-                  <Play className="w-4 h-4" /> Listen Now
+                <button 
+                  onClick={handleDownload}
+                  className="flex items-center gap-2 px-6 py-2 bg-primary text-white rounded-full font-bold hover:bg-primary/90 transition-all shadow-[0_0_15px_rgba(var(--primary-rgb),0.3)]"
+                >
+                  <Download className="w-4 h-4" /> Download .{options.format}
                 </button>
-                <button className="flex items-center gap-2 px-6 py-2 bg-white/5 border border-white/10 text-white rounded-full font-bold hover:bg-white/10 transition-all">
-                  <Download className="w-4 h-4" /> Download .epub
+                <button 
+                  onClick={handleReset}
+                  className="flex items-center gap-2 px-6 py-2 bg-white/5 border border-white/10 text-white rounded-full font-bold hover:bg-white/10 transition-all"
+                >
+                  Done
                 </button>
               </div>
             </div>

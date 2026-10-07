@@ -1,5 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { kernel } from '../../../kernel/NovaKernel.js';
+import { useAuth } from '../../../hooks/useAuth';
+import { db, isFirebaseConfigured } from '../../../config/firebase';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const LiteratureContext = createContext();
 
@@ -37,32 +40,24 @@ const DEFAULT_BIBLE = {
 };
 
 export function LiteratureProvider({ children }) {
-  // --- Core Data (Persisted to Cloud via MemoryMap) ---
-  const [files, setFiles] = useState(() => {
-    const d = kernel.memory.get(STORAGE_KEYS.FILES);
-    return d || DEFAULT_FILES;
-  });
+  const { user } = useAuth();
 
-  const [bible, setBible] = useState(() => {
-    const d = kernel.memory.get(STORAGE_KEYS.BIBLE);
-    return d || DEFAULT_BIBLE;
-  });
+  // --- Core Data (Authoritative Single Source of Truth: Firestore Cloud) ---
+  const [files, setFiles] = useState(DEFAULT_FILES);
+  const [bible, setBible] = useState(DEFAULT_BIBLE);
+  const [settings, setSettings] = useState({ fontFamily: 'Georgia', fontSize: 18, theme: 'parchment' });
+  const [workflow, setWorkflow] = useState({});
 
-  const [settings, setSettings] = useState(() => {
-    const d = kernel.memory.get(STORAGE_KEYS.SETTINGS);
-    return d || { fontFamily: 'Georgia', fontSize: 18, theme: 'parchment' };
-  });
+  // --- Cloud Sync Status ---
+  const [cloudSyncStatus, setCloudSyncStatus] = useState('idle'); // 'idle' | 'saving' | 'synced' | 'offline' | 'error'
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const isCloudLoaded = useRef(false);
+  const syncTimeoutRef = useRef(null);
 
-  const [workflow, setWorkflow] = useState(() => {
-    const d = kernel.memory.get(STORAGE_KEYS.WORKFLOW);
-    return d || {};
-  });
-
-  // --- Session State (Now also Persisted for "Device Agnostic" feel) ---
-  const [activeFileId, setActiveFileId] = useState(() => kernel.memory.get(STORAGE_KEYS.ACTIVE_ID) || null);
-  const [openTabs, setOpenTabs] = useState(() => kernel.memory.get(STORAGE_KEYS.OPEN_TABS) || []);
-  
-  const [uiState, setUiState] = useState(() => kernel.memory.get(STORAGE_KEYS.UI_STATE) || {"sidebar": true, "muse": true, "tab": "explorer"});
+  // --- Session State (Device Agnostic, Synced to Cloud) ---
+  const [activeFileId, setActiveFileId] = useState(null);
+  const [openTabs, setOpenTabs] = useState([]);
+  const [uiState, setUiState] = useState({ sidebar: true, muse: true, tab: 'explorer' });
   const [selectedText, setSelectedText] = useState('');
 
   // --- Convenience Getters ---
@@ -70,14 +65,116 @@ export function LiteratureProvider({ children }) {
   const isMuseOpen = uiState.muse;
   const activeSidebarTab = uiState.tab;
 
-  // --- Persistence Listeners ---
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.FILES, files); }, [files]);
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.BIBLE, bible); }, [bible]);
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.SETTINGS, settings); }, [settings]);
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.WORKFLOW, workflow); }, [workflow]);
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.OPEN_TABS, openTabs); }, [openTabs]);
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.ACTIVE_ID, activeFileId); }, [activeFileId]);
-  useEffect(() => { kernel.memory.set(STORAGE_KEYS.UI_STATE, uiState); }, [uiState]);
+  // --- Real-time Multi-Device Firestore onSnapshot Listener ---
+  useEffect(() => {
+    if (!user?.uid || !isFirebaseConfigured || !db) {
+      setCloudSyncStatus('offline');
+      return;
+    }
+
+    setCloudSyncStatus('saving');
+    const docRef = doc(db, 'users', user.uid, 'literature', 'workspace');
+
+    const unsubscribe = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const cloudData = snap.data();
+        // If update is from another device/browser or first load
+        if (!snap.metadata.hasPendingWrites || !isCloudLoaded.current) {
+          if (cloudData.files) setFiles(cloudData.files);
+          if (cloudData.bible) setBible(cloudData.bible);
+          if (cloudData.settings) setSettings(cloudData.settings);
+          if (cloudData.workflow) setWorkflow(cloudData.workflow);
+          if (cloudData.activeFileId) setActiveFileId(cloudData.activeFileId);
+          if (cloudData.openTabs) setOpenTabs(cloudData.openTabs);
+          if (cloudData.uiState) setUiState(cloudData.uiState);
+        }
+        setCloudSyncStatus('synced');
+        setLastSyncedAt(cloudData.updatedAt?.toDate?.() || new Date());
+        isCloudLoaded.current = true;
+      } else {
+        // First time user ever opens Literature IDE — initialize cloud document
+        setDoc(docRef, {
+          files: DEFAULT_FILES,
+          bible: DEFAULT_BIBLE,
+          settings: { fontFamily: 'Georgia', fontSize: 18, theme: 'parchment' },
+          workflow: {},
+          activeFileId: 'ch1',
+          openTabs: [{ id: 'ch1', name: 'Chapter 1' }],
+          uiState: { sidebar: true, muse: true, tab: 'explorer' },
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }).then(() => {
+          setCloudSyncStatus('synced');
+          setLastSyncedAt(new Date());
+          isCloudLoaded.current = true;
+        }).catch((err) => {
+          console.error('[LiteratureContext] Cloud seed error:', err);
+          setCloudSyncStatus('error');
+        });
+      }
+    }, (err) => {
+      console.error('[LiteratureContext] Real-time cloud subscription error:', err);
+      setCloudSyncStatus('error');
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid]);
+
+  // --- Debounced Cloud Auto-Save to Firestore (1.5s debounce) ---
+  useEffect(() => {
+    if (!isCloudLoaded.current || !user?.uid || !isFirebaseConfigured || !db) return;
+
+    setCloudSyncStatus('saving');
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+
+    syncTimeoutRef.current = setTimeout(async () => {
+      try {
+        const docRef = doc(db, 'users', user.uid, 'literature', 'workspace');
+        await setDoc(docRef, {
+          files,
+          bible,
+          settings,
+          workflow,
+          activeFileId,
+          openTabs,
+          uiState,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+        setCloudSyncStatus('synced');
+        setLastSyncedAt(new Date());
+      } catch (err) {
+        console.error('[LiteratureContext] Cloud save error:', err);
+        setCloudSyncStatus('error');
+      }
+    }, 1500);
+
+    return () => {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    };
+  }, [files, bible, settings, workflow, activeFileId, openTabs, uiState, user?.uid]);
+
+  // --- Force Cloud Sync Immediately ---
+  const forceCloudSync = useCallback(async () => {
+    if (!user?.uid || !isFirebaseConfigured || !db) return false;
+    try {
+      setCloudSyncStatus('saving');
+      const docRef = doc(db, 'users', user.uid, 'literature', 'workspace');
+      await setDoc(docRef, {
+        files,
+        bible,
+        settings,
+        workflow,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setCloudSyncStatus('synced');
+      setLastSyncedAt(new Date());
+      return true;
+    } catch (err) {
+      console.error('[LiteratureContext] Force sync error:', err);
+      setCloudSyncStatus('error');
+      return false;
+    }
+  }, [files, bible, settings, workflow, user?.uid]);
 
   // --- Deep Search for Files ---
   const findFileById = useCallback((id, tree = files) => {
@@ -129,6 +226,73 @@ export function LiteratureProvider({ children }) {
     });
   }, [activeFileId]);
 
+  // --- Real Manuscript Exporter ---
+  const exportManuscript = useCallback((format = 'epub') => {
+    // Collect all documents in order
+    const docs = [];
+    const traverse = (node) => {
+      if (node.type === 'file' && node.content) {
+        docs.push({ name: node.name, content: node.content });
+      }
+      if (node.children) {
+        node.children.forEach(traverse);
+      }
+    };
+    traverse(files);
+
+    const title = files.name || 'Manuscript';
+    let fileContent = '';
+    let mimeType = 'text/plain';
+    let extension = 'txt';
+
+    if (format === 'epub' || format === 'html') {
+      mimeType = 'text/html';
+      extension = format === 'epub' ? 'epub' : 'html';
+      fileContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>${title}</title>
+  <style>
+    body { font-family: 'Georgia', serif; line-height: 1.8; max-width: 800px; margin: 40px auto; padding: 20px; color: #1a1a1a; }
+    h1 { font-size: 2.2rem; margin-top: 2rem; border-bottom: 2px solid #ddd; padding-bottom: 0.5rem; }
+    h2 { font-size: 1.6rem; margin-top: 1.5rem; }
+    p { margin-bottom: 1.2rem; text-indent: 1.5rem; }
+    .toc { margin-bottom: 3rem; padding: 1.5rem; background: #f9f9f9; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>${title}</h1>
+  <div class="toc">
+    <h3>Table of Contents</h3>
+    <ul>
+      ${docs.map((d, i) => `<li><a href="#section-${i}">${d.name}</a></li>`).join('\n      ')}
+    </ul>
+  </div>
+  ${docs.map((d, i) => `<section id="section-${i}"><h2>${d.name}</h2><div>${d.content}</div></section>`).join('\n<hr/>\n')}
+</body>
+</html>`;
+    } else if (format === 'markdown') {
+      mimeType = 'text/markdown';
+      extension = 'md';
+      fileContent = `# ${title}\n\n` + docs.map(d => `## ${d.name}\n\n${d.content.replace(/<[^>]*>/g, '')}\n\n`).join('\n---\n\n');
+    } else if (format === 'json') {
+      mimeType = 'application/json';
+      extension = 'json';
+      fileContent = JSON.stringify({ title, files, bible, settings, workflow, exportedAt: new Date().toISOString() }, null, 2);
+    }
+
+    const blob = new Blob([fileContent], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}.${extension}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [files, bible, settings, workflow]);
+
   const value = {
     files, setFiles,
     bible, setBible,
@@ -143,7 +307,11 @@ export function LiteratureProvider({ children }) {
     isSidebarOpen, setIsSidebarOpen: setSidebarOpen,
     isMuseOpen, setIsMuseOpen: setMuseOpen,
     updateFileContent,
-    findFileById
+    findFileById,
+    cloudSyncStatus,
+    lastSyncedAt,
+    forceCloudSync,
+    exportManuscript
   };
 
   return <LiteratureContext.Provider value={value}>{children}</LiteratureContext.Provider>;

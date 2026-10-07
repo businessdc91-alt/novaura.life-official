@@ -5,10 +5,13 @@ import {
   Save, FileDown, RotateCcw, Layout, Sparkles, ChevronDown, Users,
   Code2, Columns2, MonitorPlay, Download, Package, GitBranch,
   Bug, Rocket, Zap, Globe, ChevronLeft, ChevronRight,
-  Radio, Wifi, MoreHorizontal, Cloud, Shield
+  Radio, Wifi, MoreHorizontal, Cloud, Shield, CheckCircle2, AlertCircle, RefreshCw, Database
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { toast } from 'sonner';
+import { useAuth } from '../../hooks/useAuth';
+import { db, isFirebaseConfigured } from '../../config/firebase';
+import { doc, getDoc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import FileExplorer from './builderbot/FileExplorer';
 import AIPanel from './builderbot/AIPanel';
 import EditorTabs from './builderbot/EditorTabs';
@@ -60,8 +63,14 @@ export default function IDEWindow() {
     saveAll, projectName, 
     flattenFiles, runProject, 
     addTerminalLine, tree, activeTab,
-    setProjectName
+    setProjectName, loadFullProject
   } = useBuilderStore();
+
+  const { user } = useAuth();
+  const [cloudSyncStatus, setCloudSyncStatus] = useState('idle'); // 'idle' | 'saving' | 'synced' | 'offline' | 'error'
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const isCloudLoaded = useRef(false);
+  const cloudDebounceRef = useRef(null);
 
   // ── Layout state ─────────────────────────────────
   const [centerMode, setCenterMode] = useState('split'); // 'code' | 'split' | 'preview'
@@ -124,14 +133,13 @@ export default function IDEWindow() {
     setCodebaseAI(ai);
 
     // Check if repo exists
-    git.isRepo().then(isRepo => {
+    git.isRepo().then(async (isRepo) => {
       if (!isRepo) {
-        git.init().then(() => {
-          toast.success('Git repository initialized');
-        });
-      } else {
-        updateGitStatus(git);
+        await git.init();
+        toast.success('Git repository initialized');
       }
+      await git.syncWorkspaceFiles(flattenFiles());
+      updateGitStatus(git);
     });
 
     // Load deployment targets
@@ -154,22 +162,123 @@ export default function IDEWindow() {
     return () => clearInterval(interval);
   }, []);
 
-  // Update codebase AI when files change
+  // Update codebase AI and Git working tree when files change
   useEffect(() => {
-    if (codebaseAI && tree) {
+    if (tree) {
       const files = flattenFiles();
-      codebaseAI.files = files;
-      
-      // Debounced indexing
-      const timeout = setTimeout(() => {
-        codebaseAI.indexCodebase().then(() => {
-          setCodebaseSummary(codebaseAI.getSummary());
-        });
-      }, 2000);
+      if (gitEngine) {
+        gitEngine.syncWorkspaceFiles(files).then(() => updateGitStatus(gitEngine));
+      }
+      if (codebaseAI) {
+        codebaseAI.files = files;
+        // Debounced indexing
+        const timeout = setTimeout(() => {
+          codebaseAI.indexCodebase().then(() => {
+            setCodebaseSummary(codebaseAI.getSummary());
+          });
+        }, 2000);
 
-      return () => clearTimeout(timeout);
+        return () => clearTimeout(timeout);
+      }
     }
-  }, [tree, activeTab]);
+  }, [tree, activeTab, gitEngine, codebaseAI]);
+
+  // ── Real-time Cross-Device Cloud Project Sync ────────────────────
+  useEffect(() => {
+    if (!user?.uid || !isFirebaseConfigured || !db) {
+      setCloudSyncStatus('offline');
+      return;
+    }
+
+    setCloudSyncStatus('saving');
+    const docRef = doc(db, 'users', user.uid, 'cybeni', 'current_project');
+
+    const unsubscribe = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const cloudData = snap.data();
+        if (!snap.metadata.hasPendingWrites || !isCloudLoaded.current) {
+          if (cloudData.tree && loadFullProject) {
+            loadFullProject({ name: cloudData.name, tree: cloudData.tree });
+          }
+        }
+        setCloudSyncStatus('synced');
+        setLastSyncedAt(cloudData.updatedAt?.toDate?.() || new Date());
+        isCloudLoaded.current = true;
+      } else {
+        // First time opening Cybeni on this account — seed cloud project
+        setDoc(docRef, {
+          name: projectName,
+          tree,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }).then(() => {
+          setCloudSyncStatus('synced');
+          setLastSyncedAt(new Date());
+          isCloudLoaded.current = true;
+        }).catch((err) => {
+          console.error('[CybeniIDE] Cloud seed error:', err);
+          setCloudSyncStatus('error');
+        });
+      }
+    }, (err) => {
+      console.error('[CybeniIDE] Real-time cloud sync error:', err);
+      setCloudSyncStatus('error');
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid]);
+
+  // ── Debounced Cloud Auto-Save ────────────────────
+  useEffect(() => {
+    if (!isCloudLoaded.current || !user?.uid || !isFirebaseConfigured || !db) return;
+
+    setCloudSyncStatus('saving');
+    if (cloudDebounceRef.current) clearTimeout(cloudDebounceRef.current);
+
+    cloudDebounceRef.current = setTimeout(async () => {
+      try {
+        const docRef = doc(db, 'users', user.uid, 'cybeni', 'current_project');
+        await setDoc(docRef, {
+          name: projectName,
+          tree,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+        setCloudSyncStatus('synced');
+        setLastSyncedAt(new Date());
+      } catch (err) {
+        console.error('[CybeniIDE] Cloud auto-save error:', err);
+        setCloudSyncStatus('error');
+      }
+    }, 2500);
+
+    return () => {
+      if (cloudDebounceRef.current) clearTimeout(cloudDebounceRef.current);
+    };
+  }, [tree, projectName, user?.uid]);
+
+  const handleForceCloudSync = useCallback(async () => {
+    saveAll();
+    if (!user?.uid || !isFirebaseConfigured || !db) {
+      toast.info('Saved locally to device (Offline mode)');
+      return;
+    }
+    try {
+      setCloudSyncStatus('saving');
+      const docRef = doc(db, 'users', user.uid, 'cybeni', 'current_project');
+      await setDoc(docRef, {
+        name: projectName,
+        tree,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setCloudSyncStatus('synced');
+      setLastSyncedAt(new Date());
+      toast.success('Project synced to Firestore Cloud');
+    } catch (err) {
+      console.error('[CybeniIDE] Manual cloud sync error:', err);
+      setCloudSyncStatus('error');
+      toast.error('Cloud sync failed');
+    }
+  }, [tree, projectName, user?.uid, saveAll]);
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // GIT OPERATIONS
@@ -496,10 +605,43 @@ export default function IDEWindow() {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Quick actions */}
-          <Button size="icon-sm" variant="ghost" onClick={saveAll} title="Save All" className="hover:bg-white/10 hover:text-primary">
-            <Save className="w-3.5 h-3.5" />
-          </Button>
+          {/* Cloud Persistence Indicator & Quick Save */}
+          <button 
+            onClick={handleForceCloudSync}
+            title={lastSyncedAt ? `Cloud Synced at ${new Date(lastSyncedAt).toLocaleTimeString()}. Click to force sync.` : 'Save and sync to Firestore Cloud'}
+            className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 hover:bg-white/10 transition-all text-[10px] font-mono cursor-pointer border border-white/5"
+          >
+            {cloudSyncStatus === 'saving' && (
+              <>
+                <RefreshCw className="w-3 h-3 text-cyan-400 animate-spin" />
+                <span className="text-cyan-400 font-semibold">Syncing</span>
+              </>
+            )}
+            {cloudSyncStatus === 'synced' && (
+              <>
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400 font-semibold">Cloud Synced</span>
+              </>
+            )}
+            {cloudSyncStatus === 'offline' && (
+              <>
+                <Database className="w-3 h-3 text-amber-400" />
+                <span className="text-amber-400 font-semibold">Local Only</span>
+              </>
+            )}
+            {cloudSyncStatus === 'error' && (
+              <>
+                <AlertCircle className="w-3 h-3 text-rose-400" />
+                <span className="text-rose-400 font-semibold">Sync Error</span>
+              </>
+            )}
+            {cloudSyncStatus === 'idle' && (
+              <>
+                <Save className="w-3 h-3 text-gray-400" />
+                <span className="text-gray-400 font-semibold">Save</span>
+              </>
+            )}
+          </button>
 
           <Button
             size="icon-sm"
