@@ -26,8 +26,16 @@ import userKeysRoutes from './routes/user-keys';
 import prereleaseRoutes from './routes/prerelease';
 import inboundRoutes from './routes/inbound';
 import downloadsRoutes from './routes/downloads';
+import betaFeedbackRoutes from './routes/beta-feedback';
 
 const app = express();
+
+// Sovereign OS beta feedback: mounted before the global CORS policy because the
+// desktop app's webview origin (tauri.localhost) is not a novaura.life origin.
+// The route applies its own narrow CORS rule and a small JSON body limit.
+for (const path of ['/beta-feedback', '/api/beta-feedback']) {
+  app.use(path, express.json({ limit: '64kb' }), betaFeedbackRoutes);
+}
 
 // CORS - Allow novaura.life and dev environments only
 app.use(cors({

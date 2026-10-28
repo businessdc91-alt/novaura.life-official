@@ -1,0 +1,404 @@
+.sovereign-app-container {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: #05070f;
+}
+
+.desktop-shell {
+  --desktop-accent: #22d3ee;
+  --desktop-glow: rgba(34, 211, 238, 0.18);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: #e2e8f0;
+  background:
+    radial-gradient(ellipse at 50% -10%, rgba(22, 78, 112, 0.62), transparent 56%),
+    radial-gradient(ellipse at 85% 95%, rgba(91, 33, 182, 0.24), transparent 42%),
+    #05070f;
+}
+
+.desktop-shell[data-theme="aurora"] {
+  --desktop-accent: #34d399;
+  --desktop-glow: rgba(52, 211, 153, 0.2);
+  background: radial-gradient(ellipse at 50% 0, rgba(6, 78, 59, 0.64), transparent 62%), #040b12;
+}
+
+.desktop-shell[data-theme="nebula"] {
+  --desktop-accent: #e879f9;
+  --desktop-glow: rgba(232, 121, 249, 0.2);
+  background: radial-gradient(ellipse at 55% 0, rgba(88, 28, 135, 0.7), transparent 62%), #0b0612;
+}
+
+.desktop-shell[data-theme="void"] {
+  --desktop-accent: #94a3b8;
+  --desktop-glow: rgba(148, 163, 184, 0.12);
+  background: radial-gradient(ellipse at 50% 0, rgba(51, 65, 85, 0.56), transparent 60%), #05070b;
+}
+
+.desktop-shell[data-theme="fire"] {
+  --desktop-accent: #f97316;
+  --desktop-glow: rgba(249, 115, 22, 0.2);
+  background: radial-gradient(ellipse at 50% 0, rgba(124, 45, 18, 0.68), transparent 62%), #100704;
+}
+
+.desktop-topbar {
+  position: absolute;
+  z-index: 10001;
+  inset: 0 0 auto;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  background: rgba(3, 7, 18, 0.68);
+  backdrop-filter: blur(22px);
+}
+
+.desktop-brand,
+.desktop-tray,
+.desktop-toolbar,
+.desktop-app-launcher,
+.desktop-taskbar,
+.desktop-window-titlebar,
+.desktop-window-actions {
+  display: flex;
+  align-items: center;
+}
+
+.desktop-brand {
+  gap: 9px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+.desktop-brand img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 9px var(--desktop-glow));
+}
+
+.desktop-tray {
+  gap: 12px;
+  color: rgba(226, 232, 240, 0.74);
+  font-size: 11px;
+}
+
+.desktop-toolbar {
+  position: absolute;
+  z-index: 10000;
+  inset: 42px 0 62px;
+  pointer-events: none;
+}
+
+.desktop-launcher-wrap {
+  position: absolute;
+  z-index: 10001;
+  top: 14px;
+  left: 16px;
+  pointer-events: auto;
+}
+
+.desktop-launcher {
+  width: 218px;
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 16px;
+  background: rgba(8, 13, 27, 0.92);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(24px);
+}
+
+.desktop-launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.desktop-launcher-item,
+.desktop-toolbar-button,
+.desktop-task-button,
+.desktop-window-action {
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.desktop-launcher-item {
+  display: flex;
+  min-width: 0;
+  min-height: 66px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #cbd5e1;
+  font-size: 9px;
+}
+
+.desktop-launcher-item:hover,
+.desktop-toolbar-button:hover,
+.desktop-task-button:hover {
+  border-color: color-mix(in srgb, var(--desktop-accent), transparent 55%);
+  background: color-mix(in srgb, var(--desktop-accent), transparent 88%);
+}
+
+.desktop-icons {
+  position: absolute;
+  z-index: 0;
+  inset: 60px auto 78px 18px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(5, 82px);
+  gap: 8px 10px;
+  align-content: start;
+  pointer-events: none;
+}
+
+.desktop-icon {
+  display: flex;
+  width: 82px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  pointer-events: auto;
+  text-shadow: 0 1px 5px #000;
+}
+
+.desktop-icon:hover,
+.desktop-icon:focus-visible {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.desktop-icon-label {
+  max-width: 78px;
+  overflow: hidden;
+  font-size: 10px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-workspace {
+  position: absolute;
+  z-index: 1;
+  inset: 42px 0 62px;
+  overflow: hidden;
+}
+
+.desktop-taskbar {
+  position: absolute;
+  z-index: 10002;
+  inset: auto 0 0;
+  min-height: 62px;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(3, 7, 18, 0.77);
+  backdrop-filter: blur(22px);
+}
+
+.desktop-task-button {
+  display: flex;
+  max-width: 190px;
+  min-width: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  overflow: hidden;
+  border-color: rgba(148, 163, 184, 0.1);
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #cbd5e1;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-task-button[data-active="true"] {
+  border-color: color-mix(in srgb, var(--desktop-accent), transparent 55%);
+  background: color-mix(in srgb, var(--desktop-accent), transparent 87%);
+  color: #fff;
+}
+
+.desktop-window {
+  position: absolute;
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 240px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 15px;
+  background: rgba(7, 11, 22, 0.94);
+  box-shadow: 0 28px 75px rgba(0, 0, 0, 0.55), 0 0 30px var(--desktop-glow);
+  backdrop-filter: blur(24px);
+}
+
+.desktop-window[data-focused="false"] {
+  filter: saturate(0.85);
+}
+
+.desktop-window-titlebar {
+  height: 40px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.86);
+  cursor: grab;
+  user-select: none;
+}
+
+.desktop-window-titlebar:active {
+  cursor: grabbing;
+}
+
+.desktop-window-name {
+  overflow: hidden;
+  color: rgba(241, 245, 249, 0.88);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-window-actions {
+  flex: none;
+  gap: 4px;
+}
+
+.desktop-window-action {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.65);
+}
+
+.desktop-window-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.desktop-window-action[data-close="true"]:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.desktop-window-content {
+  height: calc(100% - 40px);
+  overflow: auto;
+}
+
+.desktop-window-content > * {
+  min-height: 100%;
+}
+
+.desktop-window-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 17px;
+  height: 17px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, rgba(148, 163, 184, 0.5) 50%);
+}
+
+.desktop-settings-popover {
+  position: absolute;
+  z-index: 10005;
+  top: 50px;
+  right: 12px;
+  width: 230px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(8, 13, 27, 0.95);
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(24px);
+}
+
+@media (max-width: 700px) {
+  .desktop-topbar {
+    padding: 0 9px;
+  }
+
+  .desktop-brand {
+    font-size: 9px;
+  }
+
+  .desktop-tray {
+    gap: 7px;
+    font-size: 10px;
+  }
+
+  .desktop-tray .desktop-date {
+    display: none;
+  }
+
+  .desktop-taskbar {
+    min-height: 56px;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .desktop-task-button {
+    flex: none;
+    max-width: 140px;
+  }
+
+  .desktop-workspace {
+    bottom: 56px;
+  }
+
+  .desktop-toolbar {
+    bottom: 56px;
+  }
+
+  .desktop-icons {
+    grid-template-rows: repeat(6, 76px);
+    gap: 6px;
+    left: 8px;
+  }
+
+  .desktop-icon {
+    width: 70px;
+  }
+
+  .desktop-window {
+    min-width: 300px;
+    min-height: 220px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -757,6 +757,49 @@ These take < 1 day each but have high perceived value:
 
 ---
 
+## §20. NOVAURA SOVEREIGN DESKTOP (2026-10-11)
+
+The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-style desktop shell, adapted to its own implemented app set:
+
+- [x] Full-screen desktop surface, top system bar, app launcher, desktop icons, and taskbar.
+- [x] Multi-window manager for the seven Sovereign app surfaces: Cybeni Builder, Aura AI, Word Studio, NovaSocial, AI Lounge, NovaMail, and Neural Setup.
+- [x] Independent window focus/z-order, drag, resize, maximize/restore, minimize/taskbar restore, and close.
+- [x] Graphics settings utility connected to desktop particle themes, low/medium/high presets, and adjustable particle intensity; settings persist in local storage.
+- [x] Tailwind CSS build integration for the existing Sovereign app-window components.
+- [x] Production build and Oxlint run completed.
+
+**Boundary:** Only apps with implementations in the Sovereign project are exposed in the app launcher. Browser, terminal, files, games, music, and other production WebOS apps are intentionally not linked as empty placeholders. The Sovereign frontend can be served locally, but individual app integrations may still require their configured services and are not implicitly offline.
+
+### §20.1 Beta-Readiness Review (2026-10-28)
+
+**Scope has outgrown the 2026-10-11 entry above:** the launcher now exposes ~38 apps (not 7), backed by a Tauri v2 Rust core (29 native commands, all wired to the UI), a signed P2P mesh (`mesh.rs`, `novaura_relay`), Tor/onion fetch, local-AI probing, and an NSIS installer.
+
+**Verified 2026-10-28 (initial review):** `npm run build` passed (main bundle 5.9 MB, unsplit). Oxlint: 0 errors, warnings only. No API keys in `dist/` or `src/`. App was NOT launched/click-tested.
+
+**Beta blockers:**
+- [x] License gate bypass removed from `src/App.jsx`. Default builds require a signed NOVA1 license; mint tester keys with `python scripts/mint_tester_license.py --name "<tester>" --node-id <NODE-ID from their activation screen>`. Build with `VITE_SOVEREIGN_OPEN_BETA=true` for an ungated open beta. Saved licenses are now re-verified natively at startup, and licenses recovered from the on-disk node certificate are picked up.
+- [x] Beta feedback now reaches the team: new `POST /api/beta-feedback/submit` route (`functions/src/api/routes/beta-feedback.ts`) stores reports in Firestore `sovereign_beta_feedback` and emails the owner. The app queues unsent reports and retries. **Needs `firebase deploy --only functions` before testers ship.**
+- [x] Auto-updater wired (tauri-plugin-updater + process, signed feed at `https://novaura-life-8df2f.web.app/sovereign/latest.json`, in-app "Install & restart" banner). Signing key lives in `%USERPROFILE%\.tauri\` (BACK IT UP). Release flow: bump version in `tauri.conf.json` → `PACKAGE_NOVAURA_OS.bat` → `scripts\publish-update.ps1` → upload `release\` files to hosting `/sovereign/`.
+- [ ] **Code signing still open.** Needs a purchased Authenticode certificate (OV/EV) or Azure Trusted Signing. Until then testers see a SmartScreen warning ("More info → Run anyway").
+- [ ] **Relay still down (infrastructure).** `novaura.life` AND `relay.novaura.life` both resolve to 169.63.200.140, a cPanel host whose account is SUSPENDED (redirects to `/cgi-sys/suspendedpage.cgi`). Needs: a VPS running `novaura_relay` on 43889, and DNS A record for `relay.novaura.life` pointed at it. Firebase still works on `novaura-life-8df2f.web.app`. UI now says "RELAY UNREACHABLE · LAN PEERS ONLY" instead of "CONNECTING...".
+- [x] Claude provider fixed: `anthropic-dangerous-direct-browser-access` header, default model `claude-opus-5-5`, no `temperature`, text-block parsing, refusal handling, server-side fallbacks. Cybeni Claude code templates updated off retired 3.7 / `budget_tokens`.
+- [x] NovaMail never broadcasts plaintext. Without a recipient key (or on encryption failure) the message stays in Sent marked "Not delivered" with the reason. Loopback mail no longer hits the wire. Also fixed: mail list/detail showed "undefined@nova.node" (read `from/to`, store uses `sender/recipient`), and the window now live-refreshes on new mail.
+- [x] `resolve_safe_sync_root` rewritten: absolute paths only, rejects `..`/`.`, resolves symlinks via deepest existing ancestor, blocks `AppData`/`.ssh`/`.config`/`.local` and the profile root.
+- [ ] Sovereign source committed on `cleanup/dedupe-audit` (see git log). Merge to master is still the owner's call.
+
+**Should fix before wider beta:**
+- [x] Windows lazy-loaded (`React.lazy` + `Suspense`), Monaco moved out of the entry bundle. Startup bundle 5.9 MB → ~0.55 MB. App set NOT trimmed (owner's call).
+- [x] Placeholder authority key `nova-auth-2026-v2` removed from JS, Rust, and both minting scripts.
+- [x] Node ID now derived from the Windows MachineGuid (survives PC/user renames). The legacy hostname-based ID is still accepted so existing licenses keep working.
+- [x] `set_uefi_boot_target` now requires the same single-use 30s nonce as the UEFI reboot, validates the BCD identifier, and asks for confirmation. Note: Disk Architect's boot list is partly hardcoded; only `{current}` is a real target.
+- [~] Secrets at rest: the 60-second database disk mirror (`vault/sovereign_db_snapshot.json`, which included API keys and the mesh identity secret in plaintext) is now DPAPI-encrypted to the Windows user. Old plaintext mirrors still load and are re-sealed on the next write. Backup export text no longer claims keys are encrypted. **Still open for the security review:** AI keys remain plaintext inside the WebView's IndexedDB; options are routing them through the passphrase enclave (adds an unlock step per session) or a device-bound key.
+
+**Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
+
+**Environment gotcha:** this machine's shell has `NODE_ENV=production`, so a plain `npm install` silently skips devDependencies (vite, oxlint, @tauri-apps/cli). Use `npm install --include=dev`.
+
+---
+
 ## §19. ROADMAP — NovaSweep (AI drive utility, post-Ivan-handoff project)
 
 **Concept (2026-08-03):** AI-driven drive care app — productizes the proven 2026-08 session

@@ -3,7 +3,7 @@ node_modules/
 .vscode/
 dist/
 .env
-.env.local
+.env.*
 *.sqlite
 *.bin
 .wrangler/
@@ -13,7 +13,24 @@ Thumbs.db
 *.zip
 Kimi_Agent_Deployment_v14.zip
 
-# Service account credentials — NEVER commit these
+# Secrets, Cryptographic Keys & Private Authorities — NEVER commit these
 *firebase-adminsdk*
 *service-account*.json
 *.credentials.json
+*.pem
+*.key
+*.priv
+*.crt
+*.pfx
+.novaura/
+sovereign_authority_key*
+*license*.json
+!appRegistry.js
+node_certificate.json
+*_telemetry.json
+stdout.txt
+stderr.txt
+
+
+# Rust/Tauri build output (any project)
+**/src-tauri/target/

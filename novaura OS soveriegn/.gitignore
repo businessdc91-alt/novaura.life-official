@@ -1,0 +1,59 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Secrets, Cryptographic Keys & Private Authorities
+.env
+.env.*
+*.pem
+*.key
+*.priv
+*.crt
+*.pfx
+*.keystore
+.novaura/
+sovereign_authority_key*
+*license*.json
+!appRegistry.js
+node_certificate.json
+*_telemetry.json
+
+# Native Builds, Caches & Binaries
+target/
+src-tauri/target/
+.cargo/
+*.exe
+*.msi
+*.pdb
+*.zip
+*.tar.gz
+
+# Temporary test and diagnostic outputs
+stdout.txt
+stderr.txt
+build_temp/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+# Update feed output (scripts/publish-update.ps1)
+release/
