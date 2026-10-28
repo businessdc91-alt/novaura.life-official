@@ -6,23 +6,27 @@
     - novaura-sovereign-setup-<version>.exe   (the NSIS installer)
     - latest.json                              (the updater feed the app polls)
 
-  Then upload both files so they are served at:
-    https://novaura-life-8df2f.web.app/sovereign/latest.json
-    https://novaura-life-8df2f.web.app/sovereign/novaura-sovereign-setup-<version>.exe
+  Then serve both files from your own server (the relay VPS) at:
+    https://relay.novaura.life/sovereign/latest.json
+    https://relay.novaura.life/sovereign/novaura-sovereign-setup-<version>.exe
 
-  With -HostingDir, the files are also copied into that folder (for example the
-  built NovAura-WebOS\dist\sovereign right before `firebase deploy --only hosting`).
+  No cloud provider is needed. Every installer is signed with the updater key
+  and the app rejects anything the key did not sign, so any static HTTPS host or
+  mirror works without being trusted.
+
+  With -HostingDir, the files are also copied into that folder (for example a
+  local copy of the web root you sync to the relay VPS).
 
   Remember to bump "version" in src-tauri\tauri.conf.json before each release;
   installed copies only update when the feed version is higher than theirs.
 
   Usage:
     powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1 -Notes "Fixes mail delivery"
-    powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1 -HostingDir "..\NovAura-WebOS\dist\sovereign"
+    powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1 -HostingDir "C:\relay-webroot\sovereign"
 #>
 param(
   [string]$Notes = '',
-  [string]$BaseUrl = 'https://novaura-life-8df2f.web.app/sovereign',
+  [string]$BaseUrl = 'https://relay.novaura.life/sovereign',
   [string]$HostingDir = ''
 )
 

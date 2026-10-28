@@ -38,8 +38,19 @@ To ship an ungated open beta instead, build with `VITE_SOVEREIGN_OPEN_BETA=true`
 1. Bump `version` in `src-tauri/tauri.conf.json`.
 2. Build with `PACKAGE_NOVAURA_OS.bat`.
 3. Run `powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1 -Notes "What changed"`.
-4. Upload `release\latest.json` and the installer so they are served from `https://novaura-life-8df2f.web.app/sovereign/`.
+4. Copy `release\latest.json` and the installer to the relay server so they are served from `https://relay.novaura.life/sovereign/`.
 
 Installed copies check that feed shortly after launch and every six hours.
 
-**Feedback.** Reports from Settings › Beta go to `POST /api/beta-feedback/submit` on the NovAura Firebase backend and land in the Firestore collection `sovereign_beta_feedback`. Unsent reports are queued on the tester's machine and retried.
+**Feedback.** Reports from Settings › Beta never touch a cloud service. Each report is encrypted with a one-time key to the feedback inbox public key in `src/config/betaFeedback.js`. It then waits in the mesh outbox, addressed to the team node. When that node comes online, the report travels directly over LAN or through the relay tunnel. The team node files it in NovaMail and sends back a receipt signed by the inbox key. Until that receipt arrives, the tester's app shows the report as awaiting delivery and re-sends it.
+
+To receive reports, load the inbox secret on the team node once. Open the Terminal app and run the command printed in `%USERPROFILE%\.novaura\beta_feedback_inbox_key.txt`. Keep that file private.
+
+**Relay server.** The relay is its own crate in `relay/` with no Tauri dependency. On a Linux VPS:
+
+```sh
+cd relay && cargo build --release
+./target/release/novaura_relay --port 43889
+```
+
+Open TCP 43889 and point the `relay.novaura.life` A record at the VPS. Serve the update files from the same box over HTTPS at `/sovereign/` with any static server, for example Caddy. The relay only forwards frames from registered sockets. Identity-signed packets are accepted only when their Ed25519 signature verifies.

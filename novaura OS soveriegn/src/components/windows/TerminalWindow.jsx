@@ -249,10 +249,11 @@ export default function TerminalWindow() {
         const sub = args[0]?.toLowerCase();
         if (sub === 'list') {
           const keys = await db.vault.toArray();
-          const list = keys.map(k => `• ${k.key.padEnd(16)} (category: ${k.category})`).join('\n');
+          const list = keys.map(k => `• ${String(k.key || k.keyName || k.id).padEnd(16)} (category: ${k.category || k.provider || "other"})`).join('\n');
           appendLine({ type: 'output', text: list || 'Vault is empty.' });
         } else if (sub === 'set' && args[1] && args[2]) {
           await db.vault.put({
+            id: args[1].toLowerCase(),
             key: args[1].toLowerCase(),
             value: args[2],
             category: 'api_key',

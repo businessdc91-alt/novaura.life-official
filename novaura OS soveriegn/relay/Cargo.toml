@@ -1,0 +1,26 @@
+[package]
+name = "novaura_relay"
+version = "2.1.0"
+description = "NovAura Sovereign WAN relay: room roster, NAT traversal, zero-knowledge forwarding"
+edition = "2021"
+publish = false
+
+# Standalone on purpose: the relay has no Tauri or WebView dependency, so it
+# builds with plain `cargo build --release` on any Linux VPS.
+[workspace]
+
+[[bin]]
+name = "novaura_relay"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["net", "sync", "rt-multi-thread", "time", "macros", "io-util"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

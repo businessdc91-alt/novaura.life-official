@@ -62,7 +62,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDNThCNDAxRTlGOTc1MEUKUldRT2RmbnBBYlJZN0pWVlZJRUZ4RXBmMk5JdDl2NUp6TDN3UFhVcG4wSlR4Q1FnVlFBQzJMV0MK",
       "endpoints": [
-        "https://novaura-life-8df2f.web.app/sovereign/latest.json"
+        "https://relay.novaura.life/sovereign/latest.json"
       ],
       "windows": {
         "installMode": "passive"

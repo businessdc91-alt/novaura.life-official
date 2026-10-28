@@ -65,16 +65,25 @@ export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
   const [betaPending, setBetaPending] = useState(0);
   const [betaSending, setBetaSending] = useState(false);
 
-  // Retry any reports that failed to send earlier.
+  // Re-queue unconfirmed reports, and update when the team node confirms one.
   useEffect(() => {
     let active = true;
-    syncPendingFeedback()
-      .catch(() => null)
-      .finally(async () => {
-        const pending = await countPendingFeedback();
-        if (active) setBetaPending(pending);
-      });
-    return () => { active = false; };
+    const refresh = async () => {
+      const pending = await countPendingFeedback();
+      if (active) setBetaPending(pending);
+    };
+    syncPendingFeedback().catch(() => null).finally(refresh);
+    const onDelivered = () => {
+      refresh();
+      setBetaStatus({ kind: 'sent', text: 'The NovAura team node confirmed it received your report.' });
+      setBetaSubmitted(true);
+      setTimeout(() => setBetaSubmitted(false), 6000);
+    };
+    window.addEventListener('novaura:beta_feedback_delivered', onDelivered);
+    return () => {
+      active = false;
+      window.removeEventListener('novaura:beta_feedback_delivered', onDelivered);
+    };
   }, []);
   const [betaCopied, setBetaCopied] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
@@ -158,6 +167,7 @@ export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
   const handleSaveKey = async (provider) => {
     const val = vaultKeys[provider];
     await db.vault.put({
+      id: provider.toLowerCase(),
       key: provider.toLowerCase(),
       value: val,
       category: 'api_key',
@@ -343,9 +353,9 @@ ${betaForm.description || 'No steps provided.'}
           userAgent: navigator.userAgent,
         },
       });
-      setBetaStatus(result.sent
-        ? { kind: 'sent', text: 'Report sent to the NovAura team. Thank you!' }
-        : { kind: 'queued', text: `Saved locally. It will send automatically when you're back online (${result.error}).` });
+      setBetaStatus(result.queued
+        ? { kind: 'queued', text: 'Encrypted and queued. It goes to the NovAura team node over the mesh when that node is online.' }
+        : { kind: 'error', text: `Saved locally but not queued: ${result.error}` });
       setBetaSubmitted(true);
       setTimeout(() => setBetaSubmitted(false), 6000);
       setBetaForm({ title: '', category: 'ui', severity: 'moderate', description: '' });
@@ -362,11 +372,13 @@ ${betaForm.description || 'No steps provided.'}
   const handleRetryPendingFeedback = async () => {
     setBetaSending(true);
     try {
-      const { sent, pending } = await syncPendingFeedback();
+      const { pending, teamOnline } = await syncPendingFeedback();
       setBetaPending(pending);
       setBetaStatus(pending === 0
-        ? { kind: 'sent', text: `Sent ${sent} queued report${sent === 1 ? '' : 's'}.` }
-        : { kind: 'queued', text: `${pending} report${pending === 1 ? '' : 's'} still waiting for a connection.` });
+        ? { kind: 'sent', text: 'All reports confirmed by the NovAura team node.' }
+        : teamOnline
+          ? { kind: 'queued', text: `Sending ${pending} report${pending === 1 ? '' : 's'} to the team node now.` }
+          : { kind: 'queued', text: `The team node is offline. ${pending} encrypted report${pending === 1 ? ' is' : 's are'} waiting and will send automatically.` });
       setBetaSubmitted(true);
       setTimeout(() => setBetaSubmitted(false), 6000);
     } finally {
@@ -1136,7 +1148,7 @@ ${betaForm.description || 'No steps provided.'}
                     disabled={betaSending}
                     className="text-[11px] text-amber-300 hover:text-amber-200 underline disabled:opacity-50"
                   >
-                    {betaPending} unsent report{betaPending === 1 ? '' : 's'} · retry now
+                    {betaPending} report{betaPending === 1 ? '' : 's'} awaiting delivery · retry now
                   </button>
                 )}
               </div>

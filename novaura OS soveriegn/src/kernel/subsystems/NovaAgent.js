@@ -258,6 +258,7 @@ export class NovaAgent {
 
       case 'remember': {
         await db.vault.put({
+          id: `memory:${params.key}`,
           key: `memory:${params.key}`,
           value: params.value,
           category: 'memory',

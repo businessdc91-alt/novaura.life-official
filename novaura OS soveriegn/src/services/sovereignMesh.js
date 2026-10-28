@@ -5,6 +5,11 @@
 
 import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
+import {
+  FEEDBACK_INBOX_PUBKEY,
+  FEEDBACK_INBOX_VAULT_KEY,
+  feedbackAckMessage,
+} from '../config/betaFeedback.js';
 
 const STORAGE_KEY = 'novaura_sovereign_identity';
 const MAIL_STORAGE = 'novaura_sovereign_mailstore';
@@ -322,6 +327,18 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
       break;
     }
 
+    case 'MESH_BETA_FEEDBACK': {
+      const fb = payload?.feedback;
+      if (!fb?.clientId || !fb.ciphertext || !fb.senderPub) break;
+      receiveBetaFeedback(fb).catch(err => console.warn('[SovereignMesh] Beta feedback receive failed:', err));
+      break;
+    }
+
+    case 'MESH_BETA_FEEDBACK_ACK': {
+      confirmBetaFeedbackReceipt(payload).catch(() => {});
+      break;
+    }
+
     case 'MESH_POST': {
       const post = payload?.post || packet?.payload?.post;
       if (post && !_socialCache.posts.some(p => p.id === post.id)) {
@@ -607,8 +624,9 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_PEER_JOINED_ROOM': {
-      const peerId = payload?.node_id;
-      const peerName = payload?.node_name || 'Anonymous Node';
+      // The relay sends { peer: { id, name } }; older builds sent node_id/node_name.
+      const peerId = payload?.node_id || payload?.peer?.id;
+      const peerName = payload?.node_name || payload?.peer?.name || 'Anonymous Node';
       const room = payload?.room || '#general';
       if (peerId) {
         flushOutboxForPeer(peerId);
@@ -622,10 +640,11 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_ROOM_ROSTER': {
-      const members = payload?.members || [];
+      const members = payload?.members || payload?.peers || [];
       for (const m of members) {
-        if (m.node_id) {
-          flushOutboxForPeer(m.node_id);
+        const memberId = m.node_id || m.id;
+        if (memberId) {
+          flushOutboxForPeer(memberId);
         }
       }
       break;
@@ -633,6 +652,90 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
 
     default:
       break;
+  }
+}
+
+// ── Beta feedback inbox (team node) and delivery receipts (tester node) ──────
+
+const hexToBytes = (hex) => new Uint8Array(hex.replace(/^0x/, '').match(/.{1,2}/g).map(b => parseInt(b, 16)));
+const bytesToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+// Runs on the node that holds the inbox secret. Other nodes ignore the packet.
+async function receiveBetaFeedback(fb) {
+  const inboxSecret = String((await db.getVaultKey(FEEDBACK_INBOX_VAULT_KEY)) || '').trim().replace(/^0x/, '');
+  if (!/^[0-9a-fA-F]{64}$/.test(inboxSecret)) {
+    console.info('[SovereignMesh] Beta report arrived but this node has no feedback inbox key; ignoring.');
+    return;
+  }
+  const inboxPub = bytesToHex(ed25519.getPublicKey(hexToBytes(inboxSecret)));
+  if ((fb.recipientPub || '').replace(/^0x/, '').toLowerCase() !== inboxPub) return;
+
+  const mailId = `beta_${fb.clientId}`;
+  const known = _mailCache.inbox.some(m => m.id === mailId) || !!(await db.mailbox.get(mailId).catch(() => null));
+
+  if (!known) {
+    const report = await decryptMailPayload(fb, inboxSecret);
+    const env = report.environment || {};
+    const identity = getLocalIdentity();
+    const mail = {
+      id: mailId,
+      sender: 'beta-feedback@nova.node',
+      senderName: 'Beta tester',
+      senderPub: fb.senderPub,
+      recipient: identity?.address || 'operator@nova.node',
+      subject: `[Beta · ${report.severity || 'n/a'} · ${report.category || 'other'}] ${report.title || 'Untitled report'}`,
+      body: [
+        report.description || '(no description)',
+        '',
+        '──────────',
+        `Version: ${report.appVersion || 'unknown'}`,
+        `OS: ${env.os || 'unknown'} ${env.arch || ''}`.trim(),
+        `CPU cores: ${env.cpuCores ?? 'unknown'}`,
+        `Reported: ${report.createdAt || 'unknown'}`,
+        `Report ID: ${fb.clientId}`,
+        fb.replyNode ? `Reply node: ${fb.replyNode}` : null,
+      ].filter(line => line !== null).join('\n'),
+      attachments: [],
+      timestamp: report.createdAt || new Date().toISOString(),
+      read: false,
+      starred: false,
+      box: 'inbox',
+      isEncryptedE2EE: true,
+      betaFeedback: { clientId: fb.clientId, category: report.category, severity: report.severity },
+    };
+    _mailCache.inbox.unshift(mail);
+    await db.mailbox.put(mail).catch(() => {});
+    try {
+      localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
+    } catch {}
+    window.dispatchEvent(new CustomEvent('novaura:mail_received', { detail: mail }));
+    window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+    dispatchMeshToast({ type: 'info', title: 'Beta report received', message: report.title || 'New tester report in NovaMail' });
+  }
+
+  // Always confirm, including duplicates, so the tester stops re-sending.
+  if (fb.replyNode) {
+    const ackSig = bytesToHex(ed25519.sign(new TextEncoder().encode(feedbackAckMessage(fb.clientId)), hexToBytes(inboxSecret)));
+    await sendDirectMeshPacket(fb.replyNode, 'MESH_BETA_FEEDBACK_ACK', { clientId: fb.clientId, ackSig });
+  }
+}
+
+// Runs on the tester node. Only a receipt signed by the inbox key counts.
+async function confirmBetaFeedbackReceipt(payload) {
+  const { clientId, ackSig } = payload || {};
+  if (!clientId || !/^[0-9a-fA-F]{128}$/.test(ackSig || '')) return;
+  const valid = ed25519.verify(hexToBytes(ackSig), new TextEncoder().encode(feedbackAckMessage(clientId)), hexToBytes(FEEDBACK_INBOX_PUBKEY));
+  if (!valid) {
+    console.warn('[SovereignMesh] Ignored beta feedback receipt with an invalid signature.');
+    return;
+  }
+  const records = await db.node_feedback.filter(r => r.clientId === clientId).toArray();
+  for (const r of records) {
+    if (r.outboxId) await db.mesh_outbox.update(r.outboxId, { status: 'delivered', deliveredAt: new Date().toISOString() }).catch(() => {});
+    await db.node_feedback.update(r.id, { synced: true, deliveryStatus: 'delivered', syncedAt: new Date().toISOString(), lastError: null });
+  }
+  if (records.length) {
+    window.dispatchEvent(new CustomEvent('novaura:beta_feedback_delivered', { detail: { clientId } }));
   }
 }
 
@@ -885,6 +988,8 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_HOSTED_SITE',
   'MESH_SITE_QUERY',
   'MESH_SITE_RESPONSE',
+  'MESH_BETA_FEEDBACK',
+  'MESH_BETA_FEEDBACK_ACK',
 ]);
 
 export function broadcastMeshPacket(type, payload) {

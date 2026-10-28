@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
 pub const DEFAULT_UDP_BEACON_PORT: u16 = 43888;
 pub const DEFAULT_TCP_LISTEN_PORT: u16 = 43889;
@@ -21,6 +21,8 @@ pub const DEFAULT_PUBLIC_RELAY: &str = "relay.novaura.life:43889";
 pub const MAX_PACKET_BYTES: usize = 256 * 1024; // 256 KB memory exhaustion ceiling
 pub const MAX_PEERS_PER_ROOM: usize = 100;
 pub const MAX_CONCURRENT_SOCKETS_PER_IP: usize = 8;
+pub const RELAY_OUTBOUND_QUEUE: usize = 256;
+pub const DIRECT_CONNECT_TIMEOUT_SECS: u64 = 3;
 
 static PACKET_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -172,6 +174,20 @@ pub fn verify_packet_signature(packet: &MeshPacket) -> bool {
     verifying_key.verify(canonical.as_bytes(), &signature).is_ok()
 }
 
+/// One-shot direct TCP delivery with a short connect timeout, so an unreachable
+/// WAN peer behind NAT does not stall sends for the OS default (~20s).
+async fn write_direct(addr: &str, line: &str) -> bool {
+    let connect = tokio::time::timeout(
+        std::time::Duration::from_secs(DIRECT_CONNECT_TIMEOUT_SECS),
+        TcpStream::connect(addr),
+    )
+    .await;
+    match connect {
+        Ok(Ok(mut stream)) => stream.write_all(line.as_bytes()).await.is_ok(),
+        _ => false,
+    }
+}
+
 pub async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     out: &mut String,
@@ -283,6 +299,10 @@ struct MeshInner {
     pub seen_packet_ids: HashSet<String>,
     pub relay_address: Option<String>,
     pub relay_connected: bool,
+    /// Outbound queue into the single registered relay tunnel. The relay only
+    /// forwards frames from a registered socket, so every relay-bound packet
+    /// must travel through this tunnel rather than a fresh connection.
+    pub relay_tx: Option<mpsc::Sender<String>>,
     pub active_connections_per_ip: HashMap<IpAddr, usize>,
 }
 
@@ -312,6 +332,7 @@ impl MeshManager {
             seen_packet_ids: HashSet::new(),
             relay_address: Some(DEFAULT_PUBLIC_RELAY.to_string()),
             relay_connected: false,
+            relay_tx: None,
             active_connections_per_ip: HashMap::new(),
         };
 
@@ -587,9 +608,11 @@ impl MeshManager {
             }
         };
 
+        let (relay_tx, mut relay_rx) = mpsc::channel::<String>(RELAY_OUTBOUND_QUEUE);
         {
             let mut state = self.inner.write().await;
             state.relay_connected = true;
+            state.relay_tx = Some(relay_tx);
             log::info!("[SovereignMesh] Established active WAN relay tunnel to {}", relay_addr);
         }
 
@@ -652,6 +675,18 @@ impl MeshManager {
                         }
                     }
                 }
+                outbound = relay_rx.recv() => {
+                    // None means set_relay() dropped the tunnel handle: reconnect to the new address.
+                    match outbound {
+                        Some(frame) => {
+                            if writer.write_all(frame.as_bytes()).await.is_err() {
+                                log::warn!("[SovereignMesh] WAN relay tunnel write failed; reconnecting.");
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
                     // Periodic heartbeat ping to keep NAT port bindings open in home router
                     let hb = format!("{}\n", serde_json::json!({ "packet_type": "MESH_HEARTBEAT", "timestamp_ms": current_timestamp_ms() }));
@@ -664,6 +699,17 @@ impl MeshManager {
 
         let mut state = self.inner.write().await;
         state.relay_connected = false;
+        state.relay_tx = None;
+    }
+
+    /// Queue a serialized frame into the live relay tunnel. Returns false when no
+    /// tunnel is up or its queue is full, so callers never report a false delivery.
+    async fn send_via_relay(&self, line: &str) -> bool {
+        let tx = { self.inner.read().await.relay_tx.clone() };
+        match tx {
+            Some(tx) => tx.try_send(line.to_string()).is_ok(),
+            None => false,
+        }
     }
 
     async fn run_peer_pruner(&self) {
@@ -903,23 +949,20 @@ impl MeshManager {
 
         let mut sent_count = 0;
         for peer in peers {
-            if let Ok(mut stream) = TcpStream::connect(&peer.address).await {
-                if stream.write_all(line.as_bytes()).await.is_ok() {
-                    sent_count += 1;
-                }
+            if write_direct(&peer.address, &line).await {
+                sent_count += 1;
             }
         }
 
-        // Push through configured WAN relay
-        let relay_target = { self.inner.read().await.relay_address.clone() };
-        if let Some(relay_addr) = relay_target {
-            if let Ok(mut stream) = TcpStream::connect(&relay_addr).await {
-                let _ = stream.write_all(line.as_bytes()).await;
-            }
-        }
+        // Push through the registered WAN relay tunnel (room broadcast).
+        let via_relay = self.send_via_relay(&line).await;
 
-        log::info!("[SovereignMesh] Broadcast forwarded to {} direct physical peers + WAN relay.", sent_count);
-        Ok(true)
+        log::info!(
+            "[SovereignMesh] Broadcast forwarded to {} direct peers{}.",
+            sent_count,
+            if via_relay { " + WAN relay" } else { " (relay offline)" }
+        );
+        Ok(sent_count > 0 || via_relay)
     }
 
     pub async fn send_direct_packet(
@@ -959,22 +1002,15 @@ impl MeshManager {
 
         // 1. Try Direct TCP socket first (LAN or Direct WAN)
         if let Some(ref addr) = target_addr {
-            if let Ok(mut stream) = TcpStream::connect(addr).await {
-                if stream.write_all(line.as_bytes()).await.is_ok() {
-                    return Ok(true);
-                }
+            if write_direct(addr, &line).await {
+                return Ok(true);
             }
         }
 
-        // 2. Fallback: Route through configured WAN relay
-        let relay_target = { self.inner.read().await.relay_address.clone() };
-        if let Some(relay_addr) = relay_target {
-            if let Ok(mut stream) = TcpStream::connect(&relay_addr).await {
-                if stream.write_all(line.as_bytes()).await.is_ok() {
-                    log::info!("[SovereignMesh] Packet to {} successfully routed through WAN relay {}.", recipient_id, relay_addr);
-                    return Ok(true);
-                }
-            }
+        // 2. Fallback: route through the registered WAN relay tunnel
+        if self.send_via_relay(&line).await {
+            log::info!("[SovereignMesh] Packet to {} queued on the WAN relay tunnel.", recipient_id);
+            return Ok(true);
         }
 
         Err(format!("Could not deliver to peer {} directly or through relay.", recipient_id))
@@ -1091,6 +1127,9 @@ impl MeshManager {
         let mut state = self.inner.write().await;
         state.relay_address = relay_address;
         state.relay_connected = false;
+        // Dropping the tunnel handle closes the current tunnel so the supervisor
+        // reconnects to the new address.
+        state.relay_tx = None;
         Ok(true)
     }
 

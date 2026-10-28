@@ -78,6 +78,7 @@ export class AISubsystem {
   setKey(provider, key) {
     this._apiKeys[provider.toLowerCase()] = key;
     db.vault.put({
+      id: provider.toLowerCase(),
       key: provider.toLowerCase(),
       value: key,
       category: 'api_key',

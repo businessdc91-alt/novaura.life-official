@@ -8,6 +8,7 @@
 // - Strict sender ID ownership & anti-spoofing enforcement
 // - Zero-knowledge forwarding for E2EE envelopes
 
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -32,6 +33,8 @@ pub struct RelayPacket {
     pub id: String,
     pub sender_id: String,
     pub sender_name: String,
+    #[serde(default)]
+    pub sender_pubkey: Option<String>,
     #[serde(default)]
     pub recipient_id: Option<String>,
     pub packet_type: String,
@@ -109,6 +112,52 @@ fn is_reserved_sender_id(id: &str) -> bool {
         || lower == "kernel"
         || lower == "admin"
         || lower.starts_with("relay_")
+}
+
+fn hex_to_bytes<const N: usize>(hex: &str) -> Option<[u8; N]> {
+    let clean = hex.trim().trim_start_matches("0x");
+    if clean.len() != N * 2 || !clean.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for i in 0..N {
+        out[i] = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Application packets are signed by the sender's identity key and carry
+/// `sender_id = did:nova:<full public key hex>`. That differs from the hardware
+/// node ID the socket registered with, so the relay accepts it only when the
+/// DID is exactly bound to the attached public key and the Ed25519 signature
+/// over the canonical packet string verifies. The payload stays opaque.
+fn identity_signature_valid(packet: &RelayPacket) -> bool {
+    let pub_hex = match packet.sender_pubkey.as_deref() {
+        Some(pk) => pk.trim().trim_start_matches("0x").to_ascii_lowercase(),
+        None => return false,
+    };
+    let did = packet.sender_id.trim();
+    let did_hex = match did.strip_prefix("did:nova:") {
+        Some(rest) => rest.trim_start_matches("0x").to_ascii_lowercase(),
+        None => return false,
+    };
+    if did_hex != pub_hex {
+        return false;
+    }
+    let (pub_bytes, sig_bytes) = match (
+        hex_to_bytes::<32>(&pub_hex),
+        packet.signature.as_deref().and_then(hex_to_bytes::<64>),
+    ) {
+        (Some(p), Some(sig)) => (p, sig),
+        _ => return false,
+    };
+    let key = match VerifyingKey::from_bytes(&pub_bytes) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    let payload_str = serde_json::to_string(&packet.payload).unwrap_or_default();
+    let canonical = format!("{}:{}:{}:{}", packet.packet_type, packet.sender_id, packet.timestamp_ms, payload_str);
+    key.verify(canonical.as_bytes(), &Signature::from_bytes(&sig_bytes)).is_ok()
 }
 
 // Bounded line reader preventing memory exhaustion
@@ -322,6 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 id: format!("err_{}", current_timestamp_ms()),
                                 sender_id: "relay_supervisor".to_string(),
                                 sender_name: "NovAura Universe Relay".to_string(),
+                                sender_pubkey: None,
                                 recipient_id: Some(packet.sender_id.clone()),
                                 packet_type: "MESH_ERROR".to_string(),
                                 payload: serde_json::json!({
@@ -378,6 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         id: format!("roster_{}", current_timestamp_ms()),
                         sender_id: "relay_supervisor".to_string(),
                         sender_name: "NovAura Universe Relay".to_string(),
+                        sender_pubkey: None,
                         recipient_id: Some(packet.sender_id.clone()),
                         packet_type: "MESH_ROOM_ROSTER".to_string(),
                         payload: serde_json::json!({
@@ -399,6 +450,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             id: format!("join_{}", current_timestamp_ms()),
                             sender_id: "relay_supervisor".to_string(),
                             sender_name: "NovAura Universe Relay".to_string(),
+                            sender_pubkey: None,
                             recipient_id: Some("*".to_string()),
                             packet_type: "MESH_PEER_JOINED_ROOM".to_string(),
                             payload: serde_json::json!({
@@ -442,7 +494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Ensure the sender_id matches the authenticated registered identity for this socket
                     if let Some(session) = state.sessions.get(&peer_addr) {
                         if let Some(ref registered_id) = session.node_id {
-                            if registered_id != &packet.sender_id {
+                            if registered_id != &packet.sender_id && !identity_signature_valid(&packet) {
                                 eprintln!("[Relay Security] Impersonation attempt: socket {} (id: {}) tried sending as '{}'. Dropped.",
                                     peer_addr, registered_id, packet.sender_id);
                                 line.clear();
@@ -524,6 +576,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id: format!("leave_{}", current_timestamp_ms()),
                     sender_id: "relay_supervisor".to_string(),
                     sender_name: "NovAura Universe Relay".to_string(),
+                    sender_pubkey: None,
                     recipient_id: Some("*".to_string()),
                     packet_type: "MESH_PEER_LEFT_ROOM".to_string(),
                     payload: serde_json::json!({
