@@ -6,6 +6,7 @@ import {
 import { MODES, SECURITY_LEVELS, QUALITY_LEVELS } from '../../../services/cybeni/pipeline.js';
 import { describeModelKey } from '../../../services/cybeni/models.js';
 import { DESIGN_SYSTEMS } from '../../../services/cybeniStudioEngine.js';
+import { ollamaCpuOnly, setOllamaCpuOnly } from '../../../services/localModels.js';
 
 const ROLE_LABELS = {
   architect: ['Architect & orchestrator', 'Plans, oversees each checkpoint, can redirect or take over, signs off'],
@@ -94,6 +95,7 @@ export default function AgentPanel({
   const [answer, setAnswer] = useState('');
   const [listening, setListening] = useState(false);
   const [openRun, setOpenRun] = useState(null);
+  const [ollamaCpu, setOllamaCpu] = useState(ollamaCpuOnly);
 
   const roles = settings.roles || {};
   const missingRoles = Object.keys(ROLE_LABELS).filter(r => !roles[r]);
@@ -177,6 +179,10 @@ export default function AgentPanel({
             </select>
           </label>
           <label className="flex items-start gap-2 text-[11px] text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={ollamaCpu} onChange={e => { setOllamaCpuOnly(e.target.checked); setOllamaCpu(e.target.checked); }} className="mt-0.5" />
+            <span>Run Ollama models on the CPU (system RAM)<span className="block text-[10px] text-slate-500">Keeps the GPU free for LM Studio. Turned on automatically if Ollama's GPU build crashes on your card.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-[11px] text-slate-300 cursor-pointer">
             <input type="checkbox" checked={settings.autoVerify} onChange={e => set({ autoVerify: e.target.checked })} className="mt-0.5" />
             <span>Run the app during the build and repair runtime errors automatically<span className="block text-[10px] text-slate-500">Up to {settings.maxFixRounds} repair rounds per check.</span></span>
           </label>
@@ -208,6 +214,9 @@ export default function AgentPanel({
                   {lastResult.status === 'done' ? (lastResult.approved === false ? 'Finished with open issues' : 'Finished') : lastResult.status === 'cancelled' ? 'Stopped' : `Failed: ${lastResult.error}`}
                   <span className="font-normal text-slate-400"> · {lastResult.stats?.modelCalls || 0} model calls · {Math.round((lastResult.stats?.ms || 0) / 1000)}s · {lastResult.changed?.length || 0} files changed</span>
                 </div>
+                {lastResult.unreviewed?.length > 0 && (
+                  <div className="mt-1 text-amber-200">Not independently reviewed: the reviewer model could not run ({lastResult.unreviewed.join(', ')}). See the failed steps above.</div>
+                )}
                 {lastResult.summary && <div className="mt-1 whitespace-pre-wrap text-slate-200">{lastResult.summary}</div>}
               </div>
             )}

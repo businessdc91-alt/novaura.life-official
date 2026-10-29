@@ -460,6 +460,10 @@ export async function queryLocalAi(port = 11434, path = '/api/chat', method = 'P
       if (res.ok) {
         return await res.json();
       }
+      // Like the native path, hand back the server's error body ({ error: ... })
+      // so callers can react to it (for example Ollama GPU crashes).
+      const body = await res.json().catch(() => null);
+      if (body) return body;
     } catch (e) {
       lastErr = e;
     }

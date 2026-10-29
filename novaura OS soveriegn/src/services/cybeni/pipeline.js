@@ -102,7 +102,7 @@ const STACK_RULES = `## Target platform
 The app runs in a browser preview with no build step:
 - index.html at the project root plus ES modules. React 18 with JSX in .jsx/.tsx files is supported (import React from 'react'; mount into <div id="root"> with react-dom/client).
 - TypeScript (.ts/.tsx) is supported (types are stripped, not checked).
-- npm packages are imported by bare name and loaded from esm.sh at runtime, so only use packages that work in the browser.
+- npm packages are imported by bare name and loaded from esm.sh at runtime, so only use packages that work in the browser. Do not write an import map: bare imports are resolved automatically.
 - Tailwind is available by adding <script src="https://cdn.tailwindcss.com"></script> to index.html.
 - No Node APIs, no require(), no bundler or package.json build config.
 - Persist data with localStorage or IndexedDB unless the request says otherwise.
@@ -431,6 +431,11 @@ export async function runPipeline(input, hooks) {
     return problems;
   }
 
+  // Review phases that could not run (for example the reviewer model failed to
+  // load). A build nobody independently reviewed is never reported as approved.
+  const REVIEW_PHASES = new Set(['cross-review', 'inspection']);
+  const failedReviews = [];
+
   const handlers = {
     plan: async () => {
       plan = await call('architect', [
@@ -560,7 +565,7 @@ export async function runPipeline(input, hooks) {
       return `${r.count} file(s) optimised.`;
     },
     reinforce: async () => {
-      if (!inspectionIssues) return { skipped: true, note: 'Inspection approved; nothing to reinforce.' };
+      if (!inspectionIssues) return { skipped: true, note: failedReviews.includes('inspection') ? 'Inspection did not run; nothing to reinforce from it.' : 'Inspection approved; nothing to reinforce.' };
       const r = await codePass('developer', 'Reinforcement', `The final inspection found these issues. Fix all of them and output the complete corrected files.\n\n${inspectionIssues}`, { temperature: 0.2 });
       return `${r.count} file(s) reinforced.`;
     },
@@ -577,9 +582,10 @@ export async function runPipeline(input, hooks) {
     'final-review': async () => {
       const reply = await call('architect', [
         'Sign off this build for the user.',
+        failedReviews.length ? `Important: the independent ${failedReviews.join(' and ')} could not run, so no second model reviewed this build. Say so in the release note.` : '',
         'First line: APPROVED or ISSUES.',
         'Then a short release note in plain language: what was built, how to use it, and any known limitations.',
-      ].join('\n'), { code: false, temperature: 0.2, maxTokens: 1200 });
+      ].filter(Boolean).join('\n'), { code: false, temperature: 0.2, maxTokens: 1200 });
       approved = verdictOf(reply, 'APPROVED');
       summary = afterFirstLine(reply) || reply;
       return approved ? 'Signed off.' : 'Signed off with known issues.';
@@ -608,6 +614,7 @@ export async function runPipeline(input, hooks) {
         if (err.message === 'CANCELLED') throw err;
         hooks.onPhase?.(phase.id, { status: 'failed', note: err.message, ms: Date.now() - started });
         log(`${phase.label} failed: ${err.message}`);
+        if (REVIEW_PHASES.has(phase.id)) failedReviews.push(phase.id);
         // A failed build pass leaves nothing to check; other failures are survivable.
         if (['build', 'foundation', 'fix'].includes(phase.id) && changed.size === 0) throw err;
       }
@@ -630,7 +637,8 @@ export async function runPipeline(input, hooks) {
     deleted: [...deleted],
     plan,
     summary,
-    approved,
+    approved: failedReviews.length ? false : approved,
+    unreviewed: failedReviews,
     runtimeClean,
     stats: { ...stats, ms: Date.now() - stats.startedAt },
   };

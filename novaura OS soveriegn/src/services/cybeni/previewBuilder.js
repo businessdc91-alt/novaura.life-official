@@ -247,7 +247,22 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
   });
 
   // 4. Import map and error reporter go first in <head>.
-  const imports = npmImportMap(bare);
+  // A project's own import map (models often write one, sometimes broken, e.g.
+  // closed with </importmap>) is lifted out and merged, so there is only one map.
+  const ownImports = {};
+  html = html.replace(/<script\b[^>]*type\s*=\s*['"]importmap['"][^>]*>([\s\S]*?)<\/(?:script|importmap)\s*>/gi, (match, body) => {
+    try {
+      Object.assign(ownImports, JSON.parse(body).imports || {});
+    } catch {
+      issues.push({ type: 'import-map', path: htmlPath, message: `${htmlPath} contains an invalid import map, so it was ignored. Cybeni resolves bare imports automatically; the import map can be removed.` });
+    }
+    return '';
+  });
+  // Cybeni keeps control of React (one shared copy) and of project files.
+  const imports = { ...ownImports, ...npmImportMap(bare) };
+  for (const [spec, target] of Object.entries(ownImports)) {
+    if (!/^react(-dom)?(\/|$)/.test(spec) && !spec.startsWith('@cy/')) imports[spec] = target;
+  }
   if (mode === 'server') {
     imports['@cy/'] = baseUrl;
   } else {

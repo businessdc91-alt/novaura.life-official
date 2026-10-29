@@ -74,6 +74,27 @@ export async function discoverLocalModels() {
   }));
 }
 
+// ── Ollama on the CPU ──────────────────────────────────────────────────────
+// Lets Ollama run on system RAM while LM Studio keeps the GPU, or work at all
+// when Ollama's GPU build does not support the card.
+
+const OLLAMA_CPU_KEY = 'novaura_ollama_cpu_only';
+const GPU_FAILURE_RE = /cuda|ptx|rocm|vulkan|out of memory|llama-server process has terminated|unable to allocate/i;
+
+export function ollamaCpuOnly() {
+  try {
+    return localStorage.getItem(OLLAMA_CPU_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function setOllamaCpuOnly(enabled) {
+  try {
+    localStorage.setItem(OLLAMA_CPU_KEY, enabled ? 'true' : 'false');
+  } catch { /* storage unavailable */ }
+}
+
 // Reasoning models wrap their scratchpad in <think> tags; strip it from chat output.
 function cleanCompletion(text) {
   return String(text || '')
@@ -92,14 +113,24 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
   const cfg = LOCAL_RUNTIMES[parsed.runtime];
 
   if (parsed.runtime === 'ollama') {
-    const res = await queryLocalAi(cfg.port, '/api/chat', 'POST', {
+    const ask = (cpuOnly) => queryLocalAi(cfg.port, '/api/chat', 'POST', {
       model: parsed.model,
       messages,
       stream: false,
       // Thinking models would otherwise spend the short reply budget thinking.
       think: false,
-      options: { temperature, num_predict: maxTokens },
+      // num_gpu 0 keeps every layer in system RAM and runs on the CPU.
+      options: { temperature, num_predict: maxTokens, ...(cpuOnly ? { num_gpu: 0 } : {}) },
     });
+    let res = await ask(ollamaCpuOnly());
+    // Ollama's GPU build can crash on cards it does not support (for example
+    // "the provided PTX was compiled with an unsupported toolchain" on older
+    // NVIDIA cards). Retry on the CPU and remember the choice.
+    if (!ollamaCpuOnly() && GPU_FAILURE_RE.test(String(res?.error || ''))) {
+      console.warn('[LocalModels] Ollama GPU run failed; retrying on the CPU and remembering that:', res.error);
+      setOllamaCpuOnly(true);
+      res = await ask(true);
+    }
     if (res && typeof res === 'object' && typeof res.message?.content === 'string') {
       return cleanCompletion(res.message.content);
     }
@@ -118,6 +149,9 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
   const text = res?.choices?.[0]?.message?.content;
   if (typeof text === 'string') return cleanCompletion(text);
   const message = String(res?.error?.message || res?.error || `LM Studio did not return a reply. Is "${parsed.model}" loaded?`);
+  if (/insufficient system resources|requires approximately/i.test(message)) {
+    throw new Error(`${message} The memory estimate is driven mostly by the model's context length. In LM Studio, open the model's settings and lower its context length (32,768 is plenty for Cybeni), then try again.`);
+  }
   if (/failed to load model/i.test(message)) {
     throw new Error(`${message} LM Studio could not load it, most likely because the models already loaded leave too little VRAM. Unload a model in LM Studio, or pick a loaded model (marked ●).`);
   }

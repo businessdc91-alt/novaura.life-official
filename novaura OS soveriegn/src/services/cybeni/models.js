@@ -124,6 +124,12 @@ export function suggestRoles(models) {
   const reviewer = pool.find(k => k !== developer && family(k) !== family(developer))
     || pool.find(k => k !== developer)
     || developer;
-  const architect = pool.find(k => /-a\d+b|moe/i.test(k) && k !== developer) || reviewer;
-  return { architect, developer, reviewer, designer: architect };
+  // With the developer on LM Studio, an Ollama model makes a good architect: its
+  // output is short plans and verdicts, and Ollama can run it on the CPU and system
+  // RAM (see localModels.ollamaCpuOnly) without competing for the GPU.
+  const ollama = developer.startsWith('local|lmstudio:')
+    ? sorted(capable.filter(k => k.startsWith('local|ollama:')))[0]
+    : null;
+  const architect = ollama || pool.find(k => /-a\d+b|moe/i.test(k) && k !== developer) || reviewer;
+  return { architect, developer, reviewer, designer: architect === ollama ? developer : architect };
 }
