@@ -17,6 +17,44 @@ const ROLE_LABELS = {
 
 const ROLE_COLORS = { architect: 'text-amber-300', developer: 'text-cyan-300', reviewer: 'text-fuchsia-300', designer: 'text-emerald-300', tool: 'text-slate-300' };
 
+// Each requirement with the outcome of its acceptance tests from the last preview run.
+function RequirementsCheck({ result }) {
+  const [open, setOpen] = useState(false);
+  const tests = result.tests || [];
+  const outcomes = result.testResults;
+  if (!tests.length) return null;
+  if (!outcomes) return <div className="mt-1 text-slate-400">{tests.length} acceptance tests written; they run when the preview check is on.</div>;
+  const byId = new Map(outcomes.map(r => [r.id, r]));
+  const passed = outcomes.filter(r => r.passed).length;
+  const rows = (result.requirements || []).map(r => {
+    const own = tests.filter(t => t.requirement === r.id);
+    const ok = own.length ? own.every(t => byId.get(t.id)?.passed) : null;
+    return { ...r, ok, own };
+  });
+  return (
+    <div className="mt-1">
+      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-1 font-medium">
+        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        Acceptance tests: {passed}/{tests.length} pass
+      </button>
+      {open && (
+        <ul className="mt-1 space-y-0.5 pl-4">
+          {rows.map(r => (
+            <li key={r.id} className="flex items-start gap-1.5">
+              {r.ok === null ? <MinusCircle className="w-3 h-3 mt-0.5 shrink-0 text-slate-500" /> : r.ok ? <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0 text-emerald-400" /> : <XCircle className="w-3 h-3 mt-0.5 shrink-0 text-rose-400" />}
+              <span><span className="text-slate-400">{r.id}</span> {r.text}
+                {r.ok === false && r.own.map(t => byId.get(t.id)).filter(x => x && !x.passed).map(x => (
+                  <span key={x.id} className="block text-[10px] text-rose-300/80">{x.id}: {x.message.slice(0, 160)}</span>
+                ))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ModelPicker({ value, onChange, models }) {
   const groups = useMemo(() => {
     const g = new Map();
@@ -217,6 +255,7 @@ export default function AgentPanel({
                 {lastResult.unreviewed?.length > 0 && (
                   <div className="mt-1 text-amber-200">Not independently reviewed: the reviewer model could not run ({lastResult.unreviewed.join(', ')}). See the failed steps above.</div>
                 )}
+                <RequirementsCheck result={lastResult} />
                 {lastResult.summary && <div className="mt-1 whitespace-pre-wrap text-slate-200">{lastResult.summary}</div>}
               </div>
             )}

@@ -17,10 +17,22 @@
 //             orchestrator checkpoints, dependency tracing and limit validation
 //   fix       repair the errors the preview reported
 //
+// Acceptance tests: in standard and full mode the architect turns the request into
+// numbered requirements (R1, R2, ...) and behavioural tests before any code is
+// written. The developer builds against them, the preview runs them after every
+// build, and failures go back as concrete repair tasks. A build is only approved
+// when they pass. Tests live in .cybeni/acceptance.json, which models cannot edit.
+//
 // The runner takes its model call and runtime verifier as hooks, so it has no
 // UI, database or network dependencies of its own.
 
 import { normalizePath, staticCheck } from './previewBuilder.js';
+import { TESTS_SCHEMA, normalizeTests, normalizeRequirements, describeStep, failureProblems } from './testAgent.js';
+import { pickStarter, starterFiles, STARTER_NOTE } from './starters.js';
+import { libraryNotes } from './libraryNotes.js';
+
+export const TESTS_PATH = '.cybeni/acceptance.json';
+const PROTECTED_RE = /^\.cybeni\//;
 
 export const MODES = {
   quick: { label: 'Quick', description: 'Fast edits on an existing project (5 passes)' },
@@ -29,7 +41,7 @@ export const MODES = {
 };
 
 const PHASE_INFO = {
-  plan: ['Plan & file map', 'architect'],
+  plan: ['Plan, requirements & tests', 'architect'],
   build: ['Build', 'developer'],
   'build-check': ['Self-check against the plan', 'developer'],
   foundation: ['Foundation', 'developer'],
@@ -94,7 +106,17 @@ const FORMAT_RULES = `## Output format (mandatory)
 ...entire file...
 \`\`\`
 - Never output partial files, diffs, or placeholders such as "rest unchanged". Only output files you changed.
+- Exception for small fixes to a large existing file: you may instead output an edit block. The SEARCH text must be copied exactly from the current file and be unique in it:
+\`\`\`src/App.jsx
+<<<<<<< SEARCH
+exact lines from the current file
+=======
+the replacement lines
+>>>>>>> REPLACE
+\`\`\`
+  One block may hold several SEARCH/REPLACE pairs. New files and large changes always use complete files.
 - To delete a file, write a line: DELETE: path/to/file
+- Never write or change files under .cybeni/ (the acceptance tests).
 - Put at most three short lines of explanation before the files.
 - If the request is genuinely ambiguous and you cannot proceed sensibly, reply with one line starting "QUESTION:" and nothing else.`;
 
@@ -140,13 +162,59 @@ function pathFromPreamble(text) {
   return m && PATH_RE.exec(m[1])?.[0] === m[1] ? m[1] : null;
 }
 
+const EDIT_RE = /<<<<<<< SEARCH\n([\s\S]*?)\n?=======\n([\s\S]*?)\n?>>>>>>> REPLACE/g;
+
+/** SEARCH/REPLACE pairs in a block body, or null when the body is a whole file. */
+export function parseEditBlock(body) {
+  if (!/^<<<<<<< SEARCH$/m.test(body)) return null;
+  const pairs = [];
+  for (const m of body.replace(/\r\n/g, '\n').matchAll(EDIT_RE)) pairs.push({ search: m[1], replace: m[2] });
+  return pairs;
+}
+
 /**
- * Extract file writes and deletions from a model reply.
- * Returns { writes: Map(path -> content), deletes: Set(path), truncated: path|null }.
+ * Apply SEARCH/REPLACE edits to a file. An exact match is tried first, then a
+ * match that ignores indentation and trailing spaces (models often get those
+ * slightly wrong). Returns { content, failed: [search] }.
+ */
+export function applyEdits(content, pairs) {
+  let out = String(content ?? '');
+  const failed = [];
+  for (const { search, replace } of pairs) {
+    if (!search.trim()) { failed.push(search); continue; }
+    const at = out.indexOf(search);
+    if (at >= 0 && out.indexOf(search, at + 1) < 0) {
+      out = out.slice(0, at) + replace + out.slice(at + search.length);
+      continue;
+    }
+    const lines = out.split('\n');
+    const want = search.split('\n').map(l => l.trim());
+    while (want.length && !want[want.length - 1]) want.pop();
+    while (want.length && !want[0]) want.shift();
+    const hits = [];
+    for (let i = 0; i + want.length <= lines.length; i++) {
+      if (want.every((w, j) => lines[i + j].trim() === w)) hits.push(i);
+    }
+    if (hits.length !== 1) { failed.push(search); continue; }
+    // Keep the file's own indentation for the first replaced line.
+    const indent = /^\s*/.exec(lines[hits[0]])[0];
+    const repl = replace.split('\n');
+    const replIndent = /^\s*/.exec(repl[0] || '')[0];
+    const adjusted = repl.map(l => (l.startsWith(replIndent) ? indent + l.slice(replIndent.length) : l));
+    lines.splice(hits[0], want.length, ...adjusted);
+    out = lines.join('\n');
+  }
+  return { content: out, failed };
+}
+
+/**
+ * Extract file writes, edits and deletions from a model reply.
+ * Returns { writes: Map(path -> content), edits: Map(path -> pairs), deletes: Set(path), truncated: path|null }.
  */
 export function parseFileBlocks(text) {
   const src = String(text || '');
   const writes = new Map();
+  const edits = new Map();
   const deletes = new Set();
   const fence = /```([^\n`]*)\n([\s\S]*?)```/g;
   let last = 0;
@@ -172,7 +240,9 @@ export function parseFileBlocks(text) {
     }
     const clean = normalizePath(path);
     if (!clean || clean.length > 200) continue;
-    writes.set(clean, m[2].replace(/\n$/, ''));
+    const pairs = parseEditBlock(m[2]);
+    if (pairs) edits.set(clean, [...(edits.get(clean) || []), ...pairs]);
+    else writes.set(clean, m[2].replace(/\n$/, ''));
   }
   for (const d of src.matchAll(/^DELETE:\s*(\S+)\s*$/gim)) {
     const clean = normalizePath(d[1]);
@@ -184,7 +254,7 @@ export function parseFileBlocks(text) {
     const tail = src.slice(src.lastIndexOf('```') + 3);
     truncated = pathFromInfo(tail.split('\n')[0]) || 'the last file';
   }
-  return { writes, deletes, truncated, unlabeled };
+  return { writes, edits, deletes, truncated, unlabeled };
 }
 
 // "// src/App.jsx", "/* styles.css */", "<!-- index.html -->" or "# app.py" as the first line.
@@ -197,6 +267,24 @@ function pathFromFirstLineComment(body) {
 function verdictOf(text, approveWord) {
   const first = String(text || '').trim().split('\n')[0].replace(/[*#`]/g, '').trim();
   return new RegExp(`^${approveWord}\\b`, 'i').test(first);
+}
+
+/** The JSON object in a model reply, tolerating fences or prose around it. Null if none parses. */
+export function extractJson(text) {
+  const src = String(text || '').trim();
+  const fenced = /```(?:json)?\s*\n([\s\S]*?)```/i.exec(src);
+  const candidates = [src, fenced?.[1]];
+  const first = src.indexOf('{');
+  const last = src.lastIndexOf('}');
+  if (first >= 0 && last > first) candidates.push(src.slice(first, last + 1));
+  for (const c of candidates) {
+    if (!c) continue;
+    try {
+      const v = JSON.parse(c);
+      if (v && typeof v === 'object') return v;
+    } catch { /* try the next form */ }
+  }
+  return null;
 }
 
 function afterFirstLine(text) {
@@ -269,27 +357,65 @@ export async function runPipeline(input, hooks) {
   let approved = null;
   let summary = '';
 
+  // Requirements and acceptance tests saved by earlier runs on this project.
+  let requirements = [];
+  let tests = [];
+  let testResults = null;
+  if (files.has(TESTS_PATH)) {
+    try {
+      const saved = JSON.parse(files.get(TESTS_PATH));
+      tests = normalizeTests(saved);
+      requirements = normalizeRequirements(saved);
+    } catch {
+      log('The saved acceptance tests could not be read; they will be written again.');
+    }
+  }
+  // Quick edits may change behaviour on purpose, so saved tests only run in the other modes.
+  const runTests = mode !== 'quick';
+
+  // A new project starts from a known-good scaffold instead of a blank page.
+  let starter = null;
+  const starterPaths = [];
+  if (!files.size && mode !== 'fix' && input.starter !== false) {
+    starter = pickStarter(request);
+    for (const f of starterFiles(starter)) {
+      files.set(f.path, f.content);
+      starterPaths.push(f.path);
+    }
+    log(`Started from the ${starter === 'game' ? 'canvas game' : 'React + Tailwind'} starter.`);
+  }
+
   const restrictions = [SECURITY_LEVELS[input.security] || SECURITY_LEVELS.hardened, QUALITY_LEVELS[input.quality] || QUALITY_LEVELS.strict].join('\n');
 
   const cancelled = () => {
     if (hooks.isCancelled?.()) throw new Error('CANCELLED');
   };
 
-  async function call(role, task, { code = true, temperature, maxTokens, focus = [], extra = '' } = {}) {
+  const testsText = () => tests.map(t => `${t.id}${t.requirement ? ` [${t.requirement}]` : ''} ${t.name}:\n${t.steps.map(s => `  - ${describeStep(s)}`).join('\n')}`).join('\n');
+
+  // Imports in the project, so library notes follow what the code actually uses.
+  const importLines = () => [...files.values()].join('\n').split('\n').filter(l => /\bimport\b|require\(/.test(l)).join('\n');
+
+  async function call(role, task, { code = true, temperature, maxTokens, focus = [], extra = '', jsonSchema } = {}) {
     cancelled();
     const modelKey = roles[role];
     if (!modelKey) throw new Error(`No model is assigned to the ${role} role.`);
     const system = [ROLE_IDENTITY[role], code ? FORMAT_RULES : '', code ? STACK_RULES : '', `## Standards\n${restrictions}`].filter(Boolean).join('\n\n');
+    const notes = code ? libraryNotes(request, plan, importLines()) : '';
     const user = [
       `## User request\n${request}`,
       plan ? `## Plan\n${plan}` : '',
+      requirements.length ? `## Requirements\n${requirements.map(r => `${r.id}. ${r.text}`).join('\n')}` : '',
+      tests.length && code && runTests ? `## Acceptance tests\nThe finished app is tested with these steps in the preview (loaded once with empty storage, tests run in order). It must pass every one, so use these exact labels, placeholders and texts in the UI.\n${testsText()}` : '',
+      starter && code ? `## Starting point\n${STARTER_NOTE[starter]}` : '',
+      notes ? `## Library notes\n${notes}` : '',
       directive && code ? `## Orchestrator directive\n${directive}` : '',
       extra,
       `## Project files\n${projectContext(files, contextBudget(modelKey), focus)}`,
       `## Your task\n${task}`,
     ].filter(Boolean).join('\n\n');
     const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
-    const opts = { temperature: temperature ?? (role === 'designer' ? 0.6 : 0.25), maxTokens: maxTokens ?? (code ? 8192 : 2048) };
+    const opts = { temperature: temperature ?? (role === 'designer' ? 0.6 : 0.25), maxTokens: maxTokens ?? (code ? 8192 : 2048), ...(jsonSchema ? { jsonSchema } : {}) };
 
     let reply = await hooks.runModel(modelKey, messages, opts);
     stats.modelCalls++;
@@ -311,8 +437,13 @@ export async function runPipeline(input, hooks) {
   }
 
   function apply(reply, label) {
-    const { writes, deletes, truncated, unlabeled } = parseFileBlocks(reply);
+    const { writes, edits, deletes, truncated, unlabeled } = parseFileBlocks(reply);
+    const written = [];
+    const failedEdits = [];
+    let blocked = 0;
     for (const [p, c] of writes) {
+      if (PROTECTED_RE.test(p)) { blocked++; continue; }
+      written.push(p);
       if (files.get(p) !== c) {
         files.set(p, c);
         changed.add(p);
@@ -320,18 +451,37 @@ export async function runPipeline(input, hooks) {
         editsSinceVerify++;
       }
     }
+    for (const [p, pairs] of edits) {
+      if (PROTECTED_RE.test(p)) { blocked++; continue; }
+      if (!files.has(p)) {
+        failedEdits.push({ path: p, why: 'the file does not exist', searches: [] });
+        continue;
+      }
+      const r = applyEdits(files.get(p), pairs);
+      if (r.failed.length) failedEdits.push({ path: p, why: `${r.failed.length} of ${pairs.length} SEARCH block(s) were not found exactly once`, searches: r.failed });
+      if (r.content !== files.get(p)) {
+        files.set(p, r.content);
+        changed.add(p);
+        editsSinceVerify++;
+        written.push(p);
+      }
+    }
+    let removed = 0;
     for (const p of deletes) {
+      if (PROTECTED_RE.test(p)) { blocked++; continue; }
       if (files.delete(p)) {
         deleted.add(p);
         changed.delete(p);
         editsSinceVerify++;
+        removed++;
       }
     }
-    if (writes.size || deletes.size) {
-      log(`${label}: ${writes.size} file(s) written${deletes.size ? `, ${deletes.size} deleted` : ''}.`);
+    if (blocked) log(`${label}: ignored ${blocked} change(s) to the acceptance tests.`);
+    if (written.length || removed) {
+      log(`${label}: ${written.length} file(s) written${edits.size ? ' (with edit blocks)' : ''}${removed ? `, ${removed} deleted` : ''}.`);
       hooks.onFiles?.(snapshot(), [...changed]);
     }
-    return { count: writes.size + deletes.size, truncated, unlabeled, paths: [...writes.keys()] };
+    return { count: written.length + removed, truncated, unlabeled, failedEdits, paths: written };
   }
 
   // Code-writing pass. Asks once more if the reply was cut off, or if it held
@@ -354,6 +504,17 @@ export async function runPipeline(input, hooks) {
       ].join('\n'), opts);
       const more = apply(again, `${label} (reformatted)`);
       result = { ...result, count: more.count, paths: more.paths };
+    }
+    if (result.failedEdits?.length) {
+      // An edit whose SEARCH text does not match would silently drop a fix; ask for whole files.
+      log(`${label}: ${result.failedEdits.length} edit block(s) did not match; asking for complete files.`);
+      const again = await call(role, [
+        'Some of your edit blocks could not be applied because their SEARCH text does not match the current file:',
+        ...result.failedEdits.map(f => `- ${f.path}: ${f.why}${f.searches.length ? `\n  First unmatched SEARCH:\n${f.searches[0].slice(0, 600)}` : ''}`),
+        'The project files above show the current content. Output the COMPLETE corrected version of each of those files (whole files, no edit blocks), including the change you intended.',
+      ].join('\n'), { ...opts, focus: result.failedEdits.map(f => f.path) });
+      const more = apply(again, `${label} (whole files)`);
+      result = { ...result, count: result.count + more.count, failedEdits: more.failedEdits };
     }
     return { reply, ...result };
   }
@@ -400,26 +561,56 @@ export async function runPipeline(input, hooks) {
   async function runtimeCheck(label) {
     if (!hooks.verify) return { note: 'Skipped: no preview available.', clean: null };
     if (!files.size) return { note: 'Skipped: empty project.', clean: null };
-    const result = await hooks.verify(snapshot());
+    const active = runTests ? tests : [];
+    const result = await hooks.verify(snapshot(), { tests: active });
     cancelled();
     lastVerifiedAt = stats.modelCalls;
     editsSinceVerify = 0;
     const errors = result?.errors || [];
     const problems = [...errors];
     if (result?.blank && !errors.length) problems.push('The app rendered a blank page: nothing appeared in #root or the body.');
+    let testNote = '';
+    if (active.length && Array.isArray(result?.tests)) {
+      testResults = result.tests;
+      const passed = testResults.filter(r => r.passed).length;
+      testNote = ` ${passed}/${active.length} acceptance tests pass.`;
+      if (!testResults.length) problems.push('The acceptance tests did not run: the page never reported back. It may be stuck in a loop.');
+      problems.push(...failureProblems(testResults, active));
+    }
     runtimeClean = problems.length === 0;
-    log(`${label}: ${runtimeClean ? 'ran cleanly' : `${problems.length} problem(s)`}.`);
-    return { problems, clean: runtimeClean, note: runtimeClean ? 'Ran cleanly.' : `${problems.length} problem(s): ${problems[0].slice(0, 140)}` };
+    log(`${label}: ${runtimeClean ? 'ran cleanly' : `${problems.length} problem(s)`}.${testNote}`);
+    return { problems, clean: runtimeClean, note: runtimeClean ? `Ran cleanly.${testNote}` : `${problems.length} problem(s).${testNote} First: ${problems[0].slice(0, 140)}` };
   }
+
+  /** One line per requirement: passes, FAILS (with its tests) or has no automated test. */
+  function coverage() {
+    if (!tests.length) return 'No acceptance tests.';
+    if (!testResults) return 'Acceptance tests were written but have not run (no preview was available).';
+    const byId = new Map(testResults.map(r => [r.id, r]));
+    const status = (t) => `${t.id} ${byId.get(t.id)?.passed ? 'passed' : 'failed'}`;
+    const lines = requirements.map(r => {
+      const own = tests.filter(t => t.requirement === r.id);
+      if (!own.length) return `${r.id} (no automated test): ${r.text}`;
+      return `${r.id} ${own.every(t => byId.get(t.id)?.passed) ? 'passes' : 'FAILS'}: ${r.text} (${own.map(status).join(', ')})`;
+    });
+    const loose = tests.filter(t => !requirements.some(r => r.id === t.requirement));
+    if (loose.length) lines.push(`Other tests: ${loose.map(status).join(', ')}`);
+    return lines.join('\n');
+  }
+
+  // Files a problem report points at (stack traces, test failures), shown to the model first.
+  const focusFrom = (problems) => [...files.keys()].filter(p => !PROTECTED_RE.test(p) && problems.some(t => t.includes(p) || t.includes(`/${p.split('/').pop()}`)));
 
   async function repairLoop(initialProblems, label) {
     let problems = initialProblems;
     for (let round = 1; round <= maxFixRounds && problems.length; round++) {
+      const testFailures = problems.some(p => p.startsWith('Acceptance test'));
       await codePass('developer', `${label} round ${round}`, [
         'The app was run in the browser preview and failed with these problems:',
-        ...problems.map((p, i) => `${i + 1}. ${p}`),
-        'Find the root cause of each and fix it. Output the complete corrected files.',
-      ].join('\n'), { temperature: 0.15 });
+        ...problems.slice(0, 12).map((p, i) => `${i + 1}. ${p}`),
+        testFailures ? 'A failed acceptance test means the app does not yet do what was asked. The tests are fixed: change the app (its labels, texts and behaviour) so each passes. "On screen" lists what the test could see.' : '',
+        'Find the root cause of each and fix it. For a small fix in a large file you may use edit blocks; otherwise output complete corrected files.',
+      ].filter(Boolean).join('\n'), { temperature: 0.15, focus: focusFrom(problems) });
       const issues = staticCheck(snapshot());
       if (issues.length) {
         problems = issues.map(i => i.message);
@@ -436,31 +627,73 @@ export async function runPipeline(input, hooks) {
   const REVIEW_PHASES = new Set(['cross-review', 'inspection']);
   const failedReviews = [];
 
+  // The architect turns the request into numbered requirements and acceptance
+  // tests (structured JSON, one retry). Existing tests are updated, not discarded.
+  async function writeTests() {
+    const task = [
+      'Turn the request and plan into a contract the build will be tested against.',
+      'Reply with only a JSON object: {"requirements":[{"id":"R1","text":"..."}],"tests":[{"id":"T1","requirement":"R1","name":"...","steps":[...]}]}',
+      'requirements: every concrete, checkable thing the user asked for, numbered R1, R2, ... Name the exact visible labels the UI will use (button texts, input placeholders, headings), because the tests rely on them.',
+      'tests: 3 to 8 tests a person could carry out, each covering one requirement. The app is loaded once with empty storage and the tests run in order on the same page, so later tests see what earlier ones did.',
+      'Steps (use only these):',
+      '  {"do":"click","target":"<button or link text, or a label>"}',
+      '  {"do":"type","target":"<input placeholder or label>","text":"..."}',
+      '  {"do":"press","key":"Enter","target":"<input>"}   keys: Enter, Escape, Tab, Space, ArrowUp/ArrowDown/ArrowLeft/ArrowRight, or a letter',
+      '  {"do":"select","target":"<select label>","value":"<option text>"}',
+      '  {"do":"wait","ms":500}',
+      '  {"do":"expect_text","text":"..."}   {"do":"expect_no_text","text":"..."}',
+      '  {"do":"expect_match","pattern":"<regular expression>"}',
+      '  {"do":"expect_element","target":"<label, text or CSS selector>","text":"<optional>"}',
+      '  {"do":"expect_value","target":"<input>","text":"..."}',
+      '  {"do":"expect_count","target":"<CSS selector>","count":3}   (or "min":1)',
+      '  {"do":"expect_canvas"}   a canvas has something drawn on it',
+      'Rules: test only what is visible on the page. No network. Nothing timing-sensitive: a timer may only be checked for starting (for example Start turning into Pause). For canvas games: check the canvas is drawn, that pressing the control keys does not crash it, and that the score or HUD text appears. Keep targets short and literal.',
+      tests.length ? `Existing contract from earlier work on this project; keep what still applies, change what this request changes, and add what is new:\n${JSON.stringify({ requirements, tests })}` : '',
+    ].filter(Boolean).join('\n');
+    let parsed = null;
+    for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+      const reply = await call('architect', attempt === 1 ? task : `${task}\n\nYour previous reply was not a valid JSON object. Reply with the JSON object only.`, { code: false, temperature: 0.1, maxTokens: 4000, jsonSchema: TESTS_SCHEMA });
+      parsed = extractJson(reply);
+      if (parsed && !normalizeTests(parsed).length) parsed = null;
+    }
+    if (!parsed) {
+      log('The architect did not produce usable acceptance tests; building without them.');
+      return;
+    }
+    requirements = normalizeRequirements(parsed);
+    tests = normalizeTests(parsed);
+    files.set(TESTS_PATH, `${JSON.stringify({ requirements, tests }, null, 2)}\n`);
+    changed.add(TESTS_PATH);
+    hooks.onFiles?.(snapshot(), [...changed]);
+  }
+
   const handlers = {
     plan: async () => {
       plan = await call('architect', [
-        files.size ? 'Plan how to fulfil the request in this existing project.' : 'Plan the application from scratch.',
+        files.size && !starter ? 'Plan how to fulfil the request in this existing project.' : 'Plan the application from scratch, on the starter project.',
         'Write a concise plan with these sections:',
         'GOAL: one sentence.',
         'FEATURES: a numbered checklist of concrete, testable features (this is what every later pass is checked against).',
         'FILES: each file path with its purpose.',
         'DATA: data shapes and where they persist.',
         'RISKS: edge cases and pitfalls to handle.',
-        'Do not write code.',
+        'Do not write code. If the request is genuinely ambiguous in a way that changes what to build, reply with one line starting "QUESTION:" instead.',
       ].join('\n'), { code: false, temperature: 0.2, maxTokens: 2000 });
-      return `${(plan.match(/^\s*\d+[.)]/gm) || []).length} features planned.`;
+      await writeTests();
+      const features = (plan.match(/^\s*\d+[.)]/gm) || []).length;
+      return `${features} features planned; ${requirements.length} requirements and ${tests.length} acceptance tests written.`;
     },
     build: async () => {
-      const r = await codePass('developer', 'Build', files.size
+      const r = await codePass('developer', 'Build', files.size && !starter
         ? 'Implement the request on top of the existing project. Change only what is needed, keep everything else working, and output every file you change in full.'
-        : 'Build the complete application as planned: every file, fully working, polished defaults. No placeholders.', { focus: [] });
-      if (!r.count && !files.size) throw new Error('The developer model returned no files. Try a stronger model for the developer role.');
+        : 'Build the complete application as planned on the starter: every file, fully working, polished defaults. No placeholders.', { focus: [] });
+      if (!r.count && (starter || !files.size)) throw new Error('The developer model returned no files. Try a stronger model for the developer role.');
       return shortNote(r.reply) || `${r.count} file(s) written.`;
     },
     'build-check': () => selfCheck('developer', 'Build', 1, 1),
     foundation: async () => {
       const r = await codePass('developer', 'Foundation', 'Pass 1, Foundation: create the core architecture following the plan: file structure, entry points, data models, UI skeleton, routing and base styling. Every function needs a real implementation. No TODOs.');
-      if (!r.count && !files.size) throw new Error('The developer model returned no files. Try a stronger model for the developer role.');
+      if (!r.count && (starter || !files.size)) throw new Error('The developer model returned no files. Try a stronger model for the developer role.');
       return shortNote(r.reply) || `${r.count} file(s) written.`;
     },
     'foundation-check-1': () => selfCheck('developer', 'Foundation', 1, 2),
@@ -553,6 +786,7 @@ export async function runPipeline(input, hooks) {
       const reply = await call('reviewer', [
         'Final quality inspection. Check: does it run, are all planned features implemented, is it secure, is the UX polished, does it match what the user asked for?',
         runtimeClean === false ? 'Note: the last preview run still reported problems.' : '',
+        testResults ? `Automated acceptance results (from actually running the app):\n${coverage()}` : '',
         'Reply APPROVED on the first line followed by a short summary if everything passes.',
         'Otherwise reply ISSUES on the first line followed by a numbered list.',
       ].filter(Boolean).join('\n'), { code: false, temperature: 0.1, maxTokens: 1500 });
@@ -583,6 +817,7 @@ export async function runPipeline(input, hooks) {
       const reply = await call('architect', [
         'Sign off this build for the user.',
         failedReviews.length ? `Important: the independent ${failedReviews.join(' and ')} could not run, so no second model reviewed this build. Say so in the release note.` : '',
+        testResults ? `Automated acceptance results (from actually running the app). A requirement that FAILS is a known limitation and must be named in the release note:\n${coverage()}` : '',
         'First line: APPROVED or ISSUES.',
         'Then a short release note in plain language: what was built, how to use it, and any known limitations.',
       ].filter(Boolean).join('\n'), { code: false, temperature: 0.2, maxTokens: 1200 });
@@ -616,7 +851,7 @@ export async function runPipeline(input, hooks) {
         log(`${phase.label} failed: ${err.message}`);
         if (REVIEW_PHASES.has(phase.id)) failedReviews.push(phase.id);
         // A failed build pass leaves nothing to check; other failures are survivable.
-        if (['build', 'foundation', 'fix'].includes(phase.id) && changed.size === 0) throw err;
+        if (['build', 'foundation', 'fix'].includes(phase.id) && [...changed].every(p => PROTECTED_RE.test(p))) throw err;
       }
     }
   } catch (err) {
@@ -630,16 +865,22 @@ export async function runPipeline(input, hooks) {
   if (!summary && mode !== 'full' && mode !== 'standard') {
     summary = changed.size ? `Changed ${[...changed].join(', ')}.` : 'No files changed.';
   }
+  // Tests that ran and failed overrule any model's approval: the app does not do what was asked.
+  const testsFailed = Boolean(runTests && tests.length && testResults && !(testResults.length === tests.length && testResults.every(r => r.passed)));
+  if (testsFailed && summary) summary += `\n\nRequirements check:\n${coverage()}`;
   return {
     status: 'done',
     files: snapshot(),
-    changed: [...changed],
+    changed: [...new Set([...starterPaths, ...changed])],
     deleted: [...deleted],
     plan,
     summary,
-    approved: failedReviews.length ? false : approved,
+    approved: failedReviews.length || testsFailed ? false : approved,
     unreviewed: failedReviews,
     runtimeClean,
+    requirements,
+    tests,
+    testResults,
     stats: { ...stats, ms: Date.now() - stats.startedAt },
   };
 }

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Binds @monaco-editor/react to the locally bundled Monaco (offline, no CDN).
 import '../../config/monacoConfig.js';
 import {
-  Code2, Eye, Columns2, Plus, Trash2, Pencil, Download, ChevronDown, Sparkles, GitCommit, Globe, ShoppingBag, FileArchive, FileCode2, X,
+  Code2, Eye, Columns2, Plus, Trash2, Pencil, Download, ChevronDown, Sparkles, GitCommit, Globe, ShoppingBag, FileArchive, FileCode2, X, Gauge,
 } from 'lucide-react';
 import { db } from '../../database/sovereignDatabase.js';
 import { novaHub } from '../../services/novaHubService.js';
@@ -20,6 +20,7 @@ import AgentPanel from './cybeni/AgentPanel.jsx';
 import PreviewPane from './cybeni/PreviewPane.jsx';
 import CodePane from './cybeni/CodePane.jsx';
 import CybeniIntegrationsModal from './cybeni/CybeniIntegrationsModal.jsx';
+import BenchmarkModal from './cybeni/BenchmarkModal.jsx';
 
 const SETTINGS_KEY = 'cybeni_settings';
 const DEFAULT_SETTINGS = {
@@ -65,6 +66,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const [showNewProject, setShowNewProject] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showBenchmark, setShowBenchmark] = useState(false);
 
   const project = projects.find(p => p.slug === slug) || null;
   const say = useCallback((text, tone = 'info') => {
@@ -259,7 +261,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
       maxFixRounds: settings.maxFixRounds,
     }, {
       runModel,
-      verify: settings.autoVerify ? (snapshot) => verifyInHiddenFrame(snapshot) : undefined,
+      verify: settings.autoVerify ? (snapshot, opts) => verifyInHiddenFrame(snapshot, opts) : undefined,
       onPhase: (id, patch) => setPhases(ps => ps.map(p => (p.id === id ? { ...p, ...patch } : p))),
       onLog: (text) => setLogs(l => [...l.slice(-400), { text, at: Date.now() }]),
       onFiles: (snapshot, changed) => {
@@ -282,6 +284,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
       mode,
       status: result.status,
       approved: result.approved,
+      tests: result.testResults ? { passed: result.testResults.filter(r => r.passed).length, total: result.tests.length } : null,
       changed: result.changed,
       summary: (result.summary || result.error || '').slice(0, 1500),
       checkpointId,
@@ -326,6 +329,15 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   };
 
   // ── Projects UI actions ──────────────────────────────────────────────────
+
+  const openBenchmarkBuild = async (buildFiles, name) => {
+    const p = await createProject(name, 'react');
+    await replaceProjectFiles(p.slug, buildFiles);
+    await refreshProjects();
+    setSlug(p.slug);
+    setShowBenchmark(false);
+    say(`Opened "${name}" as a project.`, 'good');
+  };
 
   const makeProject = async (name, template) => {
     const p = await createProject(name, template);
@@ -465,6 +477,9 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
           <button onClick={() => setShowLibrary(true)} className="flex items-center gap-1 px-2 py-1 rounded-md border border-purple-600/50 text-purple-200 text-[11px] hover:bg-purple-900/40">
             <Sparkles className="w-3.5 h-3.5" /> Library
           </button>
+          <button onClick={() => setShowBenchmark(true)} disabled={running} title="Measure Cybeni on a fixed set of apps" className="flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-[11px] hover:bg-slate-800 disabled:opacity-40">
+            <Gauge className="w-3.5 h-3.5" /> Benchmark
+          </button>
           <div className="relative">
             <button onClick={() => setShowExport(s => !s)} className="flex items-center gap-1 px-2 py-1 rounded-md bg-cyan-700/40 border border-cyan-600/50 text-cyan-100 text-[11px]">
               <Download className="w-3.5 h-3.5" /> Ship <ChevronDown className="w-3 h-3" />
@@ -547,6 +562,8 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
       )}
 
       {showNewProject && <NewProjectDialog onCreate={makeProject} onClose={() => setShowNewProject(false)} />}
+
+      {showBenchmark && <BenchmarkModal roles={settings.roles} onClose={() => setShowBenchmark(false)} onOpenBuild={openBenchmarkBuild} />}
 
       <CybeniIntegrationsModal
         isOpen={showLibrary}

@@ -14,6 +14,8 @@
 // Pure functions: no DOM or database access, so it can be tested in Node.
 
 import { transform } from 'sucrase';
+import { TEST_AGENT_SOURCE, STORAGE_ISOLATION_SOURCE } from './testAgent.js';
+import { pinnedSpecifier } from './libraryNotes.js';
 
 export const REACT_VERSION = '18.3.1';
 const ESM_CDN = 'https://esm.sh';
@@ -111,8 +113,9 @@ export function npmImportMap(bareSpecifiers) {
     'react-dom': `${ESM_CDN}/react-dom@${REACT_VERSION}?external=react`,
     'react-dom/client': `${ESM_CDN}/react-dom@${REACT_VERSION}/client?external=react,react-dom`,
   };
+  // Common packages are pinned to the major version Cybeni's library notes describe.
   for (const spec of bareSpecifiers) {
-    if (!map[spec]) map[spec] = `${ESM_CDN}/${spec}?external=react,react-dom`;
+    if (!map[spec]) map[spec] = `${ESM_CDN}/${pinnedSpecifier(spec)}?external=react,react-dom`;
   }
   return map;
 }
@@ -268,7 +271,8 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
   } else {
     for (const [path, code] of modules) imports[`@cy/${path}`] = `data:text/javascript;base64,${toBase64Utf8(code)}`;
   }
-  const head = `<script>${ERROR_REPORTER}</script>\n<script type="importmap">${JSON.stringify({ imports })}</script>`;
+  // Storage isolation must run before the app reads storage; the test agent waits for instructions.
+  const head = `<script>${STORAGE_ISOLATION_SOURCE}</script>\n<script>${ERROR_REPORTER}</script>\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>\n<script type="importmap">${JSON.stringify({ imports })}</script>`;
   if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => `${m}\n${head}`);
   else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, m => `${m}\n<head>${head}</head>`);
   else html = `${head}\n${html}`;

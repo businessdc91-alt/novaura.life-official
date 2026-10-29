@@ -55,9 +55,12 @@ export function isNoise(text) {
 
 /**
  * Run a build in a hidden frame and report what happened.
- * Resolves { errors: [string], blank: boolean, timedOut: boolean, logs: [] }.
+ * The app starts from empty storage (a first-time user's view); the person's own
+ * preview data is restored afterwards. Acceptance tests, if given, run once the
+ * app has loaded.
+ * Resolves { errors: [string], blank, timedOut, logs, staticIssues, tests: [result] }.
  */
-export async function verifyInHiddenFrame(files, { session = newSessionId(), timeoutMs = 15000, settleMs = 900 } = {}) {
+export async function verifyInHiddenFrame(files, { session = newSessionId(), timeoutMs = 15000, settleMs = 900, tests = [] } = {}) {
   const published = await publishPreview(session, files);
   const frame = document.createElement('iframe');
   frame.setAttribute('sandbox', published.sandbox);
@@ -66,14 +69,26 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
   const errors = [];
   const logs = [];
   let ready = null;
+  let testResults = [];
 
   const result = await new Promise((resolve) => {
     let settleTimer = null;
+    let testTimer = null;
     const finish = (timedOut) => {
       window.removeEventListener('message', onMessage);
       clearTimeout(hardTimer);
       clearTimeout(settleTimer);
+      clearTimeout(testTimer);
       resolve({ timedOut });
+    };
+    const startTests = () => {
+      // Always sent, even with no tests: the agent then restores the person's storage.
+      frame.contentWindow?.postMessage({ __cybeniTests: true, tests }, published.origin === 'null' ? '*' : published.origin);
+      const budget = Math.min(180000, 5000 + tests.reduce((n, t) => n + 1500 + t.steps.length * 2800, 0));
+      testTimer = setTimeout(() => {
+        testResults = tests.map(t => ({ id: t.id, requirement: t.requirement || '', name: t.name, passed: false, failedStep: -1, message: 'The tests did not finish in time; the page may be stuck in a loop.' }));
+        finish(false);
+      }, budget);
     };
     const onMessage = (e) => {
       if (e.source !== frame.contentWindow || !e.data?.__cybeni) return;
@@ -82,14 +97,18 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
       else if (d.type === 'console') {
         logs.push({ level: d.level, text: d.text });
         if (d.level === 'error' && !isNoise(d.text)) errors.push(d.text);
-      } else if (d.type === 'ready') {
+      } else if (d.type === 'ready' && !ready) {
         ready = d;
-        settleTimer = setTimeout(() => finish(false), settleMs);
+        clearTimeout(hardTimer);
+        settleTimer = setTimeout(startTests, settleMs);
+      } else if (d.type === 'test-results') {
+        testResults = Array.isArray(d.results) ? d.results : [];
+        finish(false);
       }
     };
     const hardTimer = setTimeout(() => finish(true), timeoutMs);
     window.addEventListener('message', onMessage);
-    if (published.src) frame.src = published.src;
+    if (published.src) frame.src = `${published.src}&cybeni-isolate=1`;
     else frame.srcdoc = published.srcdoc;
     document.body.appendChild(frame);
   });
@@ -100,5 +119,5 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
   if (result.timedOut && !ready) {
     unique.push(`The app did not finish loading within ${Math.round(timeoutMs / 1000)} seconds. An import may be failing, or the page may be stuck in a loop.`);
   }
-  return { errors: unique, blank: ready ? Boolean(ready.empty) : true, timedOut: result.timedOut, logs, staticIssues: published.issues };
+  return { errors: unique, blank: ready ? Boolean(ready.empty) : true, timedOut: result.timedOut, logs, staticIssues: published.issues, tests: testResults };
 }

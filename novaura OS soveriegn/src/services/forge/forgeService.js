@@ -287,7 +287,7 @@ export async function runForgeChange(slug, request, { mode = 'standard', hooks =
   const checkpointId = await createCheckpoint(slug, `Forge: ${request.slice(0, 120)}`, before);
   const result = await runPipeline({ request, files: before, mode, roles, security: 'hardened', quality: 'strict' }, {
     runModel,
-    verify: (snapshot) => verifyInHiddenFrame(snapshot),
+    verify: (snapshot, opts) => verifyInHiddenFrame(snapshot, opts),
     ...hooks,
   });
   // Legal files must survive any change.
