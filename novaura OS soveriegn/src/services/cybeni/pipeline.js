@@ -161,7 +161,9 @@ function pathFromInfo(info) {
   const tokens = String(info || '').trim().split(/\s+/).filter(Boolean);
   for (const t of tokens) {
     const kv = /^(?:path|file|title|filename)=["']?([^"']+)["']?$/i.exec(t);
-    const candidate = kv ? kv[1] : t;
+    // "jsx:src/App.jsx" (language, colon, path) is a common label format too.
+    const langPath = /^[a-z][a-z0-9+#-]*:([\w@][\w@./-]*)$/i.exec(t);
+    const candidate = kv ? kv[1] : langPath ? langPath[1] : t;
     if (candidate.includes('.') && PATH_RE.test(candidate) && PATH_RE.exec(candidate)[0] === candidate) return candidate;
   }
   return null;
