@@ -833,6 +833,23 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [x] LIVE on the founder PC (2026-10-29): one-click installer completed on E:\NovauraAI (ComfyUI v0.43.0, PyTorch 2.14.1+cu126, Quadro M6000 24GB); ACE-Step 1.5 and SDXL downloads resumed through an outage and match Hugging Face SHA-256. Song: 2 takes of 45 s stereo 48 kHz in 83 s with lyrics. Game loop: 32 s = 12 bars at 90 BPM, seam jump below a normal sample step, 15 s render (loops skip ACE-Step's song-plan stage, which otherwise ends instrumentals at about half length). SDXL cover 125 s, app icon 109 s with clean transparent cut-out. Fixed from live runs: COMBO option matching and key names (B-flat -> Bb), loop trimming of silence/fade-outs, gradient-following background removal.
 - [ ] Not yet verified: listening check of loops made without the song plan; Music Studio / AI Engines / Discovery Forge click-tested inside the Tauri app; Forge rebrand-to-desktop-install run end to end.
 
+**Bring-your-own-key frontier models (2026-10-29):**
+- [x] Provider registry (`src/services/cloudProviders.js`): Claude, Gemini (AI Studio), OpenAI, Kimi, Qwen (DashScope intl), DeepSeek, Mistral, Grok, Amazon Nova (Bedrock API key + region), OpenRouter, custom OpenAI-compatible endpoint. Four API shapes (anthropic / gemini / openai / bedrock); JSON-schema structured output passed through to every backend including LM Studio and Ollama.
+- [x] Native `cloud_ai_request` (`src-tauri/src/cloud.rs`): curl with https-only provider host allowlist, headers and body on stdin (keys never in the process list or on disk), avoids CORS refusals. Custom endpoints use fetch.
+- [x] Settings → AI Keys & Models: per-provider key, model list loaded from the provider, extra models for Cybeni roles, endpoint/region, live test. Cybeni model keys `cloud|provider|model`.
+- [x] Tests: transport 6/6 (incl. live 401 and 1 MB body), adapter shapes 11/11, live Qwen call + JSON mode + 102-model listing.
+- Note: Claude Pro/Max and Google AI Pro subscriptions do not include API keys (Anthropic API is billed separately; Google AI Studio keys are free with limits).
+
+**Cybeni one-shot upgrades (2026-10-29):**
+- [x] Acceptance tests: architect writes requirements R1..Rn + behavioural tests (JSON schema) before code; `testAgent.js` runs them inside the isolated preview (React-safe typing, Enter submits forms, polled expectations, control words like "checkbox"); every test gets a fresh page with empty storage, the person's preview data restored after. Failures become repair tasks; approval requires passing tests. Contract in `.cybeni/acceptance.json` (models cannot edit it). Agent panel shows the requirement checklist.
+- [x] Triage: tests that keep failing with no progress are judged by a second model; wrong tests are dropped and reported (max half). Repairs stop early after two stalled rounds.
+- [x] SEARCH/REPLACE edit blocks (exact, then indentation-tolerant; ambiguous/missing refused → whole files requested); repairs focus the files errors point at.
+- [x] React and canvas-game starters for new projects; pinned major versions for common packages with matching API notes (`libraryNotes.js`).
+- [x] Benchmark (Cybeni → Benchmark): 15 apps with hand-written hidden tests, validated against reference apps (15/15 pass) and against the wrong app (15/15 rejected); scores + history saved.
+- [x] Tests: pipeline 37/37 new + 30/30 existing; agent in Chrome 10/10.
+- [x] LIVE run 1 (Ollama gemma4:12b architect on CPU, LM Studio Gemma 4 26B-A4B developer, Gemma 4 12B reviewer): todo app built, 3/3 hidden tests, but 2/6 own tests (architect wrote order-dependent and blank-text tests) → fixed with fresh page per test, degenerate-step filter, triage.
+- [x] LIVE run 2 with the fixes (same models): todo, quiz and sign-up form each built in 11-14 min (was 55), all own tests pass, all approved, hidden benchmark tests 8/8. The first scoring said 4/8 because the hand-written benchmark tests still assumed tests share one page; rewritten to be self-contained and revalidated (15/15 pass on reference apps, 15/15 reject the wrong app).
+
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 
 **Environment gotcha:** this machine's shell has `NODE_ENV=production`, so a plain `npm install` silently skips devDependencies (vite, oxlint, @tauri-apps/cli). Use `npm install --include=dev`.
