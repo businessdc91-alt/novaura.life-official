@@ -1,11 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Sparkles, Wand2, Shuffle, PenLine, ChevronDown, ChevronRight, Loader2, Mic2, Search, Lock, Unlock, Eye } from 'lucide-react';
+import { Sparkles, Wand2, Shuffle, PenLine, ChevronDown, ChevronRight, Loader2, Mic2, Mic, Search, Lock, Unlock, Eye } from 'lucide-react';
 import {
   GENRE_GROUPS, ERAS, MOODS, INSTRUMENTS, VOICES, VOCAL_STYLES, MODES, LOOP_SCENES, STRUCTURES, KEYS, LANGUAGES,
   DEFAULT_SPEC, suggestedBpm, compose, blueprint, offlineIdeas,
 } from '../../../services/music/musicCatalog.js';
 import { inspire, writeLyrics } from '../../../services/music/musicStudio.js';
-import { Chip } from './shared.jsx';
+import { Chip, useDictation } from './shared.jsx';
 
 const toggle = (list, item, max = 99) => (list.includes(item) ? list.filter(x => x !== item) : [...list, item].slice(-max));
 
@@ -33,6 +33,9 @@ export default function CreatePanel({ spec, setSpec, onCreate, jobs, engineReady
   const [showPrompt, setShowPrompt] = useState(false);
 
   const set = (patch) => setSpec({ ...spec, ...patch });
+  const speakIdea = useDictation((t) => setSpec(s => ({ ...s, description: s.description ? `${s.description} ${t}` : t })));
+  const speakLyrics = useDictation((t) => setSpec(s => ({ ...s, lyrics: s.lyrics ? `${s.lyrics}
+${t}` : t })));
   const vocal = spec.mode === 'song' || spec.mode === 'acapella';
   const prompt = useMemo(() => compose(spec), [spec]);
   const plan = useMemo(() => blueprint(spec), [spec]);
@@ -92,7 +95,9 @@ export default function CreatePanel({ spec, setSpec, onCreate, jobs, engineReady
 
         {/* Idea */}
         <div className="p-3 rounded-xl bg-gradient-to-br from-fuchsia-900/40 to-indigo-900/40 border border-white/10">
-          <div className="text-[12px] font-semibold text-white/90 mb-1.5">What is it about?</div>
+          <div className="flex items-center text-[12px] font-semibold text-white/90 mb-1.5">What is it about?
+            {speakIdea.supported && <button type="button" onClick={speakIdea.start} title="Say it instead of typing" className={`ml-auto flex items-center gap-1 text-[11px] font-normal ${speakIdea.listening ? 'text-rose-300' : 'text-white/50 hover:text-white'}`}><Mic className="w-3.5 h-3.5" />{speakIdea.listening ? 'Listening…' : 'Speak'}</button>}
+          </div>
           <textarea value={spec.description} onChange={e => set({ description: e.target.value })} rows={2}
             placeholder={spec.mode === 'loop' ? 'e.g. a mysterious forest level with hidden ruins' : 'e.g. a late-night drive after a breakup, but hopeful'}
             className="w-full resize-none bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[13px] text-white placeholder:text-white/30 focus:outline-none focus:border-fuchsia-400/60" />
@@ -216,6 +221,7 @@ export default function CreatePanel({ spec, setSpec, onCreate, jobs, engineReady
                 {writing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PenLine className="w-3.5 h-3.5" />} {spec.lyrics ? 'Rewrite lyrics' : 'Write lyrics with AI'}
               </button>
               {spec.lyrics && <button onClick={() => doLyrics('Keep the theme but make the chorus catchier and more singable.')} disabled={writing} className="text-[11px] text-white/50 hover:text-white">Punch up the chorus</button>}
+              {speakLyrics.supported && <button type="button" onClick={speakLyrics.start} className={`ml-auto flex items-center gap-1 text-[11px] ${speakLyrics.listening ? 'text-rose-300' : 'text-white/50 hover:text-white'}`}><Mic className="w-3.5 h-3.5" />{speakLyrics.listening ? 'Listening…' : 'Dictate a line'}</button>}
             </div>
             <textarea value={spec.lyrics} onChange={e => set({ lyrics: e.target.value })} rows={8}
               placeholder={'[Verse 1]\nYour words here…\n\n[Chorus]\n…'}

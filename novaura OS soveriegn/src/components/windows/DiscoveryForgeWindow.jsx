@@ -13,6 +13,7 @@ import { phasesFor, MODES } from '../../services/cybeni/pipeline.js';
 import { loadProjectFiles, buildZip, downloadBytes, updateProject } from '../../services/cybeni/projectStore.js';
 import { publishPreview, clearPreview, newSessionId } from '../../services/cybeni/previewHost.js';
 import { Cover } from './music/shared.jsx';
+import { withImageModel } from '../../services/engines/imageGen.js';
 
 const SOURCE_CHIPS = [
   ['github', 'GitHub', GitBranch], ['hf_spaces', 'HF Spaces', Box], ['hf_models', 'HF Models', Sparkles],
@@ -81,8 +82,8 @@ function ResultCard({ r, onImport, importing }) {
   );
 }
 
-function Discover({ onImported, say }) {
-  const [request, setRequest] = useState('');
+function Discover({ onImported, say, initialRequest }) {
+  const [request, setRequest] = useState(initialRequest || '');
   const [sources, setSources] = useState([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -102,6 +103,9 @@ function Discover({ onImported, say }) {
       setStatus('');
     }
   };
+
+  // A request handed over by Aura runs straight away.
+  useEffect(() => { if (initialRequest) run(initialRequest); }, [initialRequest]); // run once per handed-over request
 
   const doImport = async (r) => {
     setImporting(r.id);
@@ -334,7 +338,7 @@ function Completed({ projects, say, refresh, openWorkbench }) {
           </div>
           {busy[p.slug] && <div className="flex items-center gap-1.5 text-[11px] text-amber-200 mt-2"><Loader2 className="w-3.5 h-3.5 animate-spin" />{busy[p.slug]}</div>}
           <div className="grid grid-cols-2 gap-1.5 mt-3 text-[11px]">
-            <button onClick={() => act(p.slug, 'Generating icon…', async () => { const iconBlobId = await generateAppIcon(p.name, p.brand?.tagline || ''); await updateProject(p.slug, { iconBlobId }); refresh(); })} className="flex items-center gap-1 justify-center py-1.5 rounded-lg border border-slate-600 text-slate-200"><ImageIcon className="w-3.5 h-3.5" /> {p.iconBlobId ? 'New icon' : 'Generate icon'}</button>
+            <button onClick={() => act(p.slug, 'Generating icon…', async () => { const iconBlobId = await withImageModel(() => generateAppIcon(p.name, p.brand?.tagline || ''), { onStatus: (t) => setBusy(b => ({ ...b, [p.slug]: t })) }); await updateProject(p.slug, { iconBlobId }); refresh(); })} className="flex items-center gap-1 justify-center py-1.5 rounded-lg border border-slate-600 text-slate-200"><ImageIcon className="w-3.5 h-3.5" /> {p.iconBlobId ? 'New icon' : 'Generate icon'}</button>
             <button onClick={() => act(p.slug, 'Adding to Sovereign…', async () => { await integrateAsApp(p.slug, { name: p.name, color: p.brand?.primary, iconBlobId: p.iconBlobId }); setInstalled(i => [...i, p.slug]); say(`${p.name} is now an app in your launcher.`, 'good'); })} className="flex items-center gap-1 justify-center py-1.5 rounded-lg bg-emerald-700 text-white"><Rocket className="w-3.5 h-3.5" /> {installed.includes(p.slug) ? 'Update in Sovereign' : 'Add to Sovereign'}</button>
             <button onClick={() => act(p.slug, 'Installing to your desktop…', async () => { const link = await installToDesktop(p.slug, { name: p.name, iconBlobId: p.iconBlobId }); say(`Installed. Shortcut: ${link}`, 'good'); })} className="flex items-center gap-1 justify-center py-1.5 rounded-lg border border-slate-600 text-slate-200"><Monitor className="w-3.5 h-3.5" /> Install on this PC</button>
             <button onClick={() => act(p.slug, 'Packing…', async () => downloadBytes(`${p.slug}.zip`, buildZip(await loadProjectFiles(p.slug)), 'application/zip'))} className="flex items-center gap-1 justify-center py-1.5 rounded-lg border border-slate-600 text-slate-200"><FileArchive className="w-3.5 h-3.5" /> Export .zip</button>
@@ -381,8 +385,9 @@ function Brand({ brand, setBrand }) {
   );
 }
 
-export default function DiscoveryForgeWindow() {
+export default function DiscoveryForgeWindow({ props: windowProps } = {}) {
   const [tab, setTab] = useState('discover');
+  const [auraRequest, setAuraRequest] = useState(windowProps?.request || '');
   const [projects, setProjects] = useState([]);
   const [selected, setSelected] = useState('');
   const [brand, setBrand] = useState({ name: '', tagline: '', primary: '#7c3aed', secondary: '#06b6d4', tone: '', company: '' });
@@ -395,6 +400,11 @@ export default function DiscoveryForgeWindow() {
   const refresh = useCallback(async () => setProjects(await forgeProjects()), []);
 
   useEffect(() => { refresh(); getBrandProfile().then(setBrand); }, [refresh]);
+  useEffect(() => {
+    const on = (e) => { if (e.detail?.appId === 'discovery_forge' && e.detail.props?.request) { setTab('discover'); setAuraRequest(e.detail.props.request); } };
+    window.addEventListener('novaura:app_context', on);
+    return () => window.removeEventListener('novaura:app_context', on);
+  }, []);
 
   const tabs = [['discover', 'Discover', Search], ['workbench', 'Workbench', Hammer], ['completed', 'Completed', CheckCircle2], ['brand', 'Brand', Palette]];
   const tones = { good: 'bg-emerald-600', bad: 'bg-rose-600' };
@@ -412,7 +422,7 @@ export default function DiscoveryForgeWindow() {
         ))}
       </div>
       <div className="flex-1 min-h-0">
-        {tab === 'discover' && <Discover say={say} onImported={(p) => { refresh(); setSelected(p.slug); setTab('workbench'); }} />}
+        {tab === 'discover' && <Discover key={auraRequest} initialRequest={auraRequest} say={say} onImported={(p) => { refresh(); setSelected(p.slug); setTab('workbench'); }} />}
         {tab === 'workbench' && <Workbench projects={projects} selected={selected} setSelected={setSelected} brand={brand} say={say} refresh={refresh} />}
         {tab === 'completed' && <Completed projects={projects} say={say} refresh={refresh} openWorkbench={(slug) => { setSelected(slug); setTab('workbench'); }} />}
         {tab === 'brand' && <Brand brand={brand} setBrand={setBrand} />}

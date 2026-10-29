@@ -125,3 +125,25 @@ export async function makeIconPng(blob, size = 512) {
   out.getContext('2d').drawImage(canvas, 0, 0, size, size);
   return out.convertToBlob({ type: 'image/png' });
 }
+
+/**
+ * Run an image task, installing Stable Diffusion XL first (after asking) if no
+ * image model is present. onStatus(text) reports download progress.
+ */
+export async function withImageModel(task, { onStatus } = {}) {
+  try {
+    return await task();
+  } catch (err) {
+    if (err.code !== 'NO_IMAGE_MODEL') throw err;
+    const { getEngineConfig, downloadModel } = await import('./comfyEngine.js');
+    const { installDir } = await getEngineConfig();
+    if (!installDir) {
+      window.dispatchEvent(new CustomEvent('novaura-open-window', { detail: 'ai_engines' }));
+      throw new Error('Set up the local AI engine first (AI Engines is opening), then try again.');
+    }
+    if (!window.confirm('Images need an image model. Install Stable Diffusion XL now? (6.9 GB, free for commercial use)')) throw err;
+    await downloadModel(SDXL_ENTRY, { onProgress: (p) => onStatus?.(`Installing SDXL: ${Math.round(p.fraction * 100)}%`) });
+    onStatus?.('SDXL installed. Generating…');
+    return task();
+  }
+}

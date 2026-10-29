@@ -265,6 +265,22 @@ fn model_target(dir: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(dir.join("ComfyUI").join("models").join(parts[1]).join(parts[2]))
 }
 
+/// curl 7.71+ can retry after any failure (a lost connection included); the
+/// curl in older Windows 10 builds rejects the flag, so it is only added when supported.
+fn curl_retries_all_errors() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let mut cmd = Command::new("curl.exe");
+        cmd.arg("--version").stdout(Stdio::piped()).stderr(Stdio::null());
+        let Ok(out) = hide_window(&mut cmd).output() else { return false };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let version = text.split_whitespace().nth(1).unwrap_or("");
+        let mut nums = version.split('.').map(|n| n.parse::<u32>().unwrap_or(0));
+        let (major, minor) = (nums.next().unwrap_or(0), nums.next().unwrap_or(0));
+        (major, minor) >= (7, 71)
+    })
+}
+
 #[derive(Serialize)]
 pub struct DownloadStatus {
     running: bool,
@@ -280,7 +296,7 @@ pub fn engine_download_model(
     url: String,
     rel_path: String,
     token: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let dir = validate_install_dir(&install_dir)?;
     if !DOWNLOAD_HOSTS.iter().any(|h| url.starts_with(h)) || url.contains(char::is_whitespace) || url.contains('"') {
         return Err("Downloads are limited to Hugging Face and GitHub".into());
@@ -290,7 +306,7 @@ pub fn engine_download_model(
     }
     let target = model_target(&dir, &rel_path)?;
     if target.exists() {
-        return Ok(());
+        return Ok(true); // already downloaded
     }
     fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
     let part = target.with_extension(format!("{}.part", target.extension().and_then(|e| e.to_str()).unwrap_or("bin")));
@@ -298,11 +314,16 @@ pub fn engine_download_model(
     let mut st = state().lock().map_err(|_| "Engine state unavailable")?;
     if let Some(d) = st.downloads.get_mut(&id) {
         if matches!(d.child.try_wait(), Ok(None)) {
-            return Ok(());
+            return Ok(false);
         }
     }
     let mut cmd = Command::new("curl.exe");
-    cmd.args(["-L", "--fail", "--retry", "5", "--retry-delay", "5", "-C", "-", "--silent", "--show-error", "-K", "-", "-o"])
+    // Resume (-C -) after drops; a transfer stuck under 1 KB/s for a minute counts as dropped.
+    cmd.args(["-L", "--fail", "--retry", "20", "--retry-delay", "10", "--speed-limit", "1024", "--speed-time", "60", "-C", "-"]);
+    if curl_retries_all_errors() {
+        cmd.arg("--retry-all-errors");
+    }
+    cmd.args(["--silent", "--show-error", "-K", "-", "-o"])
         .arg(&part)
         .arg(&url)
         .stdin(Stdio::piped())
@@ -317,7 +338,7 @@ pub fn engine_download_model(
         let _ = stdin.write_all(config.as_bytes());
     }
     st.downloads.insert(id, Download { child, part, target });
-    Ok(())
+    Ok(false)
 }
 
 #[tauri::command]

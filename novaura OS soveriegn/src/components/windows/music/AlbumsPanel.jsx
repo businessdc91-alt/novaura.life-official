@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Plus, Disc3, Image as ImageIcon, Globe, Trash2, Play, Loader2, ArrowLeft, X } from 'lucide-react';
 import { createAlbum, updateAlbum, deleteAlbum, generateAlbumCover, publishAlbum, updateTrack } from '../../../services/music/musicStudio.js';
 import { Cover, fmtTime } from './shared.jsx';
+import { withImageModel } from '../../../services/engines/imageGen.js';
 
 export default function AlbumsPanel({ albums, tracks, onPlay, say }) {
   const [openId, setOpenId] = useState(null);
@@ -38,7 +39,7 @@ export default function AlbumsPanel({ albums, tracks, onPlay, say }) {
             <div className="text-[12px] text-white/40">{list.length} tracks · {fmtTime(total)}</div>
             <div className="flex gap-2 mt-2">
               <button onClick={() => list[0] && onPlay(list[0], list)} disabled={!list.length} className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-white text-black text-[12px] font-semibold disabled:opacity-40"><Play className="w-3.5 h-3.5" /> Play</button>
-              <button onClick={() => act('Painting cover…', () => generateAlbumCover(album))} disabled={!list.length} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-white/20 text-white text-[12px] disabled:opacity-40"><ImageIcon className="w-3.5 h-3.5" /> Generate album art</button>
+              <button onClick={() => act('Painting cover…', () => withImageModel(() => generateAlbumCover(album), { onStatus: setBusy }))} disabled={!list.length} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-white/20 text-white text-[12px] disabled:opacity-40"><ImageIcon className="w-3.5 h-3.5" /> Generate album art</button>
               <button onClick={() => act('Publishing…', () => publishAlbum(album))} disabled={!list.length || album.published} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-white/20 text-white text-[12px] disabled:opacity-40"><Globe className="w-3.5 h-3.5" /> {album.published ? 'Published' : 'Publish album'}</button>
               <button onClick={() => { if (window.confirm('Delete this album? Its tracks stay in your library.')) { deleteAlbum(album.id); setOpenId(null); } }} className="p-1.5 rounded-full text-white/40 hover:text-rose-300"><Trash2 className="w-4 h-4" /></button>
             </div>

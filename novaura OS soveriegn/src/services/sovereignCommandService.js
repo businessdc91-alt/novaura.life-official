@@ -23,7 +23,9 @@ When the user asks you to take an action, you must provide a friendly response A
 
 Available actions:
 1. Open / Switch Application:
-{ "type": "NAVIGATE_APP", "payload": { "appId": "cybeni"|"nova_hub"|"literature"|"chain_weaver"|"credential_enclave"|"sentinel"|"media_foundry"|"disk_architect"|"hypervisor"|"settings"|"files"|"terminal"|"onboarding_guide"|"novamail"|"novasocial"|"ailounge" } }
+{ "type": "NAVIGATE_APP", "payload": { "appId": "cybeni"|"nova_hub"|"literature"|"chain_weaver"|"credential_enclave"|"sentinel"|"media_foundry"|"disk_architect"|"hypervisor"|"settings"|"files"|"terminal"|"onboarding_guide"|"novamail"|"novasocial"|"ailounge"|"music_studio"|"discovery_forge"|"ai_engines" } }
+   To make a song, use appId "music_studio" with "props": { "description": "<the song idea>" }.
+   To find apps, models or assets to build on, use appId "discovery_forge" with "props": { "request": "<what they want>" }.
 
 2. Commit & Push to Nova Hub (Decentralized Git):
 { "type": "PUSH_TO_NOVA_HUB", "payload": { "repoId": "repo_cybeni_core", "message": "Commit description" } }
@@ -192,6 +194,22 @@ function parseAuraResponse(rawText) {
 
 function fallbackAuraExecution(input, activeDoc) {
   const lower = input.toLowerCase();
+
+  // Music: "make a song about...", "compose a lofi beat", "create a boss battle loop"
+  if (/\b(make|create|compose|generate|write|produce)\b.*\b(song|track|beat|music|tune|loop|instrumental|jingle|soundtrack|album)\b/.test(lower)) {
+    return {
+      text: 'Opening Music Studio with your idea. Pick a direction or tweak the details, then press Create.',
+      action: { type: 'NAVIGATE_APP', payload: { appId: 'music_studio', props: { description: input } } },
+    };
+  }
+
+  // Discovery: "find me an app that...", "search for a pixel art tileset"
+  if (/\b(find|search|look for|looking for|get me)\b.*\b(app|apps|model|models|asset|assets|tileset|sprites?|repo|repository|open source|template|game)\b/.test(lower)) {
+    return {
+      text: 'Searching open source in the Discovery Forge. I will explain each license so you know what you can rebrand.',
+      action: { type: 'NAVIGATE_APP', payload: { appId: 'discovery_forge', props: { request: input } } },
+    };
+  }
 
   // 1. Hub & Git actions
   if (lower.includes('commit') || lower.includes('push to hub') || lower.includes('nova hub') || lower.includes('git push')) {
@@ -453,8 +471,14 @@ export async function executeAuraAction(action, openAppCallback, { confirmed = f
     }
 
     case 'NAVIGATE_APP': {
-      const { appId } = action.payload;
-      if (openAppCallback && appId) openAppCallback(appId);
+      const { appId, props } = action.payload;
+      if (props && appId) {
+        // Opens the app with context; an already-open window picks it up too.
+        window.dispatchEvent(new CustomEvent('novaura-open-window', { detail: { appId, props } }));
+        window.dispatchEvent(new CustomEvent('novaura:app_context', { detail: { appId, props } }));
+      } else if (openAppCallback && appId) {
+        openAppCallback(appId);
+      }
       return { success: true, message: `Switched view to ${appId}` };
     }
 

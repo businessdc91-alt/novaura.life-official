@@ -20,9 +20,10 @@ const NAV = [
   ['engine', 'Engine', Cpu],
 ];
 
-export default function MusicStudioWindow() {
+export default function MusicStudioWindow({ props: windowProps } = {}) {
   const [tab, setTab] = useState('create');
-  const [spec, setSpec] = useState(DEFAULT_SPEC);
+  // An idea handed over by Aura ("make a song about…") pre-fills the description.
+  const [spec, setSpec] = useState(() => ({ ...DEFAULT_SPEC, description: windowProps?.description || '' }));
   const [tracks, setTracks] = useState([]);
   const [albums, setAlbums] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -62,7 +63,17 @@ export default function MusicStudioWindow() {
     checkEngine();
     getMusicSettings().then(setSettings);
     window.addEventListener('novaura:music_updated', refresh);
-    return () => window.removeEventListener('novaura:music_updated', refresh);
+    const onContext = (e) => {
+      if (e.detail?.appId === 'music_studio' && e.detail.props?.description) {
+        setTab('create');
+        setSpec(s => ({ ...s, description: e.detail.props.description }));
+      }
+    };
+    window.addEventListener('novaura:app_context', onContext);
+    return () => {
+      window.removeEventListener('novaura:music_updated', refresh);
+      window.removeEventListener('novaura:app_context', onContext);
+    };
   }, [refresh, checkEngine]);
 
   const pump = useCallback(async () => {

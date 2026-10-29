@@ -237,7 +237,7 @@ export default function EngineSetup({ purpose, onReady }) {
                       <span className="flex items-center gap-1 text-[11px] text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5" /> Installed</span>
                     ) : pr ? (
                       <span className="flex items-center gap-2 text-[11px] text-cyan-300">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> {Math.round((pr.fraction || 0) * 100)}% · {gb(pr.bytes || 0)}
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> {Math.round((pr.fraction || 0) * 100)}% · {gb(pr.bytes || 0)}{pr.status ? ` · ${pr.status}` : ''}
                         <button onClick={() => cancelDownload(entry)} className="text-slate-500 hover:text-rose-300"><X className="w-3.5 h-3.5" /></button>
                       </span>
                     ) : (

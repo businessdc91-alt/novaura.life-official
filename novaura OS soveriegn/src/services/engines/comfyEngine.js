@@ -169,6 +169,8 @@ export function isModelInstalled(entry, installed) {
  * Download a catalog model. Calls onProgress({ bytes, total, fraction }).
  * Resolves when every file is in place.
  */
+const MAX_RESUMES = 8;
+
 export async function downloadModel(entry, { onProgress, token } = {}) {
   const { installDir } = await getEngineConfig();
   if (!installDir) throw new Error('Install the engine first.');
@@ -177,13 +179,27 @@ export async function downloadModel(entry, { onProgress, token } = {}) {
   for (let i = 0; i < entry.files.length; i++) {
     const f = entry.files[i];
     const id = `${entry.id}-${i}`;
-    await invoke('engine_download_model', { id, installDir, url: f.url, relPath: f.rel, token: token || null });
+    const start = () => invoke('engine_download_model', { id, installDir, url: f.url, relPath: f.rel, token: token || null });
+    if (await start()) { doneBytes += f.bytes || 0; continue; } // already on disk
+    // curl already retries and resumes; if it still gives up (a long outage), wait
+    // and resume from the partial file. Denied access and cancelling are final.
+    let resumes = 0;
     for (;;) {
       await new Promise(r => setTimeout(r, 1500));
       const s = await invoke('engine_download_status', { id });
       onProgress?.({ bytes: doneBytes + s.bytes, total, fraction: total ? Math.min(1, (doneBytes + s.bytes) / total) : 0 });
-      if (s.error) throw new Error(s.error);
-      if (s.done || (!s.running && !s.error)) break;
+      if (s.done) break;
+      if (s.error === 'No such download') throw new Error('Download cancelled.');
+      if (s.error) {
+        if (/access denied/i.test(s.error) || resumes >= MAX_RESUMES) throw new Error(s.error);
+        resumes++;
+        const wait = Math.min(120, 15 * resumes);
+        onProgress?.({ bytes: doneBytes + s.bytes, total, fraction: total ? Math.min(1, (doneBytes + s.bytes) / total) : 0, status: `Connection lost. Resuming in ${wait}s (try ${resumes} of ${MAX_RESUMES})` });
+        await new Promise(r => setTimeout(r, wait * 1000));
+        await start();
+        continue;
+      }
+      if (!s.running) break;
     }
     doneBytes += f.bytes || 0;
   }

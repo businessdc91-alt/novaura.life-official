@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Play, Heart, MoreHorizontal, Image as ImageIcon, Globe, Download, Trash2, Disc3, Scissors, Loader2, Search, Send, X, Share2 } from 'lucide-react';
 import { generateCover, updateTrack, deleteTrack, addToAlbum, publishTrack, unpublishTrack, getBlob } from '../../../services/music/musicStudio.js';
 import { buildZip, downloadBytes } from '../../../services/cybeni/projectStore.js';
+import { withImageModel } from '../../../services/engines/imageGen.js';
 import { getConnectedPeers, sendFileToPeer } from '../../../services/sovereignMesh.js';
 import { Cover, fmtTime } from './shared.jsx';
 
@@ -94,7 +95,7 @@ function TrackCard({ track, albums, onPlay, playing, say, onEdit }) {
             <button onClick={() => setMenu(m => !m)} className="text-white/40 hover:text-white"><MoreHorizontal className="w-4 h-4" /></button>
             {menu && (
               <div className="absolute right-0 bottom-6 z-30 w-52 py-1 rounded-lg bg-zinc-900 border border-white/10 shadow-2xl text-[12px] text-white/85" onMouseLeave={() => setMenu(false)}>
-                <button onClick={() => act('Painting cover…', () => generateCover(track))} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10"><ImageIcon className="w-3.5 h-3.5" /> {track.coverBlobId ? 'New cover art' : 'Generate cover art'}</button>
+                <button onClick={() => act('Painting cover…', () => withImageModel(() => generateCover(track), { onStatus: setBusy }))} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10"><ImageIcon className="w-3.5 h-3.5" /> {track.coverBlobId ? 'New cover art' : 'Generate cover art'}</button>
                 {albums.length > 0 && (
                   <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-white/35">Add to album</div>
                 )}

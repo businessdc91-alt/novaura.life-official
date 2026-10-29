@@ -130,3 +130,21 @@ export function Chip({ active, onClick, children, title }) {
     </button>
   );
 }
+
+/** Voice dictation with the browser's speech recognition, appended to text. */
+export function useDictation(onText) {
+  const [listening, setListening] = useState(false);
+  const Rec = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const start = () => {
+    if (!Rec || listening) return;
+    const rec = new Rec();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onresult = (e) => onText(e.results[0][0].transcript);
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    rec.start();
+    setListening(true);
+  };
+  return { supported: Boolean(Rec), listening, start };
+}

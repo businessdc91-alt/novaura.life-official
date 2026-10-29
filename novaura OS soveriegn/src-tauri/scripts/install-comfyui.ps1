@@ -26,14 +26,35 @@ $VenvDir = Join-Path $InstallDir 'venv'
 $Python = Join-Path $VenvDir 'Scripts\python.exe'
 
 function Set-Status([string]$Phase, [string]$Message, [int]$Percent) {
+  $script:Phase = $Phase
+  $script:Percent = $Percent
   $obj = [ordered]@{ phase = $Phase; message = $Message; percent = $Percent; updatedAt = (Get-Date).ToString('o') }
   [System.IO.File]::WriteAllText($StatusFile, ($obj | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding $false))
   Write-Host "[$Phase] $Message"
 }
 
+# Network steps survive connection drops: each is retried with growing waits.
+# Everything already downloaded stays in the cache, so a retry is quick.
+function Invoke-WithRetry([string]$What, [scriptblock]$Step, [int]$Attempts = 6) {
+  for ($i = 1; $i -le $Attempts; $i++) {
+    & $Step
+    if ($LASTEXITCODE -eq 0) { return }
+    if ($i -lt $Attempts) {
+      $wait = [math]::Min(120, 10 * $i * $i)
+      Write-Host "$What failed (attempt $i of $Attempts). The connection may have dropped; retrying in $wait s."
+      Set-Status $script:Phase "${What}: connection problem, retrying in $wait s (attempt $($i + 1) of $Attempts)" $script:Percent
+      Start-Sleep -Seconds $wait
+    }
+  }
+  throw "$What failed after $Attempts attempts. Check your internet connection and press Try again; finished downloads are kept."
+}
+
 function Get-File([string]$Url, [string]$Dest) {
-  & curl.exe -L --fail --retry 4 --retry-delay 3 --silent --show-error -o $Dest $Url
-  if ($LASTEXITCODE -ne 0) { throw "Download failed ($LASTEXITCODE): $Url" }
+  # These files are small and GitHub archives do not support resuming, so each attempt starts fresh.
+  Invoke-WithRetry "Downloading $(Split-Path -Leaf $Url)" {
+    if (Test-Path $Dest) { Remove-Item $Dest -Force }
+    & curl.exe -L --fail --retry 4 --retry-delay 3 --silent --show-error -o $Dest $Url
+  }
 }
 
 try {
@@ -42,6 +63,7 @@ try {
   $env:UV_PYTHON_INSTALL_DIR = Join-Path $ToolsDir 'python'
   $env:UV_LINK_MODE = 'copy'
   $env:PIP_CACHE_DIR = Join-Path $CacheDir 'pip'
+  $env:UV_HTTP_TIMEOUT = '120'
 
   # ---- Space check -----------------------------------------------------------
   $driveName = (Split-Path -Qualifier $InstallDir).TrimEnd(':')
@@ -83,23 +105,20 @@ try {
   # ---- Python ----------------------------------------------------------------
   if (-not (Test-Path $Python)) {
     Set-Status 'python' 'Installing Python 3.12 (private copy)' 30
-    & $uv venv --python 3.12 $VenvDir
-    if ($LASTEXITCODE -ne 0) { throw 'Creating the Python environment failed.' }
+    Invoke-WithRetry 'Installing Python' { & $uv venv --python 3.12 $VenvDir }
   }
 
   # ---- PyTorch ---------------------------------------------------------------
   Set-Status 'torch' "Installing PyTorch ($TorchVariant). This is the big download, a few GB." 38
   if ($TorchVariant -eq 'directml') {
-    & $uv pip install --python $Python torch-directml
+    Invoke-WithRetry 'Installing PyTorch' { & $uv pip install --python $Python torch-directml }
   } else {
-    & $uv pip install --python $Python torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$TorchVariant"
+    Invoke-WithRetry 'Installing PyTorch' { & $uv pip install --python $Python torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$TorchVariant" }
   }
-  if ($LASTEXITCODE -ne 0) { throw 'Installing PyTorch failed.' }
 
   # ---- ComfyUI requirements --------------------------------------------------
   Set-Status 'requirements' 'Installing ComfyUI requirements' 70
-  & $uv pip install --python $Python -r (Join-Path $ComfyDir 'requirements.txt')
-  if ($LASTEXITCODE -ne 0) { throw 'Installing ComfyUI requirements failed.' }
+  Invoke-WithRetry 'Installing ComfyUI requirements' { & $uv pip install --python $Python -r (Join-Path $ComfyDir 'requirements.txt') }
 
   # ---- Verify the GPU ----------------------------------------------------------
   Set-Status 'verify' 'Checking that PyTorch can use your GPU' 88
@@ -120,8 +139,7 @@ print(json.dumps(info))
     if (-not $supported) {
       # Newer PyTorch builds dropped older cards (Maxwell/Pascal). 2.8.0 on CUDA 12.6 still supports them.
       Set-Status 'verify' "This PyTorch build does not support your GPU ($($info.device), sm_$($info.capability)); installing a compatible release" 90
-      & $uv pip install --python $Python 'torch==2.8.0' 'torchvision==0.23.0' 'torchaudio==2.8.0' --index-url 'https://download.pytorch.org/whl/cu126'
-      if ($LASTEXITCODE -ne 0) { throw 'Installing the compatible PyTorch release failed.' }
+      Invoke-WithRetry 'Installing a compatible PyTorch' { & $uv pip install --python $Python 'torch==2.8.0' 'torchvision==0.23.0' 'torchaudio==2.8.0' --index-url 'https://download.pytorch.org/whl/cu126' }
       $info = (& $Python $probeFile | Select-Object -Last 1) | ConvertFrom-Json
       $supported = $info.cuda -and ($info.archs | Where-Object { $_ -eq "sm_$($info.capability)" })
       if (-not $supported) { throw "PyTorch still cannot use $($info.device). ComfyUI can run on the CPU instead (choose the CPU option)." }
