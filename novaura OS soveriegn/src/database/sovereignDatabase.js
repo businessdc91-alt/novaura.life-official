@@ -103,6 +103,22 @@ class SovereignDatabase extends Dexie {
       memories: '++id, category, title, importance, lastAccessed, updatedAt, updated_at',
     });
 
+    // v14 — AI Lounge mesh rooms and the decentralized Inference Exchange
+    this.version(14).stores({
+      lounge_rooms: 'id, name, joinedAt, lastActivity',
+      lounge_agents: 'id, name, updatedAt',
+      lounge_messages: 'id, roomId, ts, [roomId+ts]',
+      inference_hosts: 'id, hostNode, lastSeen',
+      inference_keys: 'id, host, exp, addedAt',
+      inference_grants: 'id, grantee, revoked, exp, createdAt',
+      inference_access_requests: 'id, status, createdAt',
+    });
+
+    // v15 — Cybeni: per-project checkpoints (snapshots taken before every AI run)
+    this.version(15).stores({
+      cybeni_checkpoints: 'id, project, createdAt',
+    });
+
     this.identities = this.table('identities');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
@@ -144,6 +160,14 @@ class SovereignDatabase extends Dexie {
     this.marketplace_publications = this.table('marketplace_publications');
     this.developer_api_keys = this.table('developer_api_keys');
     this.retro_arcade_stats = this.table('retro_arcade_stats');
+    this.lounge_rooms = this.table('lounge_rooms');
+    this.lounge_agents = this.table('lounge_agents');
+    this.lounge_messages = this.table('lounge_messages');
+    this.inference_hosts = this.table('inference_hosts');
+    this.inference_keys = this.table('inference_keys');
+    this.inference_grants = this.table('inference_grants');
+    this.inference_access_requests = this.table('inference_access_requests');
+    this.cybeni_checkpoints = this.table('cybeni_checkpoints');
   }
 
 

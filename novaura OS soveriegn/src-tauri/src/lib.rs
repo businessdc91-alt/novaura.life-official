@@ -1,4 +1,5 @@
 pub mod mesh;
+pub mod preview;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -1441,14 +1442,51 @@ async fn query_local_ai_raw(
         }
     }
 
-    let resp_str = String::from_utf8_lossy(&response_bytes);
-    let header_end = resp_str.find("\r\n\r\n").or_else(|| resp_str.find("\n\n"));
-    let body_part = match header_end {
-        Some(idx) => resp_str[idx + 4..].to_string(),
-        None => resp_str.to_string(),
-    };
+    Ok(String::from_utf8_lossy(&http_response_body(&response_bytes)).into_owned())
+}
 
-    Ok(body_part)
+/// Extract the body of a raw HTTP/1.1 response, undoing chunked transfer encoding.
+/// Ollama switches to chunked encoding once a reply passes ~4 KB, and returning the
+/// raw chunk framing made long completions unparseable as JSON.
+fn http_response_body(raw: &[u8]) -> Vec<u8> {
+    let (header_end, sep_len) = match raw.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(i) => (i, 4),
+        None => match raw.windows(2).position(|w| w == b"\n\n") {
+            Some(i) => (i, 2),
+            None => return raw.to_vec(),
+        },
+    };
+    let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
+    let body = &raw[header_end + sep_len..];
+    let chunked = headers
+        .lines()
+        .any(|l| l.starts_with("transfer-encoding:") && l.contains("chunked"));
+    if !chunked {
+        return body.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(body.len());
+    let mut pos = 0;
+    while pos < body.len() {
+        let line_end = match body[pos..].windows(2).position(|w| w == b"\r\n") {
+            Some(i) => pos + i,
+            None => break,
+        };
+        let size_str = String::from_utf8_lossy(&body[pos..line_end]);
+        let size_hex = size_str.split(';').next().unwrap_or("").trim();
+        let size = match usize::from_str_radix(size_hex, 16) {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if size == 0 {
+            break;
+        }
+        let start = line_end + 2;
+        let end = (start + size).min(body.len());
+        out.extend_from_slice(&body[start..end]);
+        pos = end + 2;
+    }
+    out
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1570,6 +1608,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(mesh_manager.clone())
+        // Cybeni previews run on their own origin, isolated from the OS UI (see preview.rs).
+        .register_uri_scheme_protocol("cyprev", |_ctx, request| preview::handle(&request))
         .setup(move |app| {
             let handle = app.handle().clone();
             mesh_manager.set_app_handle(handle);
@@ -1609,6 +1649,8 @@ pub fn run() {
             probe_local_ai,
             query_local_ai_raw,
             get_native_hardware_spec,
+            preview::cybeni_preview_publish,
+            preview::cybeni_preview_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -1694,5 +1736,17 @@ mod safety_tests {
         assert!(!sealed.contains("sk-test"));
         assert_eq!(open_vault_payload(sealed).unwrap(), secret);
         assert_eq!(open_vault_payload(secret.to_string()).unwrap(), secret);
+    }
+
+    #[test]
+    fn http_body_plain_and_chunked() {
+        let plain = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"a\":1}";
+        assert_eq!(http_response_body(plain), b"{\"a\":1}".to_vec());
+
+        let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"a\"\r\n3;ext=1\r\n:1}\r\n0\r\n\r\n";
+        assert_eq!(http_response_body(chunked), b"{\"a\":1}".to_vec());
+
+        let bare = b"HTTP/1.1 200 OK\n\n{}";
+        assert_eq!(http_response_body(bare), b"{}".to_vec());
     }
 }

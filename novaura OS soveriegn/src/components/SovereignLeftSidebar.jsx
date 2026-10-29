@@ -45,7 +45,7 @@ const CATEGORIES = [
       { id: 'novaphone', label: 'NovaPhone', icon: PhoneCall, desc: 'Sovereign Telecom & P2P Video' },
       { id: 'novamail', label: 'NovaMail', icon: Mail, desc: 'Encrypted P2P Mailbox' },
       { id: 'novasocial', label: 'NovaSocial', icon: Users, desc: 'Sovereign Feed & Stories' },
-      { id: 'ailounge', label: 'AI Lounge', icon: Bot, desc: 'Multi-Agent Mesh Lounge' },
+      { id: 'ailounge', label: 'AI Lounge', icon: Bot, desc: 'AI rooms & shared inference' },
     ],
   },
   {

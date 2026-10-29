@@ -235,7 +235,7 @@ export const APP_CAPABILITY_PROFILES = {
       'window:*',
     ],
     allowedAppCalls: {},
-    dataScope: ['chat_history'],
+    dataScope: ['lounge_rooms', 'lounge_agents', 'lounge_messages', 'inference_keys', 'inference_grants', 'inference_hosts'],
     canAccessVaultSecrets: false,
     canAccessRawDisk: false,
   },

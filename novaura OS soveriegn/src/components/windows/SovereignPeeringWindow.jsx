@@ -1154,7 +1154,7 @@ export default function SovereignPeeringWindow() {
                       Distributed Swarm AI Compute & Sovereign Outbox
                     </h2>
                     <p className="text-xs text-slate-400">
-                      Pool GPU power across peers • Remote AI inference • Asynchronous store-and-forward outbox
+                      Share GPU with ally contacts • Remote AI inference • Asynchronous store-and-forward outbox. Everyone else: AI Lounge → Inference Exchange
                     </p>
                   </div>
                 </div>
@@ -1169,7 +1169,7 @@ export default function SovereignPeeringWindow() {
                   }`}
                 >
                   <Zap className={`w-3.5 h-3.5 ${sharingInferenceState ? 'text-purple-400' : 'text-slate-500'}`} />
-                  <span>{sharingInferenceState ? 'SHARING LOCAL GPU (ACTIVE)' : 'SHARE LOCAL GPU (OFF)'}</span>
+                  <span>{sharingInferenceState ? 'SHARING GPU WITH ALLIES (ACTIVE)' : 'SHARE GPU WITH ALLIES (OFF)'}</span>
                 </button>
               </div>
 

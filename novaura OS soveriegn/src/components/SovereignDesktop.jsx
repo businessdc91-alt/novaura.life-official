@@ -11,6 +11,9 @@ import { useKernel } from '../kernel/useKernel';
 import { kernel as kernelSingleton } from '../kernel/NovaKernel.js';
 import { APP_MAP, getAppById } from '../config/appRegistry';
 import { getLocalIdentity, getUnreadCount } from '../services/sovereignMesh';
+// Side-effect imports: register AI Lounge and Inference Exchange mesh handlers at boot,
+// so hosting and room presence work while their window is closed.
+import '../services/aiLoungeService';
 import { callService, CallState } from '../services/sovereignCallService';
 import { Phone, PhoneCall, PhoneOff, Video } from 'lucide-react';
 import SovereignLeftSidebar from './SovereignLeftSidebar';

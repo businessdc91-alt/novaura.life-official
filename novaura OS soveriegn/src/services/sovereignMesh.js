@@ -73,12 +73,10 @@ export function verifyPacketSignature(packet) {
     if (cleanPub.length !== 64) return false;
     const pubBytes = new Uint8Array(cleanPub.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
 
-    // Validate that sender_id cryptographically binds to public key
-    const prefix = cleanPub.slice(0, 16);
-    if (!packet.sender_id.startsWith('did:nova:') && packet.sender_id !== cleanPub && packet.sender_id !== ('0x' + cleanPub)) {
-      return false;
-    }
-    if (packet.sender_id.startsWith('did:nova:') && !packet.sender_id.includes(prefix)) {
+    // sender_id must name exactly this public key. A prefix match let a crafted
+    // id such as did:nova:<victim><attacker prefix> pass with the attacker's key.
+    const sid = String(packet.sender_id || '');
+    if (sid !== `did:nova:${cleanPub}` && sid !== cleanPub && sid !== ('0x' + cleanPub)) {
       return false;
     }
 
@@ -93,6 +91,18 @@ export function verifyPacketSignature(packet) {
     console.warn('[SovereignMesh] Packet signature verification error:', err);
     return false;
   }
+}
+
+// The sender DID of a packet that passed verification (handlers only ever see
+// verified application packets, so this is the authenticated author).
+export function verifiedSenderDid(packet) {
+  const pub = String(packet?.sender_pubkey || '').replace(/^0x/, '').toLowerCase();
+  return /^[0-9a-f]{64}$/.test(pub) ? `did:nova:${pub}` : null;
+}
+
+export function didToPubHex(did) {
+  const m = /^did:nova:([0-9a-f]{64})$/.exec(String(did || ''));
+  return m ? m[1] : null;
 }
 
 // ── End-to-End Encryption (E2EE) with X25519 Montgomery & AES-256-GCM ───────
@@ -255,6 +265,35 @@ if (typeof window !== 'undefined') {
   hydrateFromDatabase();
 }
 
+// ── Pluggable packet handlers ───────────────────────────────────────────────
+// Services such as the AI Lounge and the Inference Exchange register here
+// instead of growing the switch below. Handlers receive verified packets only.
+
+const _meshHandlers = new Map();
+
+export function registerMeshHandler(type, handler) {
+  if (!ALLOWED_MESH_PACKET_TYPES.has(type)) {
+    throw new Error(`registerMeshHandler: ${type} is not an allowed mesh packet type`);
+  }
+  _meshHandlers.set(type, handler);
+}
+
+let _meshNodeIdPromise = null;
+
+// The routable node id (NODE-...) that directed packets must be addressed to.
+export function getMeshNodeId() {
+  if (!_meshNodeIdPromise) {
+    _meshNodeIdPromise = getPhysicalMeshStatus()
+      .then(status => status?.node_id || null)
+      .catch(() => null)
+      .then(id => {
+        if (!id) _meshNodeIdPromise = null;
+        return id;
+      });
+  }
+  return _meshNodeIdPromise;
+}
+
 // ── Inbound Packet Processor (Common to BroadcastChannel & Native TCP) ──────
 
 function handleIncomingMeshPacket(type, payload, packet = {}) {
@@ -276,12 +315,11 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     'MESH_JOIN_ROOM'
   ].includes(type);
 
-  if (!isInfraPacket && packet && (packet.signature || packet.sender_pubkey)) {
-    const verified = verifyPacketSignature(packet);
-    if (!verified) {
-      console.warn(`[SovereignMesh] SECURITY ALERT: Dropped unverified/forged packet ${packet.id || 'unknown'} of type ${type}`);
-      return;
-    }
+  // Every application packet must carry a valid signature. Unsigned packets used
+  // to skip this check entirely, which let anyone forge mail or inference jobs.
+  if (!isInfraPacket && !verifyPacketSignature(packet)) {
+    console.warn(`[SovereignMesh] SECURITY ALERT: Dropped unverified/forged packet ${packet?.id || 'unknown'} of type ${type}`);
+    return;
   }
 
   switch (type) {
@@ -541,10 +579,10 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_INFERENCE_REQUEST': {
-      const { jobId, prompt, role, maxTokens, requesterName } = payload || packet?.payload || {};
-      const requesterId = packet?.sender_id || payload?.requesterId;
+      const { jobId, prompt, role, maxTokens, requesterName, replyNode } = payload || packet?.payload || {};
+      const requesterId = verifiedSenderDid(packet);
       if (jobId && prompt && requesterId) {
-        handleIncomingInferenceRequest(jobId, prompt, role || 'aura', maxTokens, requesterId, requesterName);
+        handleIncomingInferenceRequest(jobId, prompt, role || 'aura', maxTokens, requesterId, requesterName, replyNode);
       }
       break;
     }
@@ -650,8 +688,15 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
       break;
     }
 
-    default:
+    default: {
+      const handler = _meshHandlers.get(type);
+      if (handler) {
+        Promise.resolve()
+          .then(() => handler(payload || packet?.payload || {}, packet))
+          .catch(err => console.warn(`[SovereignMesh] ${type} handler error:`, err));
+      }
       break;
+    }
   }
 }
 
@@ -990,6 +1035,14 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_SITE_RESPONSE',
   'MESH_BETA_FEEDBACK',
   'MESH_BETA_FEEDBACK_ACK',
+  'MESH_LOUNGE_MESSAGE',
+  'MESH_LOUNGE_PRESENCE',
+  'MESH_INFERENCE_OFFER',
+  'MESH_INFERENCE_DISCOVER',
+  'MESH_INFERENCE_ACCESS_REQUEST',
+  'MESH_INFERENCE_ACCESS_REPLY',
+  'MESH_INFERENCE_CALL',
+  'MESH_INFERENCE_RESULT',
 ]);
 
 export function broadcastMeshPacket(type, payload) {
@@ -1733,11 +1786,13 @@ export async function isPeerBlocked(peerId) {
 
 // ── Ecosystem: P2P Distributed AI Inference Sharing ────────────────────────
 
+// Open GPU sharing is opt-in and limited to contacts marked "ally". Anyone else
+// goes through the Inference Exchange (signed, identity-bound access keys).
 export function isSharingInference() {
   try {
-    return localStorage.getItem('novaura_mesh_share_inference') !== 'false';
+    return localStorage.getItem('novaura_mesh_share_inference') === 'true';
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -1765,6 +1820,8 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
   const { prompt, role = 'aura', maxTokens = 1024, timeoutMs = 45000 } = opts;
   const jobId = 'inf_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
   const myId = getLocalIdentity();
+  // Replies are directed packets, which route by node id, not by DID.
+  const replyNode = await getMeshNodeId();
 
   return new Promise((resolve, reject) => {
     let timer = null;
@@ -1800,7 +1857,8 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
         role,
         maxTokens,
         requesterId: myId.publicKey || myId.handle,
-        requesterName: myId.displayName
+        requesterName: myId.displayName,
+        replyNode,
       });
     } else {
       broadcastMeshPacket('MESH_INFERENCE_REQUEST', {
@@ -1809,15 +1867,37 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
         role,
         maxTokens,
         requesterId: myId.publicKey || myId.handle,
-        requesterName: myId.displayName
+        requesterName: myId.displayName,
+        replyNode,
       });
     }
   });
 }
 
-async function handleIncomingInferenceRequest(jobId, prompt, role, maxTokens, requesterId, requesterName) {
+const LEGACY_INFERENCE_MAX_PROMPT = 16000;
+const LEGACY_INFERENCE_MAX_TOKENS = 1024;
+let _legacyInferenceBusy = false;
+
+export async function isAllyContact(did) {
+  try {
+    const direct = await db.contacts.get(did);
+    if (direct) return direct.trustTier === 'ally';
+    const byNode = await db.contacts.where('nodeId').equals(did).first();
+    return byNode?.trustTier === 'ally';
+  } catch {
+    return false;
+  }
+}
+
+async function handleIncomingInferenceRequest(jobId, prompt, role, maxTokens, requesterId, requesterName, replyNode) {
   if (!isSharingInference()) return;
   if (await isPeerBlocked(requesterId)) return;
+  if (!(await isAllyContact(requesterId))) return;
+  if (typeof prompt !== 'string' || prompt.length > LEGACY_INFERENCE_MAX_PROMPT) return;
+  if (typeof replyNode !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(replyNode)) return;
+  if (_legacyInferenceBusy) return;
+  _legacyInferenceBusy = true;
+  maxTokens = Math.min(Number(maxTokens) || 512, LEGACY_INFERENCE_MAX_TOKENS);
 
   const startTime = Date.now();
   try {
@@ -1848,7 +1928,7 @@ async function handleIncomingInferenceRequest(jobId, prompt, role, maxTokens, re
     }).catch(() => {});
 
     // Respond back to requester
-    sendDirectMeshPacket(requesterId, 'MESH_INFERENCE_RESPONSE', {
+    sendDirectMeshPacket(replyNode, 'MESH_INFERENCE_RESPONSE', {
       jobId,
       answer,
       response: answer,
@@ -1858,6 +1938,8 @@ async function handleIncomingInferenceRequest(jobId, prompt, role, maxTokens, re
     });
   } catch (err) {
     console.warn('[SovereignMesh] Inference worker error:', err);
+  } finally {
+    _legacyInferenceBusy = false;
   }
 }
 

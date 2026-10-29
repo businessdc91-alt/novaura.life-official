@@ -144,12 +144,11 @@ pub fn verify_packet_signature(packet: &MeshPacket) -> bool {
         }
     };
 
-    // 1. Validate that sender_id binds cryptographically to the public key
-    let prefix = if clean_pub.len() >= 16 { &clean_pub[..16] } else { clean_pub };
-    if !packet.sender_id.starts_with("did:nova:") && packet.sender_id != clean_pub && packet.sender_id != pubkey_str {
-        return false;
-    }
-    if packet.sender_id.starts_with("did:nova:") && !packet.sender_id.contains(prefix) {
+    // 1. sender_id must name exactly this public key. A prefix/contains match let a
+    //    crafted id (did:nova:<victim key><attacker prefix>) pass with the attacker's key.
+    let sid = packet.sender_id.as_str();
+    let did_form = format!("did:nova:{}", clean_pub);
+    if sid != did_form && sid != clean_pub && sid != pubkey_str {
         return false;
     }
 
