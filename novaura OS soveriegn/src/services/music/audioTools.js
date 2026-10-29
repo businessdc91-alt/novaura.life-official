@@ -51,8 +51,42 @@ export function normalize(audio, peak = 0.95) {
  * curves, so playing the result end-to-start has no click or gap. With a BPM the
  * loop length snaps to whole bars, which keeps the beat steady across the seam.
  */
+/**
+ * Where the music actually plays: skips leading silence and a trailing fade-out
+ * or silence (models often end a piece early). Returns sample indices [start, end).
+ */
+export function activeRange(audio, { windowSec = 0.25, ratio = 0.3 } = {}) {
+  const sr = audio.sampleRate;
+  const n = audio.channels[0].length;
+  const win = Math.max(1, Math.floor(windowSec * sr));
+  const levels = [];
+  for (let start = 0; start < n; start += win) {
+    let sum = 0;
+    const end = Math.min(n, start + win);
+    for (let i = start; i < end; i++) {
+      let v = 0;
+      for (const ch of audio.channels) v += ch[i];
+      v /= audio.channels.length;
+      sum += v * v;
+    }
+    levels.push(Math.sqrt(sum / (end - start)));
+  }
+  const loud = levels.filter(l => l > 0.01).sort((a, b) => a - b);
+  if (!loud.length) return { start: 0, end: n };
+  const threshold = loud[Math.floor(loud.length / 2)] * ratio;
+  const first = levels.findIndex(l => l >= threshold);
+  let last = levels.length - 1;
+  while (last > first && levels[last] < threshold) last--;
+  return { start: first * win, end: Math.min(n, (last + 1) * win) };
+}
+
 export function makeSeamlessLoop(audio, { bpm = 0, beatsPerBar = 4, crossfadeSec = 1.5 } = {}) {
   const sr = audio.sampleRate;
+  // Loop only the part where music plays, so no silence or fade-out lands at the seam.
+  const range = activeRange(audio);
+  if (range.start > 0 || range.end < audio.channels[0].length) {
+    audio = { sampleRate: sr, channels: audio.channels.map(ch => ch.slice(range.start, range.end)) };
+  }
   const n = audio.channels[0].length;
   let xf = Math.floor(crossfadeSec * sr);
   let loopLen = n - xf;

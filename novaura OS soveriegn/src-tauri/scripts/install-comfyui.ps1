@@ -124,25 +124,40 @@ try {
   Set-Status 'verify' 'Checking that PyTorch can use your GPU' 88
   $probe = @'
 import json, torch
-info = {"torch": torch.__version__, "cuda": torch.cuda.is_available(), "device": None, "capability": None, "archs": []}
+info = {"torch": torch.__version__, "cuda": torch.cuda.is_available(), "device": None, "capability": None, "archs": [], "supported": False}
 if info["cuda"]:
+    major, minor = torch.cuda.get_device_capability(0)
     info["device"] = torch.cuda.get_device_name(0)
-    info["capability"] = "%d%d" % torch.cuda.get_device_capability(0)
+    info["capability"] = "%d%d" % (major, minor)
     info["archs"] = torch.cuda.get_arch_list()
+    # GPU code built for sm_XY runs on any card of the same generation X with minor >= Y
+    # (sm_50 kernels run on an sm_52 Maxwell card); compute_XY is PTX the driver compiles for newer cards.
+    for arch in info["archs"]:
+        kind, _, num = arch.partition("_")
+        if not num.isdigit():
+            continue
+        a_major, a_minor = int(num[:-1]), int(num[-1])
+        if (kind == "sm" and a_major == major and a_minor <= minor) or (kind == "compute" and (a_major, a_minor) <= (major, minor)):
+            info["supported"] = True
+    if info["supported"]:
+        try:
+            x = torch.ones(256, 256, device="cuda")
+            info["supported"] = float((x @ x).sum()) == 256.0 ** 3
+        except Exception:
+            info["supported"] = False
 print(json.dumps(info))
 '@
   $probeFile = Join-Path $CacheDir 'probe.py'
   [System.IO.File]::WriteAllText($probeFile, $probe)
   $info = (& $Python $probeFile | Select-Object -Last 1) | ConvertFrom-Json
   if ($TorchVariant -like 'cu*') {
-    $supported = $info.cuda -and ($info.archs | Where-Object { $_ -eq "sm_$($info.capability)" })
-    if (-not $supported) {
-      # Newer PyTorch builds dropped older cards (Maxwell/Pascal). 2.8.0 on CUDA 12.6 still supports them.
+    if (-not ($info.cuda -and $info.supported)) {
+      # Newer PyTorch builds drop older cards. The 2.14 line on CUDA 12.6 is the last with
+      # prebuilt kernels for Maxwell, Pascal and Volta.
       Set-Status 'verify' "This PyTorch build does not support your GPU ($($info.device), sm_$($info.capability)); installing a compatible release" 90
-      Invoke-WithRetry 'Installing a compatible PyTorch' { & $uv pip install --python $Python 'torch==2.8.0' 'torchvision==0.23.0' 'torchaudio==2.8.0' --index-url 'https://download.pytorch.org/whl/cu126' }
+      Invoke-WithRetry 'Installing a compatible PyTorch' { & $uv pip install --python $Python 'torch>=2.14,<2.15' torchvision torchaudio --index-url 'https://download.pytorch.org/whl/cu126' }
       $info = (& $Python $probeFile | Select-Object -Last 1) | ConvertFrom-Json
-      $supported = $info.cuda -and ($info.archs | Where-Object { $_ -eq "sm_$($info.capability)" })
-      if (-not $supported) { throw "PyTorch still cannot use $($info.device). ComfyUI can run on the CPU instead (choose the CPU option)." }
+      if (-not ($info.cuda -and $info.supported)) { throw "PyTorch still cannot use $($info.device). ComfyUI can run on the CPU instead (choose the CPU option)." }
     }
   }
 

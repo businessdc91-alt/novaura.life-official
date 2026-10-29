@@ -142,22 +142,44 @@ export async function pickMusicModel() {
   return null;
 }
 
+// Dropdown choices for an input: older ComfyUI lists them as the type itself,
+// newer ones as COMBO with an options list.
+function comboOptions(spec) {
+  if (Array.isArray(spec?.[0])) return spec[0];
+  if (spec?.[0] === 'COMBO' && Array.isArray(spec?.[1]?.options)) return spec[1].options;
+  return null;
+}
+
+// "B-flat major" -> "bb major", "F-sharp minor" -> "f# minor", so catalog names match node options.
+const normalizeChoice = (v) => String(v).toLowerCase().replace(/[\s-]*flat\b/g, 'b').replace(/[\s-]*sharp\b/g, '#').replace(/\s+/g, ' ').trim();
+
+/** The option matching a value, or null when the node does not offer it. */
+export function matchOption(options, value) {
+  if (value === undefined || value === null) return null;
+  const exact = options.find(o => o === value || String(o) === String(value));
+  if (exact !== undefined) return exact;
+  const want = normalizeChoice(value);
+  return options.find(o => normalizeChoice(o) === want) ?? null;
+}
+
 // Fill a node's inputs by meaning, using the names this ComfyUI actually reports.
-function fillInputs(info, values) {
+export function fillInputs(info, values) {
   const inputs = {};
   const all = { ...(info.input?.required || {}), ...(info.input?.optional || {}) };
   for (const [name, spec] of Object.entries(all)) {
     const key = name.toLowerCase();
+    const options = comboOptions(spec);
+    const fallback = spec?.[1] && 'default' in spec[1] ? spec[1].default : options?.[0];
     // Exact names only: "lyrics" must not also fill "lyrics_strength".
     const match = Object.entries(values).find(([k]) => k.split('|').includes(key));
-    if (match) inputs[name] = match[1];
-    else if (spec?.[1] && 'default' in spec[1]) inputs[name] = spec[1].default;
-    else if (Array.isArray(spec?.[0]) && spec[0].length) inputs[name] = spec[0][0];
+    let value = match ? match[1] : fallback;
+    if (options) value = matchOption(options, value) ?? fallback;
+    if (value !== undefined) inputs[name] = value;
   }
   return inputs;
 }
 
-async function buildSongWorkflow({ checkpoint, version, tags, lyrics, seconds, bpm, key, timeSignature, language, seed, batch }) {
+async function buildSongWorkflow({ checkpoint, version, tags, lyrics, seconds, bpm, key, timeSignature, language, seed, batch, songPlan = true }) {
   if (version === '1.5') {
     await requireNodes(['TextEncodeAceStepAudio1.5', 'EmptyAceStep1.5LatentAudio', 'ModelSamplingAuraFlow', 'VAEDecodeAudio']);
     const enc = await nodeInfo('TextEncodeAceStepAudio1.5');
@@ -171,6 +193,9 @@ async function buildSongWorkflow({ checkpoint, version, tags, lyrics, seconds, b
       'timesignature|time_signature': timeSignature,
       language,
       'keyscale|key': key,
+      // ACE-Step 1.5 first plans a song (intro, sections, an ending). Loops skip the
+      // plan so the music runs for the whole length instead of wrapping up early.
+      generate_audio_codes: songPlan,
     });
     encInputs[Object.keys(encInputs).find(k => k === 'clip') || 'clip'] = ['1', 1];
     const latInputs = fillInputs(lat, { seconds, 'batch_size|batch': batch });
@@ -226,7 +251,9 @@ export async function generateSong(rawSpec, { onProgress } = {}) {
   const seed = Math.floor(Math.random() * 2 ** 31);
   const batch = spec.mode === 'loop' ? 1 : Math.min(2, Math.max(1, settings.variations));
   onProgress?.({ status: `Composing with ${model.checkpoint}` });
-  const workflow = await buildSongWorkflow({ ...model, tags, lyrics, seconds: spec.seconds, bpm: spec.bpm, key: spec.key, timeSignature: spec.timeSignature, language: spec.language, seed, batch });
+  // Loops render longer than asked: the loop is cut from where the music plays.
+  const renderSeconds = spec.mode === 'loop' ? Math.ceil(spec.seconds * 1.25) : spec.seconds;
+  const workflow = await buildSongWorkflow({ ...model, tags, lyrics, seconds: renderSeconds, bpm: spec.bpm, key: spec.key, timeSignature: spec.timeSignature, language: spec.language, seed, batch, songPlan: spec.mode !== 'loop' });
   const outputs = (await runWorkflow(workflow, { onProgress })).filter(o => o.kind === 'audio');
   if (!outputs.length) throw new Error('The music model produced no audio.');
 

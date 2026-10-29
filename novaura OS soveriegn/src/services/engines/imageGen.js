@@ -64,7 +64,7 @@ export function iconPrompt(concept, style = 'modern flat') {
  * the edges, then feathering the mask edge. Works for icons rendered on a plain
  * background. Mutates and returns `data` (Uint8ClampedArray, RGBA).
  */
-export function removeBackground(data, width, height, { tolerance = 38, feather = 2 } = {}) {
+export function removeBackground(data, width, height, { tolerance = 80, step = 14, feather = 2 } = {}) {
   const idx = (x, y) => (y * width + x) * 4;
   // Background colour: the median of the border pixels.
   const border = [];
@@ -74,10 +74,11 @@ export function removeBackground(data, width, height, { tolerance = 38, feather 
     const vals = border.map(i => data[i + c]).sort((a, b) => a - b);
     return vals[vals.length >> 1];
   });
-  const close = (i) => {
-    const dr = data[i] - med[0], dg = data[i + 1] - med[1], db = data[i + 2] - med[2];
-    return Math.sqrt(dr * dr + dg * dg + db * db) <= tolerance;
-  };
+  const dist = (i, r, g, b) => Math.hypot(data[i] - r, data[i + 1] - g, data[i + 2] - b);
+  const close = (i) => dist(i, med[0], med[1], med[2]) <= tolerance;
+  // Image models rarely paint a flat background: it drifts in brightness and carries
+  // soft shadows. The fill follows that drift (each step must be small) while staying
+  // in the background's colour family, so it cannot leak through an object's outline.
   const bg = new Uint8Array(width * height);
   const stack = [];
   for (const i of border) {
@@ -87,9 +88,12 @@ export function removeBackground(data, width, height, { tolerance = 38, feather 
   while (stack.length) {
     const p = stack.pop();
     const x = p % width, y = (p - x) / width;
+    const pi = p * 4;
     const nbrs = [x > 0 ? p - 1 : -1, x < width - 1 ? p + 1 : -1, y > 0 ? p - width : -1, y < height - 1 ? p + width : -1];
     for (const q of nbrs) {
-      if (q >= 0 && !bg[q] && close(q * 4)) { bg[q] = 1; stack.push(q); }
+      if (q < 0 || bg[q]) continue;
+      const qi = q * 4;
+      if (dist(qi, data[pi], data[pi + 1], data[pi + 2]) <= step && close(qi)) { bg[q] = 1; stack.push(q); }
     }
   }
   // Feathered alpha: foreground pixels near the background fade slightly.
@@ -106,7 +110,9 @@ export function removeBackground(data, width, height, { tolerance = 38, feather 
           if (bg[ny * width + nx]) near++;
         }
       }
-      if (near) data[p * 4 + 3] = Math.round(255 * (1 - (near / total) * 0.85));
+      // Specks surrounded by background (stray noise at the edges) are cleared.
+      if (near / total > 0.8) data[p * 4 + 3] = 0;
+      else if (near) data[p * 4 + 3] = Math.round(255 * (1 - (near / total) * 0.85));
     }
   }
   return data;
