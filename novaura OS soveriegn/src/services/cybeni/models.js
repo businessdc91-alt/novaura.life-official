@@ -59,27 +59,22 @@ export function describeModelKey(key) {
   return 'No model';
 }
 
-// Local and Exchange models get a single user turn: some local chat templates
-// (Gemma's, for one) reject a separate system role.
-function mergeSystem(messages) {
-  const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-  const rest = messages.filter(m => m.role !== 'system');
-  if (!system) return rest;
-  if (rest.length && rest[0].role === 'user') {
-    return [{ role: 'user', content: `${system}\n\n${rest[0].content}` }, ...rest.slice(1)];
-  }
-  return [{ role: 'user', content: system }, ...rest];
-}
+// Long passes on big local models (or a host's) can take many minutes.
+const EXCHANGE_TIMEOUT_MS = 45 * 60 * 1000;
 
-/** Run a chat completion on any model key. Resolves with the reply text. */
+/**
+ * Run a chat completion on any model key. Resolves with the reply text.
+ * Always keep the system message: without one, LM Studio and Ollama fall back to
+ * the model's own preset system prompt, which may be a roleplay persona.
+ */
 export async function runModel(key, messages, { maxTokens = 4096, temperature = 0.3 } = {}) {
   const k = String(key || '');
   if (k.startsWith('local|')) {
-    return runLocalChat(k.slice(6), mergeSystem(messages), { maxTokens, temperature });
+    return runLocalChat(k.slice(6), messages, { maxTokens, temperature });
   }
   if (k.startsWith('exchange|')) {
     const [, keyId, ...rest] = k.split('|');
-    return callRemoteModel(keyId, rest.join('|'), mergeSystem(messages), { maxTokens, temperature, timeoutMs: 300000 });
+    return callRemoteModel(keyId, rest.join('|'), messages, { maxTokens, temperature, timeoutMs: EXCHANGE_TIMEOUT_MS });
   }
   if (k.startsWith('cloud|')) {
     if (!kernel?.ai?.chat) throw new Error('The AI subsystem is not ready yet.');
@@ -88,17 +83,47 @@ export async function runModel(key, messages, { maxTokens = 4096, temperature = 
   throw new Error('No model chosen for this step.');
 }
 
+// Size in billions of parameters from a model name ("qwen3-coder-80b", "gemma-4-26b-a4b"), else null.
+export function modelSizeB(key) {
+  const m = /(\d+(?:\.\d+)?)\s*b(?![a-z])/i.exec(String(key).split('|').pop());
+  return m ? Number(m[1]) : null;
+}
+
+// Family from a model name: "gemma", "qwen", "llama", "mistral", ...
+function family(key) {
+  const name = String(key).split('|').pop().split(':').pop().split('/').pop().toLowerCase();
+  return /^[a-z]+/.exec(name)?.[0] || name;
+}
+
 /**
- * Suggest role assignments from what is available. The reviewer gets a
- * different model from the developer whenever there is one, so code is
- * cross-checked by a second model rather than marked by its own author.
+ * Suggest role assignments from what is available.
+ * - developer: a cloud model if there is a key, else the biggest coder model, else the biggest model
+ * - reviewer: the biggest model from a different family (then any different model), so code is
+ *   cross-checked by a second model rather than marked by its own author
+ * - architect: a mixture-of-experts model (fast short verdicts) or the reviewer
+ * Tiny models (under 4B) are only used when nothing else exists, and loaded models
+ * are preferred over ones that would have to be loaded (see `ready` below).
  */
 export function suggestRoles(models) {
   const keys = models.map(m => m.key);
   if (!keys.length) return { architect: '', developer: '', reviewer: '', designer: '' };
-  const loaded = models.filter(m => m.loaded).map(m => m.key);
-  const cloud = keys.filter(k => k.startsWith('cloud|'));
-  const developer = cloud[0] || loaded[0] || keys[0];
-  const other = [...cloud, ...loaded, ...keys].find(k => k !== developer) || developer;
-  return { architect: other, developer, reviewer: other, designer: developer };
+  const loaded = new Set(models.filter(m => m.loaded).map(m => m.key));
+  const size = (k) => (k.startsWith('cloud|') ? 1000 : modelSizeB(k) ?? 7);
+  const score = (k) => size(k) + (loaded.has(k) ? 0.5 : 0); // prefer loaded on ties: no reload wait
+  const capable = keys.filter(k => size(k) >= 4);
+  // Models already loaded (or in the cloud) are guaranteed to run. Others must be
+  // loaded on demand and may not fit in VRAM next to what is loaded.
+  const ready = capable.filter(k => loaded.has(k) || k.startsWith('cloud|'));
+  const sorted = (list) => list.slice().sort((a, b) => score(b) - score(a));
+  const devPool = sorted(ready.length ? ready : capable.length ? capable : keys);
+
+  const developer = devPool.find(k => k.startsWith('cloud|')) || devPool.find(k => /coder|code/i.test(k)) || devPool[0];
+  // A local developer competes for VRAM, so the other roles stay on loaded models.
+  // A cloud developer leaves the GPU free for loading any local model.
+  const pool = developer.startsWith('cloud|') ? sorted(capable.length ? capable : keys) : devPool;
+  const reviewer = pool.find(k => k !== developer && family(k) !== family(developer))
+    || pool.find(k => k !== developer)
+    || developer;
+  const architect = pool.find(k => /-a\d+b|moe/i.test(k) && k !== developer) || reviewer;
+  return { architect, developer, reviewer, designer: architect };
 }

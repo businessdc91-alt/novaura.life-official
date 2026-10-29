@@ -1432,15 +1432,25 @@ async fn query_local_ai_raw(
 
     stream.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
 
+    // Non-streaming replies arrive all at once when generation ends, so this bounds
+    // the whole generation. It is generous because big local models (or ones that
+    // spill into system RAM) can take a long time; it exists so a stalled server
+    // cannot hang a caller forever.
+    const LOCAL_AI_READ_TIMEOUT_SECS: u64 = 45 * 60;
     let mut response_bytes = Vec::new();
     let mut buf = [0u8; 8192];
-    loop {
-        match stream.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => response_bytes.extend_from_slice(&buf[..n]),
-            Err(e) => return Err(e.to_string()),
+    let read_all = async {
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) => return Ok(()),
+                Ok(n) => response_bytes.extend_from_slice(&buf[..n]),
+                Err(e) => return Err(e.to_string()),
+            }
         }
-    }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(LOCAL_AI_READ_TIMEOUT_SECS), read_all)
+        .await
+        .map_err(|_| format!("The local model did not finish within {} minutes.", LOCAL_AI_READ_TIMEOUT_SECS / 60))??;
 
     Ok(String::from_utf8_lossy(&http_response_body(&response_bytes)).into_owned())
 }

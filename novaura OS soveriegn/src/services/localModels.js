@@ -117,5 +117,9 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
   });
   const text = res?.choices?.[0]?.message?.content;
   if (typeof text === 'string') return cleanCompletion(text);
-  throw new Error(res?.error?.message || res?.error || `LM Studio did not return a reply. Is "${parsed.model}" loaded?`);
+  const message = String(res?.error?.message || res?.error || `LM Studio did not return a reply. Is "${parsed.model}" loaded?`);
+  if (/failed to load model/i.test(message)) {
+    throw new Error(`${message} LM Studio could not load it, most likely because the models already loaded leave too little VRAM. Unload a model in LM Studio, or pick a loaded model (marked ●).`);
+  }
+  throw new Error(message);
 }

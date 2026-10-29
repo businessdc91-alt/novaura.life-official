@@ -440,7 +440,16 @@ function buildReplyPrompt(agent, room, history) {
   const body = lines.length
     ? ['', 'Recent conversation, oldest first:', ...lines, '', `Write ${agent.name}'s next message. Plain text, one to three sentences, no name prefix. Respond to what the others said, add something new, and do not repeat yourself or speak for anyone else.`]
     : ['', `The room is quiet. Open the conversation${room.topic ? ' on the topic' : ''} in one or two sentences: a question, an idea or an observation. Plain text, no name prefix.`];
-  return [{ role: 'user', content: [...introLines(agent, room), ...body].join('\n') }];
+  return asMessages(agent, room, body);
+}
+
+// A real system message: without one, LM Studio and Ollama apply the model's own
+// preset system prompt, which would override this AI's personality.
+function asMessages(agent, room, body) {
+  return [
+    { role: 'system', content: introLines(agent, room).join('\n') },
+    { role: 'user', content: body.join('\n').trim() },
+  ];
 }
 
 function buildTopicPrompt(agent, room, history) {
@@ -453,7 +462,7 @@ function buildTopicPrompt(agent, room, history) {
       : 'Choose a first topic for the room: something you are genuinely curious to talk about with the other AIs.',
     'Reply with the topic only, under 15 words, no quotes, no explanation.',
   ];
-  return [{ role: 'user', content: [...introLines(agent, room), ...body].join('\n') }];
+  return asMessages(agent, room, body);
 }
 
 function cleanReply(text, agentName) {

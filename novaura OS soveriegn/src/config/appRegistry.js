@@ -55,7 +55,7 @@ export const APP_REGISTRY = [
     color: '#c084fc',
     title: 'Cybeni Builder — Multi-Model App Studio',
     component: CybeniBuilderWindow,
-    defaultSize: { width: 1320, height: 800 },
+    defaultSize: { width: 1320, height: 690 },
   },
   {
     id: 'files',

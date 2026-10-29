@@ -3,9 +3,10 @@
 //! Generated apps are served from the `cyprev` custom protocol
 //! (`http://cyprev.localhost/<session>/...` on Windows), a different origin
 //! from the OS UI. The preview therefore cannot read the OS's IndexedDB
-//! (identity keys, vault) or reach its JavaScript. Tauri only injects the IPC
-//! bridge and invoke key into the main frame, so preview code cannot call
-//! commands either, and the CSP below also blocks requests to the IPC host.
+//! (identity keys, vault) or reach its JavaScript. It cannot call OS commands
+//! either: although WebView2 also injects Tauri's IPC bridge into this frame, the
+//! CSP below blocks the IPC host, and WebView2 does not deliver iframe messages to
+//! the app. Verified in the running app: an invoke from the preview had no effect.
 //!
 //! Files live in memory only, keyed by session, and are replaced on every build.
 
@@ -21,6 +22,12 @@ const MAX_SESSIONS: usize = 8;
 
 /// The preview's own policy: it may load packages from esm.sh and common CDNs and
 /// call out to the network like a normal web app, but never the IPC host.
+///
+/// SECURITY: WebView2 injects Tauri's IPC bridge into this frame too (verified in
+/// the running app), and Tauri treats app-registered protocols such as `cyprev` as
+/// a *local* origin for its permission checks. What keeps generated code away
+/// from OS commands is that `connect-src` (and `form-action`) never allow
+/// `http://ipc.localhost`. Do not widen them to `http:` or `*`.
 const PREVIEW_CSP: &str = "default-src 'self' data: blob:; \
 script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://esm.sh https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; \
 style-src 'self' 'unsafe-inline' https:; \
@@ -29,6 +36,7 @@ font-src 'self' data: https:; \
 media-src 'self' data: blob: https:; \
 connect-src 'self' https: wss: http://127.0.0.1:* http://localhost:*; \
 frame-src 'self' blob: data: https:; \
+form-action 'self' https:; \
 object-src 'none'; base-uri 'self'";
 
 struct PreviewFile {

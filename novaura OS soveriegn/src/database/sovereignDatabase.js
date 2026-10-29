@@ -6,6 +6,18 @@ import Dexie from 'dexie';
  * Zero cloud dependency. Automatically initializes and manages the user's local database.
  */
 
+// Tables included in backups and the encrypted disk mirror. Add new user-data
+// tables here, or they will not survive a reinstall. Left out on purpose: caches
+// (inference_hosts) and bulky regenerable history (cybeni_checkpoints).
+const BACKUP_TABLES = [
+  'identities', 'settings', 'workspaces', 'documents', 'chat_history', 'mailbox', 'social_posts', 'vault',
+  'sentinel_audit', 'card_decks', 'contacts', 'call_logs', 'hosted_sites',
+  'manuscripts', 'manuscript_state', 'memories', 'enclave_records', 'workflow_chains',
+  'git_repositories', 'git_commits', 'git_branches', 'git_pull_requests', 'git_issues', 'git_releases',
+  // v14: AI Lounge and Inference Exchange
+  'lounge_rooms', 'lounge_agents', 'lounge_messages', 'inference_keys', 'inference_grants', 'inference_access_requests',
+];
+
 class SovereignDatabase extends Dexie {
   constructor() {
     super('NovauraSovereignPrivateCloud');
@@ -281,73 +293,17 @@ class SovereignDatabase extends Dexie {
 
   // Export entire private cloud DB to JSON snapshot for backup/migration
   async exportSnapshot() {
-    const data = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      identities: await this.identities.toArray(),
-      settings: await this.settings.toArray(),
-      workspaces: await this.workspaces.toArray(),
-      documents: await this.documents.toArray(),
-      chat_history: await this.chat_history.toArray(),
-      mailbox: await this.mailbox.toArray(),
-      social_posts: await this.social_posts.toArray(),
-      vault: await this.vault.toArray(),
-      sentinel_audit: await this.sentinel_audit.toArray(),
-      card_decks: await this.card_decks.toArray(),
-      contacts: await this.contacts.toArray(),
-      call_logs: await this.call_logs.toArray(),
-      hosted_sites: await this.hosted_sites.toArray(),
-      // Added v8: previously these user tables were never mirrored/backed up.
-      manuscripts: await this.manuscripts.toArray(),
-      manuscript_state: await this.manuscript_state.toArray(),
-      memories: await this.memories.toArray(),
-      enclave_records: await this.enclave_records.toArray(),
-      workflow_chains: await this.workflow_chains.toArray(),
-      git_repositories: await this.git_repositories.toArray(),
-      git_commits: await this.git_commits.toArray(),
-      git_branches: await this.git_branches.toArray(),
-      git_pull_requests: await this.git_pull_requests.toArray(),
-      git_issues: await this.git_issues.toArray(),
-      git_releases: await this.git_releases.toArray(),
-    };
+    const data = { version: 1, exportedAt: new Date().toISOString() };
+    for (const name of BACKUP_TABLES) data[name] = await this.table(name).toArray();
     return JSON.stringify(data, null, 2);
   }
-
-  // Import snapshot
   async importSnapshot(jsonString) {
     const data = JSON.parse(jsonString);
-    await this.transaction('rw', [
-      this.identities, this.settings, this.workspaces, this.documents,
-      this.chat_history, this.mailbox, this.social_posts, this.vault,
-      this.sentinel_audit, this.card_decks, this.contacts, this.call_logs, this.hosted_sites,
-      this.manuscripts, this.manuscript_state, this.memories, this.enclave_records,
-      this.workflow_chains, this.git_repositories, this.git_commits, this.git_branches,
-      this.git_pull_requests, this.git_issues, this.git_releases
-    ], async () => {
-      if (data.manuscripts) await this.manuscripts.bulkPut(data.manuscripts);
-      if (data.manuscript_state) await this.manuscript_state.bulkPut(data.manuscript_state);
-      if (data.memories) await this.memories.bulkPut(data.memories);
-      if (data.enclave_records) await this.enclave_records.bulkPut(data.enclave_records);
-      if (data.workflow_chains) await this.workflow_chains.bulkPut(data.workflow_chains);
-      if (data.git_repositories) await this.git_repositories.bulkPut(data.git_repositories);
-      if (data.git_commits) await this.git_commits.bulkPut(data.git_commits);
-      if (data.git_branches) await this.git_branches.bulkPut(data.git_branches);
-      if (data.git_pull_requests) await this.git_pull_requests.bulkPut(data.git_pull_requests);
-      if (data.git_issues) await this.git_issues.bulkPut(data.git_issues);
-      if (data.git_releases) await this.git_releases.bulkPut(data.git_releases);
-      if (data.identities) await this.identities.bulkPut(data.identities);
-      if (data.settings) await this.settings.bulkPut(data.settings);
-      if (data.workspaces) await this.workspaces.bulkPut(data.workspaces);
-      if (data.documents) await this.documents.bulkPut(data.documents);
-      if (data.chat_history) await this.chat_history.bulkPut(data.chat_history);
-      if (data.mailbox) await this.mailbox.bulkPut(data.mailbox);
-      if (data.social_posts) await this.social_posts.bulkPut(data.social_posts);
-      if (data.vault) await this.vault.bulkPut(data.vault);
-      if (data.sentinel_audit) await this.sentinel_audit.bulkPut(data.sentinel_audit);
-      if (data.card_decks) await this.card_decks.bulkPut(data.card_decks);
-      if (data.contacts) await this.contacts.bulkPut(data.contacts);
-      if (data.call_logs) await this.call_logs.bulkPut(data.call_logs);
-      if (data.hosted_sites) await this.hosted_sites.bulkPut(data.hosted_sites);
+    const tables = BACKUP_TABLES.map(name => this.table(name));
+    await this.transaction('rw', tables, async () => {
+      for (const name of BACKUP_TABLES) {
+        if (Array.isArray(data[name])) await this.table(name).bulkPut(data[name]);
+      }
     });
     return true;
   }
