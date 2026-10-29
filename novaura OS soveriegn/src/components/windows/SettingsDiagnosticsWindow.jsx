@@ -1,3 +1,4 @@
+import CloudKeysPanel from './settings/CloudKeysPanel.jsx';
 import React, { useState, useEffect } from 'react';
 import {
   Settings, Key, Cpu, HardDrive, ShieldCheck, Download, Upload,
@@ -162,20 +163,6 @@ export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
     } catch (err) {
       console.error(err);
     }
-  };
-
-  const handleSaveKey = async (provider) => {
-    const val = vaultKeys[provider];
-    await db.vault.put({
-      id: provider.toLowerCase(),
-      key: provider.toLowerCase(),
-      value: val,
-      category: 'api_key',
-      updated_at: new Date().toISOString(),
-    });
-    kernel?.ipc.emit('vault:keys_updated');
-    setSavedKeyNotice(`Saved ${provider.toUpperCase()} key securely.`);
-    setTimeout(() => setSavedKeyNotice(''), 3000);
   };
 
   const handleProbeLocalAI = async () => {
@@ -849,34 +836,7 @@ ${betaForm.description || 'No steps provided.'}
               )}
             </div>
 
-            {/* BYOK Cloud Keys */}
-            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
-              <div className="flex items-center gap-2">
-                <Key className="w-4 h-4 text-amber-400" />
-                <span className="text-xs font-semibold text-slate-200">Bring Your Own Key (BYOK) Vault</span>
-              </div>
-
-              {['gemini', 'openrouter', 'claude', 'openai'].map(provider => (
-                <div key={provider} className="space-y-1">
-                  <label className="text-[11px] text-slate-400 uppercase font-medium">{provider} API Key</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      placeholder={`Enter your ${provider} API key...`}
-                      value={vaultKeys[provider] || ''}
-                      onChange={(e) => setVaultKeys({ ...vaultKeys, [provider]: e.target.value })}
-                      className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 outline-none focus:border-cyan-500 font-mono"
-                    />
-                    <button
-                      onClick={() => handleSaveKey(provider)}
-                      className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-medium transition-colors"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <CloudKeysPanel />
           </div>
         )}
 

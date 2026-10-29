@@ -11,6 +11,7 @@
  *  - Zero mock data
  */
 
+import { getProvider, providerChat } from '../../services/cloudProviders.js';
 import { db } from '../../database/sovereignDatabase.js';
 
 const CACHE_TTL_MS = 10 * 60_000; // 10 minutes
@@ -161,14 +162,9 @@ export class AISubsystem {
           } else {
             throw new Error(`Local provider ${provider} is not currently running.`);
           }
-        } else if (provider === 'byok' || provider === 'openai') {
-          result = await this._chatOpenAI(effectiveMessages, options);
-        } else if (provider === 'openrouter') {
-          result = await this._chatOpenRouter(effectiveMessages, options);
-        } else if (provider === 'claude') {
-          result = await this._chatClaude(effectiveMessages, options);
-        } else if (provider === 'gemini') {
-          result = await this._chatGemini(effectiveMessages, options);
+        } else if (getProvider(provider)) {
+          result = await providerChat(provider, effectiveMessages, (name) => this._cloudKey(name), options);
+          if (options.onToken) options.onToken(result);
         }
 
         if (result && typeof result === 'string') {
@@ -186,179 +182,16 @@ export class AISubsystem {
     throw lastError || new Error('All configured AI providers failed. Check your local AI server or API keys in Settings.');
   }
 
-  // ─── Cloud Provider Implementations ────────────────────────────────────────
+  // ─── Cloud providers (bring your own key) ─────────────────────────────────
 
-  async _chatGemini(messages, options = {}) {
-    const apiKey = this.getKey('gemini') || import.meta.env.VITE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('Gemini API key not configured. Add your key in Sovereign Settings -> AI Keys.');
-    }
-
-    const model = options.model || this.getKey('gemini_model') || 'gemini-3.8-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    // Convert messages to Gemini contents format
-    const contents = [];
-    let systemInstruction = null;
-
-    for (const m of messages) {
-      if (m.role === 'system') {
-        systemInstruction = { parts: [{ text: m.content }] };
-      } else {
-        contents.push({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        });
-      }
-    }
-
-    const body = {
-      contents,
-      generationConfig: {
-        temperature: options.temperature ?? 0.7,
-        maxOutputTokens: options.maxTokens ?? 2048,
-      },
-    };
-    if (systemInstruction) {
-      body.systemInstruction = systemInstruction;
-    }
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini API error (${res.status}): ${err}`);
-    }
-
-    const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    if (options.onToken) options.onToken(text);
-    return text;
-  }
-
-  async _chatOpenRouter(messages, options = {}) {
-    const apiKey = this.getKey('openrouter') || import.meta.env.VITE_OPENROUTER_API_KEY;
-    if (!apiKey) {
-      throw new Error('OpenRouter API key not configured.');
-    }
-
-    const model = options.model || 'google/gemini-3.8-flash';
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://novaura.life',
-        'X-Title': 'Novaura Sovereign OS',
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: options.temperature ?? 0.7,
-        max_tokens: options.maxTokens ?? 2048,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`OpenRouter API error (${res.status}): ${err}`);
-    }
-
-    const data = await res.json();
-    const text = data.choices?.[0]?.message?.content || '';
-    if (options.onToken) options.onToken(text);
-    return text;
-  }
-
-  async _chatClaude(messages, options = {}) {
-    const apiKey = this.getKey('claude') || this.getKey('anthropic');
-    if (!apiKey) {
-      throw new Error('Anthropic Claude API key not configured.');
-    }
-
-    const systemMsg = messages.find(m => m.role === 'system')?.content || '';
-    const userMsgs = messages.filter(m => m.role !== 'system');
-
-    // Direct browser access to the Messages API requires the
-    // `anthropic-dangerous-direct-browser-access` header (CORS opt-in).
-    // Current models reject `temperature`, and may return thinking blocks
-    // ahead of the text, so only text blocks are collected below.
-    const body = {
-      model: options.model || this.getKey('claude_model') || 'claude-opus-5-5',
-      max_tokens: options.maxTokens ?? 16000,
-      output_config: { effort: options.effort || 'medium' },
-      fallbacks: 'default',
-      system: systemMsg || undefined,
-      messages: userMsgs.map(m => ({ role: m.role, content: m.content })),
-    };
-
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'server-side-fallback-2026-07-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Claude API error (${res.status}): ${err}`);
-    }
-
-    const data = await res.json();
-    if (data.stop_reason === 'refusal') {
-      const reason = data.stop_details?.explanation || 'Request declined by model safeguards.';
-      throw new Error(`Claude declined this request: ${reason}`);
-    }
-    const text = (data.content || [])
-      .filter(block => block.type === 'text')
-      .map(block => block.text)
-      .join('');
-    if (options.onToken) options.onToken(text);
-    return text;
-  }
-
-  async _chatOpenAI(messages, options = {}) {
-    const apiKey = this.getKey('byok') || this.getKey('openai');
-    if (!apiKey) {
-      throw new Error('BYOK API key not configured. Add your key in Sovereign Settings -> AI Keys.');
-    }
-
-    const endpoint = options.baseUrl || this.getKey('byok_endpoint') || 'https://api.openai.com/v1';
-    const cleanEndpoint = endpoint.replace(/\/+$/, '');
-    const model = options.model || this.getKey('byok_model') || 'gpt-4o-mini';
-
-    const res = await fetch(`${cleanEndpoint}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: options.temperature ?? 0.7,
-        max_tokens: options.maxTokens ?? 2048,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`BYOK API error (${res.status}): ${err}`);
-    }
-
-    const data = await res.json();
-    const text = data.choices?.[0]?.message?.content || '';
-    if (options.onToken) options.onToken(text);
-    return text;
+  /** Vault value for a cloud provider setting, with the dev-only env fallbacks. */
+  _cloudKey(name) {
+    const value = this.getKey(name);
+    if (value) return value;
+    if (name === 'gemini') return import.meta.env.VITE_GEMINI_API_KEY || '';
+    if (name === 'openrouter') return import.meta.env.VITE_OPENROUTER_API_KEY || '';
+    if (name === 'claude') return this.getKey('anthropic');
+    return '';
   }
 
   // ─── Image Generation (Multimodal) ─────────────────────────────────────────

@@ -1,27 +1,31 @@
 // models.js — Every model Cybeni can put to work, from one place:
 //   local|<runtime>:<model>      LM Studio / Ollama on this PC (127.0.0.1 only)
 //   exchange|<keyId>|<ref>       someone's hosted model, via an Inference Exchange key
-//   cloud|<provider>             a cloud provider whose key is in the local vault
+//   cloud|<provider>[|<model>]   a cloud provider whose key is in the local vault
+//                                (its chosen model, or a specific one)
 //
 // A model key is just a string, so pipeline role assignments can be saved.
 
 import { discoverLocalModels, describeModelRef, runLocalChat } from '../localModels.js';
 import { listRemoteModels, callRemoteModel } from '../inferenceExchange.js';
 import { kernel } from '../../kernel/NovaKernel.js';
+import { PROVIDERS, modelSetting } from '../cloudProviders.js';
 
-export const CLOUD_PROVIDERS = [
-  { id: 'claude', label: 'Claude', keyName: 'claude' },
-  { id: 'gemini', label: 'Gemini', keyName: 'gemini' },
-  { id: 'byok', label: 'OpenAI-compatible (BYOK)', keyName: 'byok' },
-  { id: 'openrouter', label: 'OpenRouter', keyName: 'openrouter' },
-];
+export const CLOUD_PROVIDERS = PROVIDERS;
 
-function cloudKeyPresent(provider) {
+const vaultValue = (name) => {
   try {
-    return Boolean(kernel?.ai?.getKey?.(provider.keyName));
+    return kernel?.ai?._cloudKey?.(name) || kernel?.ai?.getKey?.(name) || '';
   } catch {
-    return false;
+    return '';
   }
+};
+
+/** Models picked for a provider in Settings: the main one plus any extras. */
+function cloudModels(provider) {
+  const main = vaultValue(modelSetting(provider.id)) || provider.defaultModel;
+  const extra = String(vaultValue(`${provider.id}_extra_models`) || '').split(',').map(m => m.trim()).filter(Boolean);
+  return [...new Set([main, ...extra].filter(Boolean))];
 }
 
 /**
@@ -46,7 +50,10 @@ export async function listCybeniModels() {
     out.push({ key: `exchange|${r.keyId}|${r.ref}`, label: r.label, group: 'Inference Exchange' });
   }
   for (const p of CLOUD_PROVIDERS) {
-    if (cloudKeyPresent(p)) out.push({ key: `cloud|${p.id}`, label: `${p.label} (your key)`, group: 'Cloud (your vault keys)' });
+    if (!vaultValue(p.id)) continue;
+    const models = cloudModels(p);
+    if (!models.length) out.push({ key: `cloud|${p.id}`, label: `${p.label} (choose a model in Settings)`, group: 'Cloud (your keys)' });
+    for (const m of models) out.push({ key: `cloud|${p.id}|${m}`, label: `${p.label} · ${m}`, group: 'Cloud (your keys)' });
   }
   return out;
 }
@@ -55,7 +62,11 @@ export function describeModelKey(key) {
   const k = String(key || '');
   if (k.startsWith('local|')) return describeModelRef(k.slice(6));
   if (k.startsWith('exchange|')) return `${describeModelRef(k.split('|').slice(2).join('|'))} (Exchange)`;
-  if (k.startsWith('cloud|')) return CLOUD_PROVIDERS.find(p => p.id === k.slice(6))?.label || k.slice(6);
+  if (k.startsWith('cloud|')) {
+    const [, id, ...model] = k.split('|');
+    const label = CLOUD_PROVIDERS.find(p => p.id === id)?.label || id;
+    return model.length ? `${label} · ${model.join('|')}` : label;
+  }
   return 'No model';
 }
 
@@ -67,10 +78,10 @@ const EXCHANGE_TIMEOUT_MS = 45 * 60 * 1000;
  * Always keep the system message: without one, LM Studio and Ollama fall back to
  * the model's own preset system prompt, which may be a roleplay persona.
  */
-export async function runModel(key, messages, { maxTokens = 4096, temperature = 0.3 } = {}) {
+export async function runModel(key, messages, { maxTokens = 4096, temperature = 0.3, jsonSchema } = {}) {
   const k = String(key || '');
   if (k.startsWith('local|')) {
-    return runLocalChat(k.slice(6), messages, { maxTokens, temperature });
+    return runLocalChat(k.slice(6), messages, { maxTokens, temperature, jsonSchema });
   }
   if (k.startsWith('exchange|')) {
     const [, keyId, ...rest] = k.split('|');
@@ -78,7 +89,8 @@ export async function runModel(key, messages, { maxTokens = 4096, temperature = 
   }
   if (k.startsWith('cloud|')) {
     if (!kernel?.ai?.chat) throw new Error('The AI subsystem is not ready yet.');
-    return kernel.ai.chat(messages, { provider: k.slice(6), maxTokens, temperature, useRag: false });
+    const [, provider, ...model] = k.split('|');
+    return kernel.ai.chat(messages, { provider, model: model.join('|') || undefined, maxTokens, temperature, jsonSchema, useRag: false });
   }
   throw new Error('No model chosen for this step.');
 }

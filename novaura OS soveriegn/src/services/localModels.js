@@ -107,7 +107,7 @@ function cleanCompletion(text) {
  * Run a chat completion on a local model.
  * messages: [{ role: 'system'|'user'|'assistant', content }]
  */
-export async function runLocalChat(ref, messages, { maxTokens = 400, temperature = 0.7 } = {}) {
+export async function runLocalChat(ref, messages, { maxTokens = 400, temperature = 0.7, jsonSchema } = {}) {
   const parsed = typeof ref === 'string' ? parseModelRef(ref) : ref;
   if (!parsed) throw new Error('No local model selected.');
   const cfg = LOCAL_RUNTIMES[parsed.runtime];
@@ -119,6 +119,8 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
       stream: false,
       // Thinking models would otherwise spend the short reply budget thinking.
       think: false,
+      // A JSON schema constrains the reply to valid JSON of that shape.
+      ...(jsonSchema ? { format: jsonSchema } : {}),
       // num_gpu 0 keeps every layer in system RAM and runs on the CPU.
       options: { temperature, num_predict: maxTokens, ...(cpuOnly ? { num_gpu: 0 } : {}) },
     });
@@ -145,6 +147,7 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
     stream: false,
     // Same reason as think:false above; LM Studio ignores it for non-reasoning models.
     reasoning_effort: 'none',
+    ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: jsonSchema } } } : {}),
   });
   const text = res?.choices?.[0]?.message?.content;
   if (typeof text === 'string') return cleanCompletion(text);

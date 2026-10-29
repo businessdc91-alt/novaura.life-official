@@ -1,3 +1,4 @@
+pub mod cloud;
 pub mod engines;
 pub mod forge;
 pub mod mesh;
@@ -1673,6 +1674,7 @@ pub fn run() {
             engines::engine_download_cancel,
             engines::engine_list_models,
             engines::engine_hardware,
+            cloud::cloud_ai_request,
             forge::forge_fetch_text,
             forge::forge_install_desktop_app,
         ])
