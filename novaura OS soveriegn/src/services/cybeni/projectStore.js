@@ -177,7 +177,8 @@ export function buildZip(files, date = new Date()) {
   let offset = 0;
   for (const f of files) {
     const name = enc.encode(normalizePath(f.path));
-    const data = enc.encode(String(f.content ?? ''));
+    // Entries carry text (`content`) or raw binary (`bytes`, e.g. audio or images).
+    const data = f.bytes instanceof Uint8Array ? f.bytes : enc.encode(String(f.content ?? ''));
     const crc = crc32(data);
     const local = new Uint8Array(30 + name.length);
     const lv = new DataView(local.buffer);

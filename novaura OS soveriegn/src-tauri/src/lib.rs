@@ -1,3 +1,5 @@
+pub mod engines;
+pub mod forge;
 pub mod mesh;
 pub mod preview;
 
@@ -1661,6 +1663,18 @@ pub fn run() {
             get_native_hardware_spec,
             preview::cybeni_preview_publish,
             preview::cybeni_preview_clear,
+            engines::engine_install_comfyui,
+            engines::engine_install_status,
+            engines::engine_comfy_start,
+            engines::engine_comfy_stop,
+            engines::engine_comfy_status,
+            engines::engine_download_model,
+            engines::engine_download_status,
+            engines::engine_download_cancel,
+            engines::engine_list_models,
+            engines::engine_hardware,
+            forge::forge_fetch_text,
+            forge::forge_install_desktop_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

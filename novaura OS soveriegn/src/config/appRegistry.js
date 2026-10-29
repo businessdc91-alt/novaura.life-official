@@ -1,4 +1,4 @@
-import { lazy } from 'react';
+import { lazy, createElement, useEffect, useState } from 'react';
 import {
   Code2, FolderOpen, Terminal as TerminalIcon, Globe, CreditCard,
   FileText, Layers, Mail, Users, Bot, ShieldCheck, Settings,
@@ -42,6 +42,10 @@ const MarketplaceWindow = lazy(() => import('../components/windows/MarketplaceWi
 const RetroArcadeWindow = lazy(() => import('../components/windows/RetroArcadeWindow.jsx'));
 const CreativeStudioWindow = lazy(() => import('../components/windows/CreativeStudioWindow.jsx'));
 const BetaHubWindow = lazy(() => import('../components/windows/BetaHubWindow.jsx'));
+const MusicStudioWindow = lazy(() => import('../components/windows/MusicStudioWindow.jsx'));
+const AIEnginesWindow = lazy(() => import('../components/windows/AIEnginesWindow.jsx'));
+const DiscoveryForgeWindow = lazy(() => import('../components/windows/DiscoveryForgeWindow.jsx'));
+const UserAppWindow = lazy(() => import('../components/windows/UserAppWindow.jsx'));
 import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon } from 'lucide-react';
 
 
@@ -417,16 +421,98 @@ export const APP_REGISTRY = [
     component: CreativeStudioWindow,
     defaultSize: { width: 1080, height: 700 },
   },
+  {
+    id: 'music_studio',
+    label: 'Music Studio',
+    category: 'creator',
+    icon: Music,
+    color: '#e879f9',
+    title: 'Music Studio — Songs, Loops & Albums',
+    component: MusicStudioWindow,
+    defaultSize: { width: 1240, height: 690 },
+  },
+  {
+    id: 'ai_engines',
+    label: 'AI Engines',
+    category: 'system',
+    icon: Cpu,
+    color: '#22d3ee',
+    title: 'AI Engines — Local Image & Music Models',
+    component: AIEnginesWindow,
+    defaultSize: { width: 760, height: 640 },
+  },
+  {
+    id: 'discovery_forge',
+    label: 'Discovery Forge',
+    category: 'engineering',
+    icon: Search,
+    color: '#f59e0b',
+    title: 'Discovery Forge — Find, Rebrand & Ship Open Source',
+    component: DiscoveryForgeWindow,
+    defaultSize: { width: 1240, height: 690 },
+  },
 ];
 
 export const APP_MAP = new Map(APP_REGISTRY.map(app => [app.id, app]));
+
+// ── User apps (built in Cybeni or rebranded in the Discovery Forge) ─────────
+// Registered at runtime; each runs in the isolated preview sandbox.
+
+let _registryVersion = 0;
+
+function imageIcon(url) {
+  return function UserAppIcon({ className, size }) {
+    return createElement('img', { src: url, alt: '', className, width: size, height: size, style: { objectFit: 'contain' } });
+  };
+}
+
+/** Replace the registered user apps. apps: [{ id, slug, name, color, iconUrl }] */
+export function registerUserApps(apps) {
+  for (let i = APP_REGISTRY.length - 1; i >= 0; i--) {
+    if (APP_REGISTRY[i].userApp) {
+      APP_MAP.delete(APP_REGISTRY[i].id);
+      APP_REGISTRY.splice(i, 1);
+    }
+  }
+  for (const a of apps) {
+    const def = {
+      id: a.id,
+      label: a.name,
+      category: 'my apps',
+      icon: a.iconUrl ? imageIcon(a.iconUrl) : Layers,
+      color: a.color || '#7c3aed',
+      title: a.name,
+      component: (props) => createElement(UserAppWindow, { ...props, slug: a.slug, name: a.name }),
+      defaultSize: { width: 1000, height: 680 },
+      userApp: true,
+    };
+    APP_REGISTRY.push(def);
+    APP_MAP.set(def.id, def);
+  }
+  _registryVersion++;
+  window.dispatchEvent(new CustomEvent('novaura:apps_changed'));
+}
+
+/** Re-render when user apps are added or removed. */
+export function useAppRegistryVersion() {
+  const [version, setVersion] = useState(_registryVersion);
+  useEffect(() => {
+    const on = () => setVersion(_registryVersion);
+    window.addEventListener('novaura:apps_changed', on);
+    return () => window.removeEventListener('novaura:apps_changed', on);
+  }, []);
+  return version;
+}
 
 export function getAppById(id) {
   if (!id) return undefined;
   if (id === 'crypto' || id === 'crypto_pulse' || id === 'crypto_tracker' || id === 'btc' || id === 'nft' || id === 'trading') {
     return APP_MAP.get('crypto_pulse');
   }
-  if (id === 'media_deck' || id === 'media' || id === 'player' || id === 'music' || id === 'video' || id === 'suno') {
+  if (id === 'suno' || id === 'song' || id === 'make_music' || id === 'music_maker') {
+    return APP_MAP.get('music_studio');
+  }
+  if (id === 'media_deck' || id === 'media' || id === 'player' || id === 'music' || id === 'video') {
     return APP_MAP.get('media_deck');
   }
   if (id === 'developer_gateway' || id === 'gateway' || id === 'api_keys' || id === 'developer' || id === 'apikeys') {

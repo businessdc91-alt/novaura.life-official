@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Search, X, Sparkles, Layers } from 'lucide-react';
-import { APP_REGISTRY } from '../config/appRegistry.js';
+import { APP_REGISTRY, useAppRegistryVersion } from '../config/appRegistry.js';
 
 const CATEGORIES = [
   { id: 'all', label: 'All Applications' },
@@ -17,6 +17,7 @@ const CATEGORIES = [
 ];
 
 export default function AppLauncherModal({ isOpen, onClose, onLaunchApp }) {
+  useAppRegistryVersion(); // re-render when user apps are added or removed
   const [activeCategory, setActiveCategory] = useState('all');
   const [search, setSearch] = useState('');
 

@@ -14,6 +14,8 @@ import { getLocalIdentity, getUnreadCount } from '../services/sovereignMesh';
 // Side-effect imports: register AI Lounge and Inference Exchange mesh handlers at boot,
 // so hosting and room presence work while their window is closed.
 import '../services/aiLoungeService';
+// Registers the user's own apps (Cybeni / Discovery Forge builds) in the launcher.
+import '../services/forge/userApps';
 import { callService, CallState } from '../services/sovereignCallService';
 import { Phone, PhoneCall, PhoneOff, Video } from 'lucide-react';
 import SovereignLeftSidebar from './SovereignLeftSidebar';

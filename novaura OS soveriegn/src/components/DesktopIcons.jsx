@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { APP_REGISTRY, getAppById } from '../config/appRegistry.js';
+import { APP_REGISTRY, getAppById, useAppRegistryVersion } from '../config/appRegistry.js';
 import { 
   Sparkles, RotateCcw, Grid, ExternalLink, ShieldCheck, 
   Mail, PhoneCall, Code2, Layers, CheckCircle2 
@@ -16,6 +16,7 @@ const START_X = 28;
 const START_Y = 24;
 
 export default function DesktopIcons({ openApp, openWindows = [], unreadMail = 0, theme = 'cosmic' }) {
+  useAppRegistryVersion(); // re-render when user apps are added or removed
   const [positions, setPositions] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);

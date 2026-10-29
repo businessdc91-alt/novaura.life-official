@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = {
 };
 const MAX_RUNS = 25;
 
-export default function CybeniBuilderWindow() {
+export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const [projects, setProjects] = useState([]);
   const [slug, setSlug] = useState(null);
   const [files, setFiles] = useState([]);
@@ -116,11 +116,21 @@ export default function CybeniBuilderWindow() {
         await createProject('My first app', 'react');
         list = await refreshProjects();
       }
-      setSlug(list[0].slug);
+      // Opened from the Forge or a user app with a specific project.
+      const wanted = windowProps?.project && list.find(p => p.slug === windowProps.project);
+      setSlug(wanted ? wanted.slug : list[0].slug);
     })();
     const session = sessionRef.current;
-    return () => { clearPreview(session); };
-  }, [refreshProjects]);
+    const onOpenProject = async (e) => {
+      const list = await refreshProjects();
+      if (list.some(p => p.slug === e.detail)) setSlug(e.detail);
+    };
+    window.addEventListener('novaura:cybeni_open_project', onOpenProject);
+    return () => {
+      clearPreview(session);
+      window.removeEventListener('novaura:cybeni_open_project', onOpenProject);
+    };
+  }, [refreshProjects]); // windowProps is read once, on first open
 
   const refreshPreview = useCallback(async (projectFiles) => {
     setPreviewBuilding(true);

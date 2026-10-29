@@ -16,6 +16,8 @@ const BACKUP_TABLES = [
   'git_repositories', 'git_commits', 'git_branches', 'git_pull_requests', 'git_issues', 'git_releases',
   // v14: AI Lounge and Inference Exchange
   'lounge_rooms', 'lounge_agents', 'lounge_messages', 'inference_keys', 'inference_grants', 'inference_access_requests',
+  // v16: Music Studio metadata (audio and images live in media_blobs and in ComfyUI's output folder)
+  'music_tracks', 'music_albums',
 ];
 
 class SovereignDatabase extends Dexie {
@@ -131,6 +133,13 @@ class SovereignDatabase extends Dexie {
       cybeni_checkpoints: 'id, project, createdAt',
     });
 
+    // v16 — Music Studio: tracks, albums and media blobs (audio, covers, icons)
+    this.version(16).stores({
+      music_tracks: 'id, albumId, createdAt, published, liked',
+      music_albums: 'id, createdAt, published',
+      media_blobs: 'id, kind, createdAt',
+    });
+
     this.identities = this.table('identities');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
@@ -180,6 +189,9 @@ class SovereignDatabase extends Dexie {
     this.inference_grants = this.table('inference_grants');
     this.inference_access_requests = this.table('inference_access_requests');
     this.cybeni_checkpoints = this.table('cybeni_checkpoints');
+    this.music_tracks = this.table('music_tracks');
+    this.music_albums = this.table('music_albums');
+    this.media_blobs = this.table('media_blobs');
   }
 
 
