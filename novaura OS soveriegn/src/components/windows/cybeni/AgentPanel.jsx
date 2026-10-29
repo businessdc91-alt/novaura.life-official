@@ -49,6 +49,12 @@ function RequirementsCheck({ result }) {
               </span>
             </li>
           ))}
+          {(result.droppedTests || []).map(d => (
+            <li key={d.id} className="flex items-start gap-1.5 text-slate-400">
+              <MinusCircle className="w-3 h-3 mt-0.5 shrink-0 text-amber-400" />
+              <span>Dropped test {d.id} "{d.name}": judged wrong by the reviewer ({d.reason})</span>
+            </li>
+          ))}
         </ul>
       )}
     </div>

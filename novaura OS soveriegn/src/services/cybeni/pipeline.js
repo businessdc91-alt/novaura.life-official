@@ -32,6 +32,22 @@ import { pickStarter, starterFiles, STARTER_NOTE } from './starters.js';
 import { libraryNotes } from './libraryNotes.js';
 
 export const TESTS_PATH = '.cybeni/acceptance.json';
+const TRIAGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    verdicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { id: { type: 'string' }, verdict: { type: 'string', enum: ['app', 'test'] }, reason: { type: 'string' } },
+        required: ['id', 'verdict', 'reason'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['verdicts'],
+  additionalProperties: false,
+};
 const PROTECTED_RE = /^\.cybeni\//;
 
 export const MODES = {
@@ -406,7 +422,7 @@ export async function runPipeline(input, hooks) {
       `## User request\n${request}`,
       plan ? `## Plan\n${plan}` : '',
       requirements.length ? `## Requirements\n${requirements.map(r => `${r.id}. ${r.text}`).join('\n')}` : '',
-      tests.length && code && runTests ? `## Acceptance tests\nThe finished app is tested with these steps in the preview (loaded once with empty storage, tests run in order). It must pass every one, so use these exact labels, placeholders and texts in the UI.\n${testsText()}` : '',
+      tests.length && code && runTests ? `## Acceptance tests\nThe finished app is tested with these steps in the preview; each test runs on a freshly loaded app with empty storage. It must pass every one, so use these exact labels, placeholders and texts in the UI.\n${testsText()}` : '',
       starter && code ? `## Starting point\n${STARTER_NOTE[starter]}` : '',
       notes ? `## Library notes\n${notes}` : '',
       directive && code ? `## Orchestrator directive\n${directive}` : '',
@@ -595,14 +611,54 @@ export async function runPipeline(input, hooks) {
     });
     const loose = tests.filter(t => !requirements.some(r => r.id === t.requirement));
     if (loose.length) lines.push(`Other tests: ${loose.map(status).join(', ')}`);
+    for (const d of droppedTests) lines.push(`Dropped test ${d.id} "${d.name}" (judged wrong: ${d.reason})`);
     return lines.join('\n');
   }
 
   // Files a problem report points at (stack traces, test failures), shown to the model first.
   const focusFrom = (problems) => [...files.keys()].filter(p => !PROTECTED_RE.test(p) && problems.some(t => t.includes(p) || t.includes(`/${p.split('/').pop()}`)));
 
+  // Tests that keep failing while the developer makes no progress may be wrong
+  // themselves (they ask for something the request never did, or can never pass).
+  // A second model judges each one; tests it rejects are dropped and reported,
+  // never silently ignored, and at most half of the contract can be dropped.
+  const droppedTests = [];
+  const judged = new Set();
+  const failingIds = () => (testResults || []).filter(r => !r.passed).map(r => r.id).sort();
+
+  async function triageTests(ids) {
+    const fresh = ids.filter(id => !judged.has(id));
+    const budget = Math.floor((tests.length + droppedTests.length) / 2) - droppedTests.length;
+    if (!fresh.length || budget <= 0) return 0;
+    fresh.forEach(id => judged.add(id));
+    const judge = roles.reviewer ? 'reviewer' : 'architect';
+    const failing = (testResults || []).filter(r => fresh.includes(r.id));
+    const reply = await call(judge, [
+      'These acceptance tests keep failing although the developer has tried to fix the app. For each one, decide whether the APP is wrong or the TEST is wrong.',
+      ...failing.map(r => `- ${r.id} "${r.name}": ${r.message.slice(0, 400)}\n  Steps: ${(tests.find(t => t.id === r.id)?.steps || []).map(describeStep).join('; ')}`),
+      'Verdict "test" only when the test itself is wrong: it checks something the request never asked for, contradicts the request, can never pass (for example it expects blank text), or targets a label the request did not specify while the app uses a reasonable one. Otherwise the verdict is "app". When unsure, say "app".',
+      'Reply with only JSON: {"verdicts":[{"id":"T1","verdict":"app"|"test","reason":"one sentence"}]}',
+    ].join('\n'), { code: false, temperature: 0.1, maxTokens: 1500, focus: focusFrom(failing.map(r => r.message)), jsonSchema: TRIAGE_SCHEMA });
+    const verdicts = (extractJson(reply)?.verdicts || []).filter(v => v && fresh.includes(v.id) && v.verdict === 'test').slice(0, budget);
+    for (const v of verdicts) {
+      const t = tests.find(x => x.id === v.id);
+      if (!t) continue;
+      droppedTests.push({ id: t.id, name: t.name, reason: String(v.reason || 'judged wrong').slice(0, 300) });
+      log(`Dropped acceptance test ${t.id} "${t.name}": ${v.reason}`);
+    }
+    if (!verdicts.length) return 0;
+    const gone = new Set(verdicts.map(v => v.id));
+    tests = tests.filter(t => !gone.has(t.id));
+    testResults = (testResults || []).filter(r => !gone.has(r.id));
+    files.set(TESTS_PATH, `${JSON.stringify({ requirements, tests, dropped: droppedTests }, null, 2)}\n`);
+    changed.add(TESTS_PATH);
+    return gone.size;
+  }
+
   async function repairLoop(initialProblems, label) {
     let problems = initialProblems;
+    let lastFailing = failingIds().join();
+    let stalled = 0;
     for (let round = 1; round <= maxFixRounds && problems.length; round++) {
       const testFailures = problems.some(p => p.startsWith('Acceptance test'));
       await codePass('developer', `${label} round ${round}`, [
@@ -618,6 +674,21 @@ export async function runPipeline(input, hooks) {
       }
       const again = await runtimeCheck(`${label} recheck ${round}`);
       problems = again.clean === false ? again.problems : [];
+      // Same tests failing as before the round: maybe the tests are wrong, or the repair is stuck.
+      const failing = failingIds();
+      if (failing.length && failing.join() === lastFailing) {
+        const dropped = await triageTests(failing);
+        if (dropped) {
+          const gone = new Set(droppedTests.map(d => d.id));
+          problems = problems.filter(p => !/^Acceptance test (\S+)/.test(p) || !gone.has(/^Acceptance test (\S+)/.exec(p)[1]));
+          runtimeClean = problems.length === 0;
+          stalled = 0;
+        } else if (++stalled >= 2) {
+          log(`${label}: the same problems remain after ${round} rounds; stopping repairs early.`);
+          break;
+        }
+      } else stalled = 0;
+      lastFailing = failingIds().join();
     }
     return problems;
   }
@@ -634,7 +705,7 @@ export async function runPipeline(input, hooks) {
       'Turn the request and plan into a contract the build will be tested against.',
       'Reply with only a JSON object: {"requirements":[{"id":"R1","text":"..."}],"tests":[{"id":"T1","requirement":"R1","name":"...","steps":[...]}]}',
       'requirements: every concrete, checkable thing the user asked for, numbered R1, R2, ... Name the exact visible labels the UI will use (button texts, input placeholders, headings), because the tests rely on them.',
-      'tests: 3 to 8 tests a person could carry out, each covering one requirement. The app is loaded once with empty storage and the tests run in order on the same page, so later tests see what earlier ones did.',
+      'tests: 3 to 8 tests a person could carry out, each with its "requirement" id. Each test runs on a freshly loaded app with empty storage, so every test must create what it needs itself (for example add two tasks before checking "2 left"). The page cannot be reloaded during a test, so persistence cannot be tested.',
       'Steps (use only these):',
       '  {"do":"click","target":"<button or link text, or a label>"}',
       '  {"do":"type","target":"<input placeholder or label>","text":"..."}',
@@ -647,7 +718,7 @@ export async function runPipeline(input, hooks) {
       '  {"do":"expect_value","target":"<input>","text":"..."}',
       '  {"do":"expect_count","target":"<CSS selector>","count":3}   (or "min":1)',
       '  {"do":"expect_canvas"}   a canvas has something drawn on it',
-      'Rules: test only what is visible on the page. No network. Nothing timing-sensitive: a timer may only be checked for starting (for example Start turning into Pause). For canvas games: check the canvas is drawn, that pressing the control keys does not crash it, and that the score or HUD text appears. Keep targets short and literal.',
+      'Rules: test only what is visible on the page. Never expect blank or whitespace-only text. To reach a checkbox or other unlabelled control, use its label, or the target "checkbox" for the first one on the page. No network. Nothing timing-sensitive: a timer may only be checked for starting (for example Start turning into Pause). For canvas games: check the canvas is drawn, that pressing the control keys does not crash it, and that the score or HUD text appears. Keep targets short and literal.',
       tests.length ? `Existing contract from earlier work on this project; keep what still applies, change what this request changes, and add what is new:\n${JSON.stringify({ requirements, tests })}` : '',
     ].filter(Boolean).join('\n');
     let parsed = null;
@@ -867,7 +938,7 @@ export async function runPipeline(input, hooks) {
   }
   // Tests that ran and failed overrule any model's approval: the app does not do what was asked.
   const testsFailed = Boolean(runTests && tests.length && testResults && !(testResults.length === tests.length && testResults.every(r => r.passed)));
-  if (testsFailed && summary) summary += `\n\nRequirements check:\n${coverage()}`;
+  if ((testsFailed || droppedTests.length) && summary) summary += `\n\nRequirements check:\n${coverage()}`;
   return {
     status: 'done',
     files: snapshot(),
@@ -881,6 +952,7 @@ export async function runPipeline(input, hooks) {
     requirements,
     tests,
     testResults,
+    droppedTests,
     stats: { ...stats, ms: Date.now() - stats.startedAt },
   };
 }

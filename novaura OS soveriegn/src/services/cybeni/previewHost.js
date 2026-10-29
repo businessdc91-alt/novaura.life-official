@@ -53,15 +53,9 @@ export function isNoise(text) {
   return NOISE.some(re => re.test(String(text || '')));
 }
 
-/**
- * Run a build in a hidden frame and report what happened.
- * The app starts from empty storage (a first-time user's view); the person's own
- * preview data is restored afterwards. Acceptance tests, if given, run once the
- * app has loaded.
- * Resolves { errors: [string], blank, timedOut, logs, staticIssues, tests: [result] }.
- */
-export async function verifyInHiddenFrame(files, { session = newSessionId(), timeoutMs = 15000, settleMs = 900, tests = [] } = {}) {
-  const published = await publishPreview(session, files);
+// Load the published build once in a hidden frame, optionally run tests in it,
+// and collect what it reported.
+function runFrame(published, tests, { timeoutMs, settleMs }) {
   const frame = document.createElement('iframe');
   frame.setAttribute('sandbox', published.sandbox);
   frame.setAttribute('aria-hidden', 'true');
@@ -69,9 +63,8 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
   const errors = [];
   const logs = [];
   let ready = null;
-  let testResults = [];
-
-  const result = await new Promise((resolve) => {
+  let results = [];
+  return new Promise((resolve) => {
     let settleTimer = null;
     let testTimer = null;
     const finish = (timedOut) => {
@@ -79,14 +72,15 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
       clearTimeout(hardTimer);
       clearTimeout(settleTimer);
       clearTimeout(testTimer);
-      resolve({ timedOut });
+      frame.remove();
+      resolve({ errors, logs, ready, timedOut, results });
     };
     const startTests = () => {
       // Always sent, even with no tests: the agent then restores the person's storage.
       frame.contentWindow?.postMessage({ __cybeniTests: true, tests }, published.origin === 'null' ? '*' : published.origin);
-      const budget = Math.min(180000, 5000 + tests.reduce((n, t) => n + 1500 + t.steps.length * 2800, 0));
+      const budget = Math.min(120000, 4000 + tests.reduce((n, t) => n + 1500 + t.steps.length * 2800, 0));
       testTimer = setTimeout(() => {
-        testResults = tests.map(t => ({ id: t.id, requirement: t.requirement || '', name: t.name, passed: false, failedStep: -1, message: 'The tests did not finish in time; the page may be stuck in a loop.' }));
+        results = tests.map(t => ({ id: t.id, requirement: t.requirement || '', name: t.name, passed: false, failedStep: -1, message: 'The test did not finish in time; the page may be stuck in a loop.' }));
         finish(false);
       }, budget);
     };
@@ -102,22 +96,45 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
         clearTimeout(hardTimer);
         settleTimer = setTimeout(startTests, settleMs);
       } else if (d.type === 'test-results') {
-        testResults = Array.isArray(d.results) ? d.results : [];
+        results = Array.isArray(d.results) ? d.results : [];
         finish(false);
       }
     };
     const hardTimer = setTimeout(() => finish(true), timeoutMs);
     window.addEventListener('message', onMessage);
-    if (published.src) frame.src = `${published.src}&cybeni-isolate=1`;
+    if (published.src) frame.src = `${published.src}&cybeni-isolate=1&t=${Math.random().toString(36).slice(2)}`;
     else frame.srcdoc = published.srcdoc;
     document.body.appendChild(frame);
   });
+}
 
-  frame.remove();
+/**
+ * Run a build in a hidden frame and report what happened.
+ * Every load starts from empty storage (a first-time user's view) and the
+ * person's own preview data is restored afterwards. Each acceptance test gets a
+ * freshly loaded app of its own, so tests never depend on one another.
+ * Resolves { errors: [string], blank, timedOut, logs, staticIssues, tests: [result] }.
+ */
+export async function verifyInHiddenFrame(files, { session = newSessionId(), timeoutMs = 15000, settleMs = 900, tests = [] } = {}) {
+  const published = await publishPreview(session, files);
+  const first = await runFrame(published, [], { timeoutMs, settleMs });
+  const errors = [...first.errors];
+  const testResults = [];
+  if (first.ready) {
+    for (const test of tests) {
+      const run = await runFrame(published, [test], { timeoutMs, settleMs: Math.min(settleMs, 600) });
+      testResults.push(run.results[0] || {
+        id: test.id, requirement: test.requirement || '', name: test.name, passed: false, failedStep: -1,
+        message: run.ready ? 'The test did not report a result.' : 'The app did not load for this test.',
+      });
+    }
+  } else {
+    for (const test of tests) testResults.push({ id: test.id, requirement: test.requirement || '', name: test.name, passed: false, failedStep: -1, message: 'The app never finished loading, so the test could not run.' });
+  }
   clearPreview(session);
   const unique = [...new Set(errors)].slice(0, 10);
-  if (result.timedOut && !ready) {
+  if (first.timedOut && !first.ready) {
     unique.push(`The app did not finish loading within ${Math.round(timeoutMs / 1000)} seconds. An import may be failing, or the page may be stuck in a loop.`);
   }
-  return { errors: unique, blank: ready ? Boolean(ready.empty) : true, timedOut: result.timedOut, logs, staticIssues: published.issues, tests: testResults };
+  return { errors: unique, blank: first.ready ? Boolean(first.ready.empty) : true, timedOut: first.timedOut, logs: first.logs, staticIssues: published.issues, tests: testResults };
 }

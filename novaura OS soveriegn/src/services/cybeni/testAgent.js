@@ -79,23 +79,40 @@ export const TESTS_SCHEMA = {
   additionalProperties: false,
 };
 
-/** Clean up a model-written test list: known steps only, sane limits, unique ids. */
+// The fields each step uses; anything else a model adds is dropped.
+const STEP_FIELDS = {
+  click: ['target'], type: ['target', 'text'], press: ['key', 'target'], select: ['target', 'value'], wait: ['ms'],
+  expect_text: ['text'], expect_no_text: ['text'], expect_match: ['pattern'], expect_element: ['target', 'text'],
+  expect_value: ['target', 'text'], expect_count: ['target', 'count', 'min'], expect_canvas: [],
+};
+const NUMERIC = new Set(['ms', 'count', 'min']);
+const present = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+
+/** A cleaned step, or null when it could never mean anything (blank text, no target, bad pattern). */
+function cleanStep(s) {
+  if (!s || !STEP_TYPES.includes(s.do)) return null;
+  const step = { do: s.do };
+  for (const k of STEP_FIELDS[s.do]) {
+    if (NUMERIC.has(k)) { if (present(s[k]) && Number.isFinite(Number(s[k]))) step[k] = Number(s[k]); }
+    else if (k === 'text' && s.do === 'type' && s[k] !== undefined && s[k] !== null) step[k] = String(s[k]).slice(0, 300);
+    else if (present(s[k])) step[k] = String(s[k]).slice(0, 300);
+  }
+  const needs = { click: ['target'], type: ['target'], select: ['target', 'value'], expect_text: ['text'], expect_no_text: ['text'], expect_match: ['pattern'], expect_element: ['target'], expect_value: ['target'], expect_count: ['target'] }[s.do] || [];
+  if (needs.some(k => step[k] === undefined)) return null;
+  if (step.pattern) { try { new RegExp(step.pattern); } catch { return null; } }
+  return step;
+}
+
+/** Clean up a model-written test list: meaningful steps only, sane limits, unique ids. */
 export function normalizeTests(raw) {
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.tests) ? raw.tests : [];
   const out = [];
   const seen = new Set();
   for (const [i, t] of list.entries()) {
     if (!t || typeof t !== 'object' || !Array.isArray(t.steps)) continue;
-    const steps = t.steps
-      .filter(s => s && STEP_TYPES.includes(s.do))
-      .slice(0, 30)
-      .map(s => {
-        const step = { do: s.do };
-        for (const k of ['target', 'text', 'key', 'value', 'pattern']) if (s[k] !== undefined && s[k] !== null && s[k] !== '') step[k] = String(s[k]).slice(0, 300);
-        for (const k of ['ms', 'count', 'min']) if (Number.isFinite(Number(s[k])) && s[k] !== '' && s[k] !== null && s[k] !== undefined) step[k] = Number(s[k]);
-        return step;
-      });
-    if (!steps.length) continue;
+    const steps = t.steps.map(cleanStep).filter(Boolean).slice(0, 30);
+    // A test that checks nothing cannot tell a working app from a broken one.
+    if (!steps.some(s => s.do.startsWith('expect_'))) continue;
     let id = String(t.id || `T${i + 1}`).slice(0, 12);
     while (seen.has(id)) id += "'";
     seen.add(id);
@@ -178,10 +195,18 @@ function cybeniTestAgent() {
     return Boolean(m) && !(doc.createElement(m[1]) instanceof HTMLUnknownElement);
   };
 
+  // Generic control words: "checkbox", "the first checkbox", "slider", "dropdown".
+  var CONTROL_WORDS = { checkbox: 'input[type="checkbox"], [role="checkbox"]', 'check box': 'input[type="checkbox"], [role="checkbox"]', radio: 'input[type="radio"], [role="radio"]', 'radio button': 'input[type="radio"], [role="radio"]', slider: 'input[type="range"], [role="slider"]', dropdown: 'select, [role="combobox"]', textbox: 'input:not([type]), input[type="text"], textarea', 'text field': 'input:not([type]), input[type="text"], textarea' };
+
   function find(target, opts) {
     opts = opts || {};
     var t = String(target || '').trim();
     if (!t) return null;
+    var word = t.toLowerCase().replace(/^(the |a |an )?(first )?/, '');
+    if (CONTROL_WORDS[word]) {
+      var controls = [].slice.call(doc.querySelectorAll(CONTROL_WORDS[word])).filter(visible);
+      if (controls.length) return controls[0];
+    }
     if (looksLikeSelector(t)) {
       try {
         var all = [].slice.call(doc.querySelectorAll(t)).filter(visible);
