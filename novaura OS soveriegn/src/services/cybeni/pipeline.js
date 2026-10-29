@@ -282,6 +282,29 @@ function pathFromFirstLineComment(body) {
   return m && PATH_RE.exec(m[1])?.[0] === m[1] ? m[1] : null;
 }
 
+// The model could not be loaded or reached (as opposed to a bad request); another model can stand in.
+const UNAVAILABLE_RE = /out[- ]of[- ]memory|failed to allocate|unable to allocate|process has terminated|failed to load|not loaded|fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|network ?error/i;
+
+// Which other roles' models stand in for a role, best first. A reviewer never falls
+// back to the developer's model: a model reviewing its own code is not a review.
+const FALLBACK_ORDER = {
+  architect: ['reviewer', 'designer', 'developer'],
+  reviewer: ['architect', 'designer'],
+  developer: ['designer', 'architect', 'reviewer'],
+  designer: ['developer', 'architect', 'reviewer'],
+};
+
+/** Models to try for a role: its own, then the other roles' distinct models. */
+export function modelsFor(role, roles) {
+  const order = [role, ...(FALLBACK_ORDER[role] || Object.keys(roles))];
+  const keys = [...new Set(order.map(r => roles[r]).filter(Boolean))];
+  return role === 'reviewer' ? keys.filter((k, i) => i === 0 || k !== roles.developer) : keys;
+}
+
+export function isUnavailable(err) {
+  return UNAVAILABLE_RE.test(String(err?.message || err || ''));
+}
+
 function verdictOf(text, approveWord) {
   const first = String(text || '').trim().split('\n')[0].replace(/[*#`]/g, '').trim();
   return new RegExp(`^${approveWord}\\b`, 'i').test(first);
@@ -303,6 +326,11 @@ export function extractJson(text) {
     } catch { /* try the next form */ }
   }
   return null;
+}
+
+// "local|lmstudio:google/gemma-4-26b" -> "gemma-4-26b"
+function modelLabel(key) {
+  return String(key || '').split(/[|:/]/).pop() || String(key);
 }
 
 function afterFirstLine(text) {
@@ -360,7 +388,8 @@ export async function runPipeline(input, hooks) {
   const deleted = new Set();
   const maxFixRounds = Math.max(1, Math.min(5, input.maxFixRounds ?? 3));
   const reviewRounds = mode === 'full' ? 3 : 2;
-  const stats = { modelCalls: 0, charsIn: 0, charsOut: 0, startedAt: Date.now() };
+  const stats = { modelCalls: 0, fallbacks: 0, charsIn: 0, charsOut: 0, startedAt: Date.now() };
+  const unavailable = new Set();
   const phases = phasesFor(mode);
   const log = (t) => hooks.onLog?.(t);
 
@@ -435,7 +464,27 @@ export async function runPipeline(input, hooks) {
     const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
     const opts = { temperature: temperature ?? (role === 'designer' ? 0.6 : 0.25), maxTokens: maxTokens ?? (code ? 8192 : 2048), ...(jsonSchema ? { jsonSchema } : {}) };
 
-    let reply = await hooks.runModel(modelKey, messages, opts);
+    let usedKey = modelKey;
+    const send = async () => {
+      // A model that failed to load stays skipped for the rest of the run instead of failing every call.
+      const candidates = modelsFor(role, roles).filter(k => !unavailable.has(k));
+      if (!candidates.length) throw new Error(`No model could be loaded for the ${role} role.`);
+      for (let i = 0; i < candidates.length; i++) {
+        try {
+          const out = await hooks.runModel(candidates[i], messages, opts);
+          usedKey = candidates[i];
+          return out;
+        } catch (err) {
+          if (err.message === 'CANCELLED' || !isUnavailable(err) || i === candidates.length - 1) throw err;
+          unavailable.add(candidates[i]);
+          stats.fallbacks++;
+          log(`${modelLabel(candidates[i])} could not run (${err.message.trim().split('\n').pop().slice(0, 90)}); the ${role} role continues on ${modelLabel(candidates[i + 1])}.`);
+          cancelled();
+        }
+      }
+    };
+
+    let reply = await send();
     stats.modelCalls++;
     stats.charsIn += system.length + user.length;
     stats.charsOut += String(reply || '').length;
@@ -447,7 +496,7 @@ export async function runPipeline(input, hooks) {
       const answer = await hooks.ask(question[1].trim());
       cancelled();
       messages.push({ role: 'assistant', content: reply }, { role: 'user', content: `Answer from the user: ${answer}\n\nNow complete the task.` });
-      reply = await hooks.runModel(modelKey, messages, opts);
+      reply = await hooks.runModel(usedKey, messages, opts);
       stats.modelCalls++;
       stats.charsOut += String(reply || '').length;
     }
@@ -699,6 +748,10 @@ export async function runPipeline(input, hooks) {
   // load). A build nobody independently reviewed is never reported as approved.
   const REVIEW_PHASES = new Set(['cross-review', 'inspection']);
   const failedReviews = [];
+  // Without a plan and test contract, or without a sign-off, nothing checked the
+  // build against the request, so it is not approved either.
+  const CONTRACT_PHASES = new Set(['plan', 'final-review']);
+  const failedChecks = [];
 
   // The architect turns the request into numbered requirements and acceptance
   // tests (structured JSON, one retry). Existing tests are updated, not discarded.
@@ -923,6 +976,7 @@ export async function runPipeline(input, hooks) {
         hooks.onPhase?.(phase.id, { status: 'failed', note: err.message, ms: Date.now() - started });
         log(`${phase.label} failed: ${err.message}`);
         if (REVIEW_PHASES.has(phase.id)) failedReviews.push(phase.id);
+        if (CONTRACT_PHASES.has(phase.id)) failedChecks.push(phase.id);
         // A failed build pass leaves nothing to check; other failures are survivable.
         if (['build', 'foundation', 'fix'].includes(phase.id) && [...changed].every(p => PROTECTED_RE.test(p))) throw err;
       }
@@ -948,8 +1002,9 @@ export async function runPipeline(input, hooks) {
     deleted: [...deleted],
     plan,
     summary,
-    approved: failedReviews.length || testsFailed ? false : approved,
-    unreviewed: failedReviews,
+    // Errors still showing in the preview mean the app is broken, whatever a model said.
+    approved: failedReviews.length || failedChecks.length || testsFailed || runtimeClean === false ? false : approved,
+    unreviewed: [...failedReviews, ...failedChecks],
     runtimeClean,
     requirements,
     tests,

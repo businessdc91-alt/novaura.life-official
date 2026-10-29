@@ -334,7 +334,10 @@ function cybeniTestAgent() {
     if (d === 'wait') { await sleep(Math.min(5000, Math.max(0, Number(s.ms) || 300))); return; }
     if (d === 'click' || d === 'type' || d === 'select' || (d === 'press' && s.target)) {
       var field = d === 'type' || d === 'select';
-      var found = await until(function () { var el = find(s.target, { field: field }); return el ? { ok: true, el: el } : { ok: false }; }, 2500);
+      var seen = null;
+      // A control can be briefly disabled (a roll animation, a pending save), so wait for it to be usable.
+      var found = await until(function () { var el = find(s.target, { field: field }); seen = el || seen; return el && !el.disabled ? { ok: true, el: el } : { ok: false }; }, 4000);
+      if (!found.ok && seen) found = { ok: true, el: seen };
       if (!found.ok) throw new Error('No ' + (field ? 'field' : 'element') + ' matching "' + s.target + '". On screen: ' + describeTargets());
       var el = found.el;
       if (d === 'click') click(el);

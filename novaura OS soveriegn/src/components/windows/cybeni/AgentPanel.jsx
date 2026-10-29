@@ -259,7 +259,7 @@ export default function AgentPanel({
                   <span className="font-normal text-slate-400"> · {lastResult.stats?.modelCalls || 0} model calls · {Math.round((lastResult.stats?.ms || 0) / 1000)}s · {lastResult.changed?.length || 0} files changed</span>
                 </div>
                 {lastResult.unreviewed?.length > 0 && (
-                  <div className="mt-1 text-amber-200">Not independently reviewed: the reviewer model could not run ({lastResult.unreviewed.join(', ')}). See the failed steps above.</div>
+                  <div className="mt-1 text-amber-200">Not fully checked: these steps could not run ({lastResult.unreviewed.join(', ')}), so the build is not approved. See the failed steps above.</div>
                 )}
                 <RequirementsCheck result={lastResult} />
                 {lastResult.summary && <div className="mt-1 whitespace-pre-wrap text-slate-200">{lastResult.summary}</div>}
