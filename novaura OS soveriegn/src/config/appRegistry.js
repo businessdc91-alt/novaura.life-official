@@ -2,7 +2,7 @@ import { lazy, createElement, useEffect, useState } from 'react';
 import {
   Code2, FolderOpen, Terminal as TerminalIcon, Globe, CreditCard,
   FileText, Layers, Mail, Users, Bot, ShieldCheck, Settings,
-  BookOpen, MonitorCog, Sparkles, PhoneCall, Palette, Bug
+  BookOpen, MonitorCog, Sparkles, PhoneCall, Palette, Bug, Compass
 } from 'lucide-react';
 
 const CybeniBuilderWindow = lazy(() => import('../components/windows/CybeniBuilderWindow.jsx'));
@@ -31,6 +31,7 @@ const ChainLogicWeaverWindow = lazy(() => import('../components/windows/ChainLog
 const CredentialEnclaveWindow = lazy(() => import('../components/windows/CredentialEnclaveWindow.jsx'));
 const NovaHubWindow = lazy(() => import('../components/windows/NovaHubWindow.jsx'));
 const SovereignOnboardingWindow = lazy(() => import('../components/windows/SovereignOnboardingWindow.jsx'));
+const WelcomeGuideWindow = lazy(() => import('../components/windows/WelcomeGuideWindow.jsx'));
 const LiveVoiceWindow = lazy(() => import('../components/windows/LiveVoiceWindow.jsx'));
 const NovaSearchWindow = lazy(() => import('../components/windows/NovaSearchWindow.jsx'));
 const SovereignPeeringWindow = lazy(() => import('../components/windows/SovereignPeeringWindow.jsx'));
@@ -310,6 +311,17 @@ export const APP_REGISTRY = [
     title: 'Nova Hub — Decentralized Git Forge & Repository Vault',
     component: NovaHubWindow,
     defaultSize: { width: 1140, height: 720 },
+  },
+  {
+    id: 'welcome_guide',
+    label: 'Welcome Guide',
+    category: 'system',
+    icon: Compass,
+    color: '#22d3ee',
+    title: 'Welcome to Novaura Sovereign — Features, Roadmap & Vision',
+    component: WelcomeGuideWindow,
+    defaultSize: { width: 1080, height: 700 },
+    desktopHidden: true, // opened from the welcome card in the desktop's top-left corner
   },
   {
     id: 'onboarding_guide',

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Search, X, Sparkles, Layers } from 'lucide-react';
 import { APP_REGISTRY, useAppRegistryVersion } from '../config/appRegistry.js';
 
-const CATEGORIES = [
+export const CATEGORIES = [
   { id: 'all', label: 'All Applications' },
   { id: 'creator', label: 'Creator Studio' },
   { id: 'finance', label: 'Crypto & Assets' },

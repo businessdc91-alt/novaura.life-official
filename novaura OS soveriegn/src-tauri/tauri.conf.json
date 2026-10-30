@@ -22,7 +22,8 @@
         "fullscreen": false,
         "visible": true,
         "center": true,
-        "devtools": false
+        "devtools": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

@@ -2,14 +2,17 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FolderOpen, FileText, FileCode, Image as ImageIcon, Film, Music, File, Archive,
   Upload, FolderPlus, Trash2, Download, RefreshCw, Search, ChevronRight,
-  HardDrive, Cloud, MoreVertical, Pencil, X, Check, Loader2, Home, Link2, Unlink
+  HardDrive, Cloud, MoreVertical, Pencil, X, Check, Loader2, Home, Link2, Unlink,
+  FileArchive, PackageOpen, MonitorUp, CornerUpRight
 } from 'lucide-react';
 import {
   listFiles, uploadFiles, createFolder, deleteItem,
   downloadFile, renameItem, getStorageUsage, saveFile,
   getCloudConnectorStatus, connectGoogleDrive, disconnectGoogleDrive,
-  searchGoogleDriveFiles, importGoogleDriveFile
+  searchGoogleDriveFiles, importGoogleDriveFile,
+  zipItem, extractZip, createShortcut, isShortcut, readShortcut, DESKTOP_PATH
 } from '../../services/fileStorageService.js';
+import { openShortcutTarget, shortcutTargetFor } from '../../services/desktopActions.js';
 
 function getFileIcon(name) {
   const ext = (name || '').split('.').pop()?.toLowerCase();
@@ -29,8 +32,10 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
-export default function FilesWindow() {
-  const [currentPath, setCurrentPath] = useState('/');
+export default function FilesWindow({ props: windowProps } = {}) {
+  const [currentPath, setCurrentPath] = useState(windowProps?.path || '/');
+  const [pendingSelect, setPendingSelect] = useState(windowProps?.select || null);
+  const [notice, setNotice] = useState(null);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -70,6 +75,61 @@ export default function FilesWindow() {
     refreshFiles(currentPath);
     getCloudConnectorStatus('gdrive').then(setDriveStatus);
   }, [currentPath, refreshFiles]);
+
+  // Opened from the desktop (or a shortcut) at a specific folder / file.
+  useEffect(() => {
+    const onOpenPath = (e) => {
+      const { path, select } = e.detail || {};
+      if (!path) return;
+      setActiveTab('local');
+      setCurrentPath(path);
+      setPendingSelect(select || null);
+    };
+    window.addEventListener('novaura:files_open_path', onOpenPath);
+    return () => window.removeEventListener('novaura:files_open_path', onOpenPath);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingSelect) return;
+    const hit = items.find(i => i.path === pendingSelect);
+    if (hit) {
+      setSelectedItem(hit);
+      setFilePreview(hit.type === 'file' ? hit : null);
+      setPendingSelect(null);
+    }
+  }, [items, pendingSelect]);
+
+  // Stay current when files change elsewhere (desktop, Cybeni, extraction…).
+  useEffect(() => {
+    let timer = null;
+    const onChange = () => { clearTimeout(timer); timer = setTimeout(() => refreshFiles(), 300); };
+    window.addEventListener('novaura:fs_changed', onChange);
+    return () => { clearTimeout(timer); window.removeEventListener('novaura:fs_changed', onChange); };
+  }, [refreshFiles]);
+
+  const flashNotice = (text, tone = 'ok') => {
+    setNotice({ text, tone });
+    setTimeout(() => setNotice(n => (n?.text === text ? null : n)), 3500);
+  };
+
+  const runAction = async (fn, okText) => {
+    try {
+      await fn();
+      if (okText) flashNotice(okText);
+      refreshFiles();
+    } catch (err) {
+      flashNotice(err?.message || String(err), 'error');
+    }
+  };
+
+  const handleOpen = (item) => {
+    if (item.type === 'folder') handleFolderClick(item);
+    else if (isShortcut(item)) {
+      const target = readShortcut(item);
+      if (target?.kind === 'folder') { setCurrentPath(target.path); setSelectedItem(null); setFilePreview(null); }
+      else openShortcutTarget(target);
+    } else runAction(() => downloadFile(item));
+  };
 
   const handleFolderClick = (folder) => {
     setCurrentPath(folder.path);
@@ -306,6 +366,14 @@ export default function FilesWindow() {
           </div>
         </div>
 
+        {notice && (
+          <div className={`px-4 py-1.5 text-[11px] border-b ${
+            notice.tone === 'error' ? 'bg-rose-950/60 border-rose-500/30 text-rose-200' : 'bg-cyan-950/40 border-cyan-500/20 text-cyan-200'
+          }`}>
+            {notice.text}
+          </div>
+        )}
+
         {/* View Switcher: Local Files vs Google Drive Connector */}
         {activeTab === 'local' ? (
           <div className="flex-1 flex overflow-hidden">
@@ -347,16 +415,26 @@ export default function FilesWindow() {
                     return (
                       <div
                         key={item.id}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('application/x-novaura-doc', JSON.stringify({
+                            id: item.id, path: item.path, name: item.name, type: item.type, parentPath: item.parentPath || '/',
+                          }));
+                          e.dataTransfer.effectAllowed = 'copyLink';
+                        }}
                         onClick={() => handleItemSelect(item)}
-                        onDoubleClick={() => isFolder ? handleFolderClick(item) : downloadFile(item)}
+                        onDoubleClick={() => handleOpen(item)}
                         className={`group relative flex flex-col items-center p-3 rounded-xl border text-center transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-cyan-950/40 border-cyan-500/50 shadow-md ring-1 ring-cyan-500/30'
                             : 'bg-slate-900/40 border-slate-800/80 hover:bg-slate-800/50 hover:border-slate-700'
                         }`}
                       >
-                        <div className="w-12 h-12 flex items-center justify-center mb-2">
+                        <div className="relative w-12 h-12 flex items-center justify-center mb-2">
                           <Icon className={`w-8 h-8 ${isFolder ? 'text-amber-400 fill-amber-400/20' : 'text-cyan-400'}`} />
+                          {isShortcut(item) && (
+                            <CornerUpRight className="absolute bottom-0 left-0 w-3.5 h-3.5 p-0.5 rounded bg-slate-950 border border-slate-600 text-slate-200" />
+                          )}
                         </div>
 
                         {renamingId === item.id ? (
@@ -388,13 +466,42 @@ export default function FilesWindow() {
 
                         {/* Quick Action Overlay */}
                         <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-slate-900/90 rounded-md p-1 border border-slate-700/80">
-                          {!isFolder && (
+                          {!isShortcut(item) && (
                             <button
-                              onClick={(e) => { e.stopPropagation(); downloadFile(item); }}
+                              onClick={(e) => { e.stopPropagation(); runAction(() => downloadFile(item)); }}
                               className="p-1 hover:text-cyan-400 text-slate-400 transition-colors"
-                              title="Download"
+                              title={isFolder ? 'Download as .zip' : 'Download'}
                             >
                               <Download className="w-3 h-3" />
+                            </button>
+                          )}
+                          {/\.zip$/i.test(item.name) && !isFolder ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); runAction(() => extractZip(item.id), 'Extracted into a new folder'); }}
+                              className="p-1 hover:text-violet-300 text-slate-400 transition-colors"
+                              title="Extract here"
+                            >
+                              <PackageOpen className="w-3 h-3" />
+                            </button>
+                          ) : !isShortcut(item) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); runAction(() => zipItem(item.id), 'Compressed to .zip'); }}
+                              className="p-1 hover:text-violet-300 text-slate-400 transition-colors"
+                              title="Compress to .zip"
+                            >
+                              <FileArchive className="w-3 h-3" />
+                            </button>
+                          )}
+                          {currentPath !== DESKTOP_PATH && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                runAction(() => createShortcut(DESKTOP_PATH, item.name, isShortcut(item) ? readShortcut(item) : shortcutTargetFor(item)), `${item.name} added to the desktop`);
+                              }}
+                              className="p-1 hover:text-emerald-300 text-slate-400 transition-colors"
+                              title="Add to desktop"
+                            >
+                              <MonitorUp className="w-3 h-3" />
                             </button>
                           )}
                           <button
@@ -468,7 +575,7 @@ export default function FilesWindow() {
                 )}
 
                 <button
-                  onClick={() => downloadFile(filePreview)}
+                  onClick={() => runAction(() => downloadFile(filePreview))}
                   className="mt-4 w-full flex items-center justify-center gap-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" />

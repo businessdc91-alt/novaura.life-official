@@ -173,7 +173,9 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
     };
   }, []);
 
-  const openApp = useCallback((appId, props = {}) => {
+  // toggle: clicking an already-focused app minimizes it (launcher, dock, app icons).
+  // Opening a document passes toggle: false so its window always comes forward.
+  const openApp = useCallback((appId, props = {}, { toggle = true } = {}) => {
     const wm = kernel?.wm || kernelSingleton?.wm;
     if (!wm) {
       console.warn(`[Desktop] WindowManager not ready for: ${appId}`);
@@ -195,7 +197,7 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
         wm.restore(existing.id);
         wm.focus(existing.id);
         setFocusedId(existing.id);
-      } else if (focusedId === existing.id) {
+      } else if (toggle && focusedId === existing.id) {
         wm.minimize(existing.id);
         setFocusedId(null);
       } else {
@@ -214,7 +216,7 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
       const appId = typeof e.detail === 'string' ? e.detail : e.detail?.appId;
       const props = typeof e.detail === 'object' ? e.detail?.props : undefined;
       if (appId) {
-        openApp(appId, props);
+        openApp(appId, props, { toggle: e.detail?.toggle !== false });
       }
     };
     window.addEventListener('novaura-open-window', handleOpenWindowCustom);
