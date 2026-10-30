@@ -864,7 +864,7 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [x] Tests: `npm test` now runs `tests/**` (pipeline 9, ZIP 6 incl. Python zipfile interop both ways, layout 6) = 21/21. Headless Chrome walkthrough of the dev build: grouping, bubble open, tray, new folder, drag into bubble, compress to zip, guide sections; no page errors.
 - [ ] Not verified inside the Tauri app yet (only Vite + headless Chrome). Rebuild and click-test, including dragging a file in from Windows Explorer.
 - [ ] Note: no `<Toaster>` is mounted, so `sonner` toasts in ShellHUD, SovereignChatBar and NovaHub never show.
-- [ ] Owner to confirm the public platform-fee number before the guide states one (CLAUDE.md says 10%, older notes say 20%); the guide says "a small platform fee".
+- [x] Platform fee confirmed by the owner as 10% for Sovereign (2026-10-30); the guide's inference-network section states it.
 
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 

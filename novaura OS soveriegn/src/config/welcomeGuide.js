@@ -320,7 +320,7 @@ export const INFERENCE_NETWORK = {
     { title: 'Hosts share their GPUs', text: 'People with capable machines leave a node running, a bit like a mining rig, and choose which models to share.' },
     { title: 'Requests go to a pool', text: 'Your request goes to any qualified host that is online, not to one fixed machine, so a host rebooting never leaves you stranded.' },
     { title: 'One flat, low price', text: 'Members pay one simple monthly subscription, aimed at around $10, with fair use instead of hard message caps. That is far less than stacking big-name AI subscriptions.' },
-    { title: 'Hosts earn for real work', text: 'Subscription revenue is shared among hosts in proportion to the work their machines actually serve, after a small platform fee.' },
+    { title: 'Hosts earn for real work', text: 'Subscription revenue is shared among hosts in proportion to the work their machines actually serve, after a 10% platform fee.' },
   ],
   today: 'The foundation already works: the Inference Exchange lets hosts share local models with other nodes using signed, person-bound access keys, and that has been tested end to end with real models.',
   honesty: [
