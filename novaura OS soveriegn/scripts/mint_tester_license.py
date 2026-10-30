@@ -6,7 +6,7 @@ Empowers the Novaura Sovereign Node Operator to cryptographically mint authentic
 offline Ed25519 activation license tokens for friends, testers, and peer nodes.
 
 Usage:
-  python scripts/mint_tester_license.py --name "Alex" --node-id "did:nova:hw:a1b2c3d4..."
+  python scripts/mint_tester_license.py --name "Alex" --node-id "NODE-F60E82DB7BFC4F2C"
   
 Or simply run without arguments for interactive prompt:
   python scripts/mint_tester_license.py
@@ -118,8 +118,8 @@ def mint_license(holder: str, node_id: str, tier: str = "PRO_SOVEREIGN", days_va
 def main():
     parser = argparse.ArgumentParser(description="Novaura Sovereign License Token Minter for Testers")
     parser.add_argument("--name", "-n", dest="holder", help="Friend or Tester Name / Handle")
-    parser.add_argument("--node-id", "-i", dest="node_id", help="Friend's Hardware Node ID (did:nova:hw:...)")
-    parser.add_argument("--tier", "-t", default="PRO_SOVEREIGN", choices=["PRO_SOVEREIGN", "FOUNDER_GENESIS", "TESTER_PREVIEW"], help="License tier")
+    parser.add_argument("--node-id", "-i", dest="node_id", help="Friend's Hardware Node ID (NODE-XXXXXXXXXXXXXXXX)")
+    parser.add_argument("--tier", "-t", default="PRO_SOVEREIGN", choices=["PRO_SOVEREIGN", "FOUNDER_SOVEREIGN", "FOUNDER_GENESIS", "TESTER_PREVIEW"], help="License tier")
     parser.add_argument("--days", "-d", type=int, default=365, help="Days valid (default: 365)")
     parser.add_argument("--key-file", "-k", help="Path to authority private key JSON")
     parser.add_argument("--out", "-o", help="Optional output text file")
@@ -148,7 +148,7 @@ def main():
     if not node_id:
         try:
             print("\nNote: Your friend will see their Node ID on the Sovereign Activation Screen")
-            print("Example format: did:nova:hw:a8f01b9c24de378a...\n")
+            print("Example format: NODE-F60E82DB7BFC4F2C\n")
             node_id = input("Enter friend's Hardware Node ID: ").strip()
         except EOFError:
             node_id = ""
