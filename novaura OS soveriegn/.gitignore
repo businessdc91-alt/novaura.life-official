@@ -57,3 +57,6 @@ build_temp/
 
 # Update feed output (scripts/publish-update.ps1)
 release/
+
+# Cybeni live benchmark runs (local output)
+tests/cybeni/.runs/
