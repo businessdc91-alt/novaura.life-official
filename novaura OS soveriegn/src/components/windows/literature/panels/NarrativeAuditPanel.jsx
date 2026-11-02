@@ -5,16 +5,18 @@
 import React, { useState } from 'react';
 import { ShieldCheck, AlertCircle, CheckCircle2, Clock, ListChecks, RefreshCw, Sparkles, BookOpen, UserCheck } from 'lucide-react';
 import { queryUniversalInference } from '../../../../services/literatureAiService.js';
+import { storyTimeline } from '../engines/StoryTimeline.js';
 
 export default function NarrativeAuditPanel({ activeDocContent = '', activeDocName = '' }) {
   const [activeTab, setActiveTab] = useState('audit'); // 'audit' | 'workflow'
   const [isAuditing, setIsAuditing] = useState(false);
   const [auditReport, setAuditReport] = useState(null);
+  const [stateConflicts, setStateConflicts] = useState(null);
 
   // Workflow Checklist
   const [workflowSteps, setWorkflowSteps] = useState([
-    { id: 'step-1', phase: 'Session Start', title: 'Review Active Story Bible & Character Goals', completed: true },
-    { id: 'step-2', phase: 'Session Start', title: 'Check Recent Timeline & Causality Ripples', completed: true },
+    { id: 'step-1', phase: 'Session Start', title: 'Review Active Story Bible & Character Goals', completed: false },
+    { id: 'step-2', phase: 'Session Start', title: 'Check Recent Timeline & Causality Ripples', completed: false },
     { id: 'step-3', phase: 'Writing', title: 'Draft Scene with Active Sensory Dimensions', completed: false },
     { id: 'step-4', phase: 'Writing', title: 'Maintain Narrative Tension Arc & Cadence Rhythm', completed: false },
     { id: 'step-5', phase: 'Session Close', title: 'Extract New Entities & Canon into Codex', completed: false },
@@ -28,13 +30,16 @@ export default function NarrativeAuditPanel({ activeDocContent = '', activeDocNa
   const runContinuityAudit = async () => {
     if (!activeDocContent.trim()) return;
     setIsAuditing(true);
+    // Checked against the story bible directly, before (and without) the AI.
+    setStateConflicts(storyTimeline.findStateConflicts(activeDocContent));
     try {
       const plain = activeDocContent.replace(/<[^>]+>/g, ' ').trim();
+      const bible = storyTimeline.bibleContext();
       const prompt = `Conduct a rigorous literary continuity and consistency audit on this scene from "${activeDocName}":
 """
 ${plain.slice(0, 3000)}
 """
-
+${bible ? `\nSTORY BIBLE — the canon this scene must agree with (flag anything that contradicts it, such as a character acting while dead, missing or captive, or knowing something they shouldn't):\n${bible}\n` : ''}
 Format your report into:
 1. Plot Consistency (Timeline, causal consequences, physical laws)
 2. Character State Consistency (Knowledge state, emotions, active injuries or equipment)
@@ -42,7 +47,7 @@ Format your report into:
 4. Overall Continuity Score (1-100)`;
 
       const res = await queryUniversalInference(prompt, 'You are an elite developmental fiction editor and continuity auditor.');
-      setAuditReport(res || 'Continuity audit completed with no critical plot holes detected.');
+      setAuditReport(res || 'The model returned an empty report.');
     } catch (err) {
       setAuditReport('Audit error: ' + err.message);
     } finally {
@@ -90,6 +95,22 @@ Format your report into:
                 Audits narrative consistency, POV slips, timeline logic, and character knowledge state against world canon.
               </p>
             </div>
+
+            {stateConflicts && (
+              <div style={{ padding: '0.7rem', backgroundColor: stateConflicts.length ? 'rgba(244,63,94,0.08)' : 'rgba(16,185,129,0.08)', borderRadius: '8px', border: `1px solid ${stateConflicts.length ? 'rgba(244,63,94,0.35)' : 'rgba(16,185,129,0.3)'}`, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.7rem', color: stateConflicts.length ? '#fda4af' : '#6ee7b7', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <UserCheck size={12} /> Story bible check
+                </span>
+                {stateConflicts.length === 0 ? (
+                  <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>No one marked dead, missing or captive appears in this chapter.</span>
+                ) : stateConflicts.map(c => (
+                  <div key={c.characterId} style={{ fontSize: '0.68rem', color: '#e2e8f0', lineHeight: 1.45 }}>
+                    <strong>{c.name}</strong> is marked <strong>{c.state}</strong> in the story bible but appears here:
+                    <span style={{ display: 'block', color: '#94a3b8', fontStyle: 'italic' }}>“…{c.excerpt}…”</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {auditReport && (
               <div style={{ padding: '0.8rem', backgroundColor: '#090d16', borderRadius: '8px', border: '1px solid rgba(0,240,255,0.2)', color: '#cbd5e1', fontSize: '0.74rem', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>

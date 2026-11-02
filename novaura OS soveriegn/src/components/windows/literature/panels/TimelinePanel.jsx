@@ -4,12 +4,15 @@ import {
   Clock, Plus, Trash2, Filter, AlertCircle, Sparkles, ChevronRight, Check
 } from 'lucide-react';
 import { storyTimeline, EVENT_TYPES } from '../engines/StoryTimeline.js';
+import { extractStoryEvents } from '../../../../services/literatureAiService.js';
 
 export default function TimelinePanel({ activeDocContent, activeDocName }) {
   const [events, setEvents] = useState([]);
   const [filterType, setFilterType] = useState('all');
   const [isAddingEvent, setIsAddingEvent] = useState(false);
   const [detectedEvents, setDetectedEvents] = useState([]);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanNote, setScanNote] = useState('');
 
   // Form state
   const [type, setType] = useState('revelation');
@@ -56,10 +59,38 @@ export default function TimelinePanel({ activeDocContent, activeDocName }) {
     setIsAddingEvent(false);
   };
 
-  const handleScanProseForEvents = () => {
-    if (!activeDocContent) return;
-    const detected = storyTimeline.detectEventsFromProse(activeDocContent, activeDocName);
-    setDetectedEvents(detected);
+  // The AI reads the chapter for events and who was involved; without a model
+  // the keyword scan runs instead, and the panel says which one it was.
+  const handleScanProseForEvents = async () => {
+    if (!activeDocContent || isScanning) return;
+    setIsScanning(true);
+    setScanNote('');
+    setDetectedEvents([]);
+    const chapterName = (activeDocName || 'Current chapter').replace(/\.(docx|md)$/i, '');
+    try {
+      const found = await extractStoryEvents({
+        text: activeDocContent,
+        chapterName,
+        eventTypes: Object.values(EVENT_TYPES).map(t => t.id),
+        knownCharacters: storyTimeline.characters.flatMap(c => [c.name, ...(c.aliases || [])]),
+      });
+      setDetectedEvents(found.map(e => ({
+        type: e.type,
+        title: e.title,
+        chapter: chapterName,
+        description: e.description,
+        impact: e.impact,
+        characterNames: e.characterNames,
+        charactersInvolved: storyTimeline.characterIdsForNames(e.characterNames),
+      })));
+      setScanNote(found.length ? '' : 'No clear story events found in this chapter.');
+    } catch (err) {
+      const fallback = storyTimeline.detectEventsFromProse(activeDocContent, chapterName);
+      setDetectedEvents(fallback);
+      setScanNote(`AI scan unavailable (${err.message}) — showing a quick keyword scan instead.`);
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const handleAcceptDetectedEvent = (evt) => {
@@ -87,7 +118,7 @@ export default function TimelinePanel({ activeDocContent, activeDocName }) {
             style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(168,85,247,0.15)', border: '1px solid rgba(168,85,247,0.3)', color: '#c084fc', fontSize: '0.68rem', cursor: 'pointer' }}
           >
             <Sparkles size={11} />
-            <span>Scan Chapter</span>
+            <span>{isScanning ? 'Reading…' : 'Scan Chapter'}</span>
           </button>
           <button
             onClick={() => setIsAddingEvent(!isAddingEvent)}
@@ -114,13 +145,21 @@ export default function TimelinePanel({ activeDocContent, activeDocName }) {
         </select>
       </div>
 
+      {scanNote && (
+        <div style={{ margin: '0.5rem 0.8rem 0', fontSize: '0.66rem', color: '#94a3b8', lineHeight: 1.4 }}>{scanNote}</div>
+      )}
+
       {/* Detected Events Notification */}
       {detectedEvents.length > 0 && (
         <div style={{ margin: '0.5rem 0.8rem', padding: '0.5rem', backgroundColor: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
           <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#c084fc' }}>Detected from Chapter Prose:</span>
           {detectedEvents.map((de, idx) => (
-            <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.68rem' }}>
-              <span>{de.title} ({de.type})</span>
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.4rem', fontSize: '0.68rem' }}>
+              <span style={{ minWidth: 0 }}>
+                {EVENT_TYPES[de.type?.toUpperCase()]?.icon || '📌'} {de.title}
+                {de.characterNames?.length ? <span style={{ color: '#94a3b8' }}> · {de.characterNames.join(', ')}</span> : null}
+                {de.description ? <span style={{ display: 'block', color: '#64748b' }}>{de.description}</span> : null}
+              </span>
               <button
                 onClick={() => handleAcceptDetectedEvent(de)}
                 style={{ padding: '1px 6px', backgroundColor: '#7e22ce', border: 'none', borderRadius: '3px', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '2px' }}

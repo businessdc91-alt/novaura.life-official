@@ -49,24 +49,78 @@ export class RemasterEngine {
   }
 
   /**
-   * Simple word-level diff calculation for side-by-side comparison
+   * What changed between the original and the remaster: word counts, the share
+   * of text kept, and the diff segments for the "show changes" view.
    */
   computeDiff(original, remastered) {
-    const origWords = (original || '').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
-    const remWords = (remastered || '').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
-    
-    const origCount = origWords.length;
-    const remCount = remWords.length;
-    const diffCount = Math.abs(remCount - origCount);
-    const changePercentage = Math.min(100, Math.round((diffCount / Math.max(1, origCount)) * 100));
-
+    const plain = (t) => (t || '').replace(/<[^>]+>/g, ' ');
+    const origWords = plain(original).split(/\s+/).filter(Boolean);
+    const remWords = plain(remastered).split(/\s+/).filter(Boolean);
+    const diff = diffText(plain(original), plain(remastered));
     return {
-      originalWordCount: origCount,
-      remasteredWordCount: remCount,
-      netDifference: remCount - origCount,
-      estimatedChangePercent: changePercentage
+      originalWordCount: origWords.length,
+      remasteredWordCount: remWords.length,
+      netDifference: remWords.length - origWords.length,
+      changedPercent: diff ? diff.changedPercent : null,
+      segments: diff ? diff.segments : null,
+      granularity: diff ? diff.granularity : null,
     };
   }
+}
+
+// Longest-common-subsequence table size limit (cells); about 16 MB.
+const MAX_DIFF_CELLS = 4_000_000;
+
+/**
+ * Diff of two texts as [{ op: 'same'|'add'|'del', text }], by words, or by
+ * sentences when the texts are too long for a word diff. Null if even the
+ * sentence diff would be too large. changedPercent: 0 = identical, 100 =
+ * nothing kept.
+ */
+export function diffText(a, b) {
+  const byWords = (t) => t.split(/\s+/).filter(Boolean);
+  const bySentences = (t) => t.replace(/\s+/g, ' ').trim().split(/(?<=[.!?…]["”’]?)\s+/).filter(Boolean);
+  for (const [granularity, split] of [['words', byWords], ['sentences', bySentences]]) {
+    const x = split(a);
+    const y = split(b);
+    if ((x.length + 1) * (y.length + 1) > MAX_DIFF_CELLS) continue;
+    const segments = lcsDiff(x, y);
+    const kept = segments.filter(s => s.op === 'same').reduce((n, s) => n + s.count, 0);
+    const total = x.length + y.length;
+    const changedPercent = total ? Math.round(100 - (200 * kept) / total) : 0;
+    return { granularity, changedPercent, segments: segments.map(({ op, text }) => ({ op, text })) };
+  }
+  return null;
+}
+
+function lcsDiff(x, y) {
+  const n = x.length;
+  const m = y.length;
+  const w = m + 1;
+  // table[i * w + j] = LCS length of x[i..] and y[j..]
+  const table = new Uint32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      table[i * w + j] = x[i] === y[j]
+        ? table[(i + 1) * w + j + 1] + 1
+        : Math.max(table[(i + 1) * w + j], table[i * w + j + 1]);
+    }
+  }
+  const segments = [];
+  const push = (op, token) => {
+    const last = segments[segments.length - 1];
+    if (last && last.op === op) { last.text += ` ${token}`; last.count++; } else segments.push({ op, text: token, count: 1 });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { push('same', x[i]); i++; j++; }
+    else if (table[(i + 1) * w + j] >= table[i * w + j + 1]) push('del', x[i++]);
+    else push('add', y[j++]);
+  }
+  while (i < n) push('del', x[i++]);
+  while (j < m) push('add', y[j++]);
+  return segments;
 }
 
 export const remasterEngine = new RemasterEngine();

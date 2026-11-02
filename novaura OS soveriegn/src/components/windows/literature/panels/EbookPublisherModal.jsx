@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import {
   Printer, X, Download, FileText, Check, BookOpen, Layers
 } from 'lucide-react';
+import { compileBook, countWords, roundedWordCount } from '../engines/BookCompiler.js';
 
 export default function EbookPublisherModal({
   files,
@@ -10,100 +11,42 @@ export default function EbookPublisherModal({
   authorName = '',
   onClose
 }) {
-  const [format, setFormat] = useState('shunn'); // 'shunn' | 'epub' | 'html' | 'markdown'
+  const [format, setFormat] = useState('shunn'); // 'shunn' | 'epub' | 'print' | 'markdown'
   const [title, setTitle] = useState(activeDoc?.name?.replace(/\.[^/.]+$/, '') || 'Untitled Manuscript');
   const [author, setAuthor] = useState(authorName);
   const [penName, setPenName] = useState('');
-  const [email, setEmail] = useState('author@sovereign.local');
-  const [sceneBreakStyle, setSceneBreakStyle] = useState('#'); // '#' | '* * *' | 'space'
+  const [contact, setContact] = useState(''); // Shunn title page: address, email, phone (one per line)
+  const [sceneBreakStyle, setSceneBreakStyle] = useState('#');
   const [scope, setScope] = useState('all'); // 'all' | 'active'
   const [isCompiling, setIsCompiling] = useState(false);
-  const [compileSuccess, setCompileSuccess] = useState(false);
+  const [compileResult, setCompileResult] = useState(null);
 
   const chaptersToCompile = scope === 'all'
     ? files.filter(f => f.type === 'chapter')
     : [activeDoc].filter(Boolean);
 
-  const totalWords = chaptersToCompile.reduce((acc, c) => acc + (c.wordCount || 0), 0);
-  const roundedWordCount = Math.round(totalWords / 100) * 100;
+  const totalWords = countWords(chaptersToCompile);
+  const displayWords = roundedWordCount(totalWords);
 
-  const handleCompile = () => {
+  const handleCompile = async () => {
+    if (!chaptersToCompile.length) {
+      setCompileResult({ error: 'There are no chapters to compile yet.' });
+      return;
+    }
     setIsCompiling(true);
-    setCompileSuccess(false);
-
+    setCompileResult(null);
     try {
-      let outputContent = '';
-      let mimeType = 'text/plain';
-      let fileExt = 'txt';
-
-      if (format === 'shunn') {
-        // William Shunn Standard Manuscript Format
-        const headerBlock = `${author.toUpperCase()}\n${email}\nApprox. ${roundedWordCount} words\n\n\n\n\n\n\n\n\n\n` +
-          `${title.toUpperCase()}\n` +
-          `by ${penName || author}\n\n\n\n\n\n\n`;
-
-        let bodyProse = '';
-        chaptersToCompile.forEach((ch, idx) => {
-          bodyProse += `\n\n[PAGE BREAK]\n\n`;
-          bodyProse += `${author.split(' ').pop().toUpperCase()} / ${title.toUpperCase()} / ${idx + 1}\n\n`;
-          bodyProse += `${ch.name.toUpperCase()}\n\n`;
-          
-          let plain = (ch.content || '')
-            .replace(/<div[^>]*>\s*\*\s*\*\s*\*\s*<\/div>/gi, `\n\n${sceneBreakStyle}\n\n`)
-            .replace(/<hr[^>]*>/gi, `\n\n${sceneBreakStyle}\n\n`)
-            .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, '\n\n$1\n\n')
-            .replace(/<p[^>]*>(.*?)<\/p>/gi, '    $1\n\n')
-            .replace(/<br\s*\/?>/gi, '\n')
-            .replace(/<[^>]+>/g, ' ');
-          
-          bodyProse += plain;
-        });
-
-        outputContent = headerBlock + bodyProse;
-        mimeType = 'text/plain';
-        fileExt = 'txt';
-      } else if (format === 'markdown') {
-        outputContent = `# ${title}\n**By ${penName || author}**\n\n*Word Count: ~${totalWords}*\n\n---\n\n`;
-        chaptersToCompile.forEach(ch => {
-          outputContent += `\n\n## ${ch.name}\n\n`;
-          outputContent += (ch.content || '')
-            .replace(/<h1>(.*?)<\/h1>/gi, '# $1\n\n')
-            .replace(/<h2>(.*?)<\/h2>/gi, '## $1\n\n')
-            .replace(/<p>(.*?)<\/p>/gi, '$1\n\n')
-            .replace(/<[^>]+>/g, '');
-        });
-        mimeType = 'text/markdown';
-        fileExt = 'md';
-      } else {
-        // Clean Formatted HTML / EPUB XHTML Structure
-        outputContent = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>` +
-          `<style>body{font-family:'Courier Prime',Courier,monospace;line-height:2;margin:1.5in;max-width:800px;font-size:12pt;}` +
-          `h1,h2{text-align:center;text-transform:uppercase;margin:2em 0;}p{text-indent:0.5in;margin:0;}</style></head><body>` +
-          `<div style="text-align:center;margin-top:2in;"><h1>${title}</h1><h3>by ${penName || author}</h3><p style="text-indent:0;color:#666;">Approx. ${roundedWordCount} words</p></div><hr style="page-break-after:always;"/>`;
-
-        chaptersToCompile.forEach(ch => {
-          outputContent += `<div class="chapter">${ch.content}</div><hr style="page-break-after:always;"/>`;
-        });
-        outputContent += `</body></html>`;
-        mimeType = 'text/html';
-        fileExt = 'html';
-      }
-
-      // Trigger direct download
-      const blob = new Blob([outputContent], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${title.replace(/\s+/g, '_')}_${format}.${fileExt}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setCompileSuccess(true);
-      setTimeout(() => setCompileSuccess(false), 3000);
+      const fileName = await compileBook(format, {
+        title: title.trim() || 'Untitled Manuscript',
+        author: author.trim() || penName.trim() || 'Anonymous',
+        penName: penName.trim(),
+        contact: contact.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 5),
+        chapters: chaptersToCompile,
+        sceneBreak: sceneBreakStyle,
+      });
+      setCompileResult({ fileName });
     } catch (err) {
-      alert('Compile error: ' + err.message);
+      setCompileResult({ error: err.message || 'Compile failed.' });
     } finally {
       setIsCompiling(false);
     }
@@ -153,11 +96,12 @@ export default function EbookPublisherModal({
           <label style={{ display: 'block', fontSize: '0.66rem', color: '#38bdf8', marginBottom: '0.35rem', textTransform: 'uppercase', fontWeight: 700 }}>
             Target Publication Format
           </label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.4rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.4rem' }}>
             {[
-              { id: 'shunn', label: 'Shunn Manuscript', desc: 'Standard submission format (Courier 12pt, double spaced)' },
-              { id: 'html', label: 'E-Book / EPUB HTML', desc: 'Semantic XHTML suitable for Kindle & e-readers' },
-              { id: 'markdown', label: 'Clean Markdown', desc: 'Portable prose document (.md)' },
+              { id: 'shunn', label: 'Submission Manuscript (.docx)', desc: 'Shunn standard format for agents and editors: Courier 12 pt, double spaced, running header' },
+              { id: 'epub', label: 'EPUB 3 E-Book (.epub)', desc: 'Table of contents and chapters; Apple Books, Kobo, Calibre, Send to Kindle' },
+              { id: 'print', label: 'Print-Ready Book (.html)', desc: '6×9 in pages with page numbers; open it and print to PDF' },
+              { id: 'markdown', label: 'Clean Markdown (.md)', desc: 'Portable text with headings, italics and scene breaks' },
             ].map(f => {
               const isSel = format === f.id;
               return (
@@ -214,6 +158,14 @@ export default function EbookPublisherModal({
           </div>
         </div>
 
+        {format === 'shunn' && (
+          <div>
+            <label style={{ fontSize: '0.64rem', color: '#94a3b8', textTransform: 'uppercase' }}>Contact Details for the Title Page (one per line)</label>
+            <textarea value={contact} onChange={e => setContact(e.target.value)} rows={3} placeholder={'Street address\nCity, State ZIP\nemail@example.com'}
+              style={{ width: '100%', padding: '0.35rem', backgroundColor: '#090d16', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#f8fafc', fontSize: '0.72rem', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+          </div>
+        )}
+
         {/* Scope and Word Count Telemetry */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.8rem', backgroundColor: 'rgba(2,6,23,0.6)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
@@ -227,8 +179,14 @@ export default function EbookPublisherModal({
               <span>Active Chapter Only</span>
             </label>
           </div>
-          <span style={{ color: '#38bdf8', fontWeight: 700 }}>~{roundedWordCount} words</span>
+          <span style={{ color: '#38bdf8', fontWeight: 700 }} title={`${totalWords.toLocaleString()} words exactly`}>about {displayWords.toLocaleString()} words</span>
         </div>
+
+        {compileResult && (
+          <div style={{ fontSize: '0.7rem', color: compileResult.error ? '#f87171' : '#34d399' }}>
+            {compileResult.error || `Saved ${compileResult.fileName} to your Downloads folder.`}
+          </div>
+        )}
 
         {/* Footer Actions */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.6rem' }}>
@@ -252,8 +210,8 @@ export default function EbookPublisherModal({
               gap: '0.3rem'
             }}
           >
-            {compileSuccess ? <Check size={14} color="#34d399" /> : <Download size={14} />}
-            <span>{compileSuccess ? 'Downloaded!' : isCompiling ? 'Compiling...' : 'Compile & Export'}</span>
+            {compileResult?.fileName ? <Check size={14} color="#34d399" /> : <Download size={14} />}
+            <span>{isCompiling ? 'Compiling...' : 'Compile & Export'}</span>
           </button>
         </div>
       </div>

@@ -389,7 +389,8 @@ export async function remasterScene({ text, type = 'enhanced', instructions = ''
       modeInstruction = 'Enhance dialogue snap, rhythm, sensory hooks, and emotional resonance. Polish every sentence to literary excellence.';
   }
 
-  const prompt = `SCENE TO REMASTER:\n"""\n${text.slice(0, 4000)}\n"""\n\nREMASTER TYPE: ${type.toUpperCase()}\nDIRECTIVE: ${modeInstruction}\n${instructions ? `CUSTOM NOTES: ${instructions}\n` : ''}\n\nProvide ONLY the remastered scene prose.`;
+  const bible = typeof storyBible === 'string' ? storyBible.trim() : '';
+  const prompt = `${bible ? `STORY BIBLE (keep names, character states and established facts consistent with it):\n${bible}\n\n` : ''}SCENE TO REMASTER:\n"""\n${text.slice(0, 4000)}\n"""\n\nREMASTER TYPE: ${type.toUpperCase()}\nDIRECTIVE: ${modeInstruction}\n${instructions ? `CUSTOM NOTES: ${instructions}\n` : ''}\n\nProvide ONLY the remastered scene prose.`;
 
   return await queryUniversalInference(prompt, 'You are an elite literary editor and master ghostwriter executing a story remaster.', { maxTokens: 2500 });
 }
@@ -524,6 +525,45 @@ Return JSON:
       suggestions: [],
     };
   }
+}
+
+// ── 8b. Story Event Extraction (Timeline) ───────────────────────────────────
+
+/**
+ * Reads a chapter and lists the story events in it, with the characters
+ * involved (names as written). `eventTypes` are the allowed type ids;
+ * `knownCharacters` are names from the story bible so the model reuses them.
+ * Returns [{ type, title, description, impact, characterNames }].
+ */
+export async function extractStoryEvents({ text, chapterName = 'This chapter', eventTypes = [], knownCharacters = [] }) {
+  const clean = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean.length < 80) throw new Error('Write a little more of the chapter first.');
+  const allowed = eventTypes.length ? eventTypes : ['other'];
+
+  const prompt = `List the important story events in this chapter ("${chapterName}"), in the order they happen. Only events that actually happen in the text (not ones merely mentioned as possible), at most 8.
+
+ALLOWED TYPES: ${allowed.join(', ')}
+${knownCharacters.length ? `KNOWN CHARACTERS (use these exact names when they appear): ${knownCharacters.slice(0, 60).join(', ')}\n` : ''}
+CHAPTER:
+"""
+${clean.slice(0, 6000)}
+"""
+
+Return JSON only:
+{"events": [{"type": "one of the allowed types", "title": "short title", "description": "one sentence", "impact": "what changes because of it", "characters": ["names involved"]}]}`;
+
+  const res = await queryUniversalInference(prompt, 'You are a meticulous story editor who tracks plot events and continuity.', { maxTokens: 900, temperature: 0.2 });
+  const parsed = parseJsonReply(res);
+  const list = Array.isArray(parsed) ? parsed : parsed?.events;
+  if (!Array.isArray(list)) throw new Error('The model did not return a list of events.');
+  const clip = (v, n) => String(v ?? '').trim().slice(0, n);
+  return list.slice(0, 8).map(e => ({
+    type: allowed.includes(String(e?.type || '').toLowerCase()) ? String(e.type).toLowerCase() : 'other',
+    title: clip(e?.title, 80),
+    description: clip(e?.description, 300),
+    impact: clip(e?.impact, 300),
+    characterNames: (Array.isArray(e?.characters) ? e.characters : []).map(n => clip(n, 60)).filter(Boolean).slice(0, 8),
+  })).filter(e => e.title);
 }
 
 // ── 9. Fact & Canon Verification ───────────────────────────────────────────

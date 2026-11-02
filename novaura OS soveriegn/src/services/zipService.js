@@ -91,6 +91,7 @@ async function through(bytes, stream) {
 /**
  * files: [{ path, content } | { path, bytes } | { path, dir: true }] → deflated ZIP bytes.
  * Entries that would not shrink are stored; without CompressionStream everything is stored.
+ * `store: true` keeps an entry uncompressed (an EPUB's leading mimetype must be).
  */
 export async function compressZip(files, date = new Date()) {
   const enc = new TextEncoder();
@@ -106,7 +107,7 @@ export async function compressZip(files, date = new Date()) {
     const data = entryBytes(f);
     let packed = data;
     let method = 0;
-    if (canDeflate && data.length > 64) {
+    if (canDeflate && !f.store && data.length > 64) {
       const deflated = await through(data, new CompressionStream('deflate-raw'));
       if (deflated.length < data.length) { packed = deflated; method = 8; }
     }

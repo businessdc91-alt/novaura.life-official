@@ -4,6 +4,13 @@ import {
   GitFork, Sparkles, Wand2, Copy, Check, ArrowRight, CornerDownLeft, Eye, RefreshCw
 } from 'lucide-react';
 import { remasterEngine, REMASTER_MODES } from '../engines/RemasterEngine.js';
+import { storyTimeline } from '../engines/StoryTimeline.js';
+
+const DIFF_STYLE = {
+  add: { backgroundColor: 'rgba(16,185,129,0.22)', color: '#a7f3d0' },
+  del: { backgroundColor: 'rgba(244,63,94,0.18)', color: '#fda4af', textDecoration: 'line-through' },
+  same: {},
+};
 
 export default function RemasterPanel({ activeDocContent, selectedText, onInsertProse, onCreateNewFileWithProse }) {
   const [selectedMode, setSelectedMode] = useState('enhanced');
@@ -13,24 +20,33 @@ export default function RemasterPanel({ activeDocContent, selectedText, onInsert
   const [diffStats, setDiffStats] = useState(null);
   const [copied, setCopied] = useState(false);
 
-  const textToRemaster = selectedText || activeDocContent || '';
+  const [showChanges, setShowChanges] = useState(false);
+  const [error, setError] = useState('');
+
+  // The chapter is stored as HTML; the model gets the text with paragraph breaks.
+  const textToRemaster = selectedText || (activeDocContent || '')
+    .replace(/<\/(p|div|h[1-6]|li)>/gi, '\n\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n').trim();
 
   const handleGenerateRemaster = async () => {
     if (!textToRemaster.trim()) return;
     setIsGenerating(true);
     setCurrentResult(null);
     setDiffStats(null);
+    setError('');
     try {
       const record = await remasterEngine.generateRemaster({
         text: textToRemaster,
         mode: selectedMode,
         instructions: customInstructions,
+        storyBible: storyTimeline.bibleContext(),
       });
       setCurrentResult(record);
       const diff = remasterEngine.computeDiff(record.originalText, record.remasteredText);
       setDiffStats(diff);
     } catch (err) {
-      alert('Remaster error: ' + err.message);
+      setError(err.message || 'The remaster failed.');
     } finally {
       setIsGenerating(false);
     }
@@ -133,20 +149,35 @@ export default function RemasterPanel({ activeDocContent, selectedText, onInsert
           <span>{isGenerating ? 'Synthesizing Narrative Variation...' : 'Synthesize Remastered Scene'}</span>
         </button>
 
+        {error && <div style={{ fontSize: '0.7rem', color: '#f87171' }}>{error}</div>}
+
         {/* Result & Diff Box */}
         {currentResult && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', backgroundColor: 'rgba(2,6,23,0.8)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: '8px', padding: '0.8rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontWeight: 700, color: '#f472b6', fontSize: '0.76rem' }}>Remastered Scene Draft</span>
               {diffStats && (
-                <span style={{ fontSize: '0.62rem', color: '#34d399', backgroundColor: 'rgba(16,185,129,0.15)', padding: '1px 5px', borderRadius: '4px' }}>
-                  {diffStats.remasteredWordCount} words ({diffStats.netDifference >= 0 ? `+${diffStats.netDifference}` : diffStats.netDifference}w)
+                <span style={{ fontSize: '0.62rem', color: '#34d399', backgroundColor: 'rgba(16,185,129,0.15)', padding: '1px 5px', borderRadius: '4px' }}
+                  title={diffStats.granularity ? `Compared by ${diffStats.granularity}` : 'Too long to compare'}>
+                  {diffStats.remasteredWordCount} words ({diffStats.netDifference >= 0 ? `+${diffStats.netDifference}` : diffStats.netDifference})
+                  {diffStats.changedPercent !== null ? ` · ${diffStats.changedPercent}% changed` : ''}
                 </span>
               )}
             </div>
 
-            <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '0.72rem', color: '#e2e8f0', lineHeight: '1.5', whiteSpace: 'pre-wrap', backgroundColor: '#090d16', padding: '0.6rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.06)' }}>
-              {currentResult.remasteredText}
+            {diffStats?.segments && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.66rem', color: '#94a3b8', cursor: 'pointer' }}>
+                <input type="checkbox" checked={showChanges} onChange={e => setShowChanges(e.target.checked)} />
+                Show changes against the original
+              </label>
+            )}
+
+            <div style={{ maxHeight: '260px', overflowY: 'auto', fontSize: '0.72rem', color: '#e2e8f0', lineHeight: '1.5', whiteSpace: 'pre-wrap', backgroundColor: '#090d16', padding: '0.6rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.06)' }}>
+              {showChanges && diffStats?.segments
+                ? diffStats.segments.map((seg, idx) => (
+                  <span key={idx} style={DIFF_STYLE[seg.op]}>{seg.text}{' '}</span>
+                ))
+                : currentResult.remasteredText}
             </div>
 
             <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: '0.2rem' }}>

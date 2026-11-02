@@ -11,6 +11,7 @@ import {
 import {
   getAllMemories, rememberMemory, deleteMemory
 } from '../../../../services/sovereignRagService.js';
+import { storyTimeline } from '../engines/StoryTimeline.js';
 
 export default function AICoAuthorPanel({
   activeDoc,
@@ -122,6 +123,7 @@ export default function AICoAuthorPanel({
         messages: [...chatMessages, userMsg],
         documentContext: docText,
         selectionContext: selText,
+        codexContext: storyTimeline.bibleContext(),
         activeDocName: activeDoc?.name || 'Manuscript',
         useRag: chatUseRag,
         provider: modelConfig.provider,

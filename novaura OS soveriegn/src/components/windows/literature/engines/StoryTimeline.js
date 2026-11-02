@@ -10,6 +10,7 @@
  */
 
 import { db } from '../../../../database/sovereignDatabase.js';
+import { htmlToPlainText, phraseRegex } from './SpellCheckEngine.js';
 
 export const EVENT_TYPES = {
   DEATH: { id: 'death', label: 'Death', icon: '💀', color: '#ef4444' },
@@ -44,6 +45,8 @@ const SETTING_KEY = 'literature_story_bible';
 const SAVE_DELAY_MS = 400;
 const LIMITS = { characters: 500, settings: 300, timeline: 2000, relationships: 1000, plotThreads: 300, causality: 300 };
 const FIELDS = Object.keys(LIMITS);
+const BLOCKING_STATES = new Set(['Deceased', 'Missing', 'Captive']);
+const STATE_AFTER_EVENT = { death: 'Deceased', injury: 'Injured', rescue: 'Active' };
 
 export class StoryTimeline {
   constructor() {
@@ -161,10 +164,11 @@ export class StoryTimeline {
       timestamp: event.timestamp || new Date().toISOString()
     };
 
-    // Chain Reaction: if event is DEATH, update character state
-    if (newEvt.type === 'death' && newEvt.charactersInvolved.length > 0) {
+    // Chain reaction: some events change the state of the characters involved.
+    const nextState = STATE_AFTER_EVENT[newEvt.type];
+    if (nextState) {
       for (const charId of newEvt.charactersInvolved) {
-        this.updateCharacter(charId, { state: 'Deceased' });
+        this.updateCharacter(charId, { state: nextState });
       }
     }
 
@@ -178,8 +182,67 @@ export class StoryTimeline {
     this.saveState();
   }
 
+  /** Ids of the characters with these names or aliases (case-insensitive). */
+  characterIdsForNames(names = []) {
+    const wanted = new Set(names.map(n => String(n).toLowerCase().trim()).filter(Boolean));
+    return this.characters
+      .filter(c => [c.name, ...(c.aliases || [])].some(n => wanted.has(String(n).toLowerCase().trim())))
+      .map(c => c.id);
+  }
+
   /**
-   * Scan chapter prose for potential events and character appearances
+   * The story bible as compact text for AI prompts: every character (state,
+   * role, traits, goals, flaw) and the most recent timeline events. Capped.
+   */
+  bibleContext(maxChars = 3000) {
+    const lines = [];
+    if (this.characters.length) {
+      lines.push('CHARACTERS:');
+      for (const c of this.characters) {
+        const aka = c.aliases?.length ? ` (also ${c.aliases.join(', ')})` : '';
+        const facts = [c.archetype, c.state && c.state !== 'Active' ? `currently ${c.state.toUpperCase()}` : '',
+          c.traits?.length ? `traits: ${c.traits.join(', ')}` : '', c.goals ? `wants: ${c.goals}` : '',
+          c.flaw ? `flaw: ${c.flaw}` : ''].filter(Boolean).join('; ');
+        lines.push(`- ${c.name}${aka}: ${facts}`);
+      }
+    }
+    const recent = this.timeline.slice(-15);
+    if (recent.length) {
+      lines.push('', 'RECENT EVENTS (oldest first):');
+      const nameOf = (id) => this.characters.find(c => c.id === id)?.name;
+      for (const e of recent) {
+        const who = (e.charactersInvolved || []).map(nameOf).filter(Boolean);
+        lines.push(`- [${e.chapter}] ${e.title}${who.length ? ` (${who.join(', ')})` : ''}${e.description ? `: ${e.description}` : ''}`);
+      }
+    }
+    const text = lines.join('\n');
+    return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
+  }
+
+  /**
+   * Characters the story bible says cannot act in a scene (dead, missing,
+   * captive) whose name or alias appears in this prose. Deterministic: no AI.
+   */
+  findStateConflicts(prose) {
+    const text = htmlToPlainText(prose);
+    const conflicts = [];
+    for (const c of this.characters) {
+      if (!BLOCKING_STATES.has(c.state)) continue;
+      for (const name of [c.name, ...(c.aliases || [])].filter(n => String(n || '').trim().length >= 2)) {
+        const m = phraseRegex(name).exec(text);
+        if (m) {
+          const start = Math.max(0, m.index - 60);
+          conflicts.push({ characterId: c.id, name: c.name, state: c.state, excerpt: text.slice(start, m.index + m[0].length + 60).replace(/\s+/g, ' ').trim() });
+          break;
+        }
+      }
+    }
+    return conflicts;
+  }
+
+  /**
+   * Quick keyword scan for possible events (no AI). The Timeline panel uses
+   * the AI extractor first and falls back to this.
    */
   detectEventsFromProse(prose, chapterName = 'Current Chapter') {
     const clean = prose.replace(/<[^>]+>/g, ' ');
