@@ -19,6 +19,7 @@ import '../services/aiLoungeService';
 import '../services/forge/userApps';
 // Asks the relay for marketplace listings published while this node was offline.
 import '../services/meshArchiveSync';
+import '../games/relayDuel/relayDuelMesh'; // Relay Duel challenges arrive while the game is closed
 import { isTauriApp, popOutApp } from '../services/popoutWindows';
 import { callService, CallState } from '../services/sovereignCallService';
 import { Phone, PhoneCall, PhoneOff, Video, ChevronUp, ChevronDown, Sparkles } from 'lucide-react';

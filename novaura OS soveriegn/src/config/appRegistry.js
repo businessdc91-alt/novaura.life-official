@@ -41,6 +41,7 @@ const NovaMediaDeckWindow = lazy(() => import('../components/windows/NovaMediaDe
 const DeveloperGatewayWindow = lazy(() => import('../components/windows/DeveloperGatewayWindow.jsx'));
 const MarketplaceWindow = lazy(() => import('../components/windows/MarketplaceWindow.jsx'));
 const RetroArcadeWindow = lazy(() => import('../components/windows/RetroArcadeWindow.jsx'));
+const RelayDuelWindow = lazy(() => import('../components/windows/RelayDuelWindow.jsx'));
 const CreativeStudioWindow = lazy(() => import('../components/windows/CreativeStudioWindow.jsx'));
 const BetaHubWindow = lazy(() => import('../components/windows/BetaHubWindow.jsx'));
 const MusicStudioWindow = lazy(() => import('../components/windows/MusicStudioWindow.jsx'));
@@ -48,7 +49,7 @@ const AIEnginesWindow = lazy(() => import('../components/windows/AIEnginesWindow
 const DiscoveryForgeWindow = lazy(() => import('../components/windows/DiscoveryForgeWindow.jsx'));
 const UserAppWindow = lazy(() => import('../components/windows/UserAppWindow.jsx'));
 const FounderOfficeSuiteWindow = lazy(() => import('../components/windows/FounderOfficeSuiteWindow.jsx'));
-import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown } from 'lucide-react';
+import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair } from 'lucide-react';
 
 
 
@@ -426,6 +427,16 @@ export const APP_REGISTRY = [
     title: 'Nova Retro Arcade & G-Toons Clash Arena',
     component: RetroArcadeWindow,
     defaultSize: { width: 1040, height: 680 },
+  },
+  {
+    id: 'relay_duel',
+    label: 'Relay Duel',
+    category: 'games',
+    icon: Crosshair,
+    color: '#22d3ee',
+    title: 'Relay Duel',
+    component: RelayDuelWindow,
+    defaultSize: { width: 1000, height: 680 },
   },
   {
     id: 'creative_studio',
