@@ -910,6 +910,11 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [x] Continuity audit: deterministic story-bible check (characters marked dead/missing/captive who appear in the chapter, with excerpt) plus the bible in the AI prompt. Co-author chat now receives the story bible too. Checklist no longer starts pre-ticked.
 - [ ] NovaSocial Stories (Gemini, in progress): `MESH_STORY` / `MESH_STORIES_RESPONSE` accept unsigned, unsized, unsanitized stories with no per-peer cap — needs the same treatment as shared chapters before it ships.
 
+**Review of Gemini's social / mail / auth work (2026-11-02):** full findings with fixes in `novaura OS soveriegn/REVIEW_SOCIAL_MAIL_AUTH.md`. Critical items, all still open (the code is uncommitted and in progress):
+- [ ] SIWN: the requesting page chooses the token's audience (any site can get a login for `bank.nova`); requests accepted from any window (nested iframes); verifier trusts `operator.publicKey` instead of `iss` (impersonation).
+- [ ] Social: any peer can overwrite a post's votes/reactions and vote as others; posts, reposts and stories are unsigned and unvalidated (impersonation, permanent "24 h" stories, no caps). Fake starting numbers (followers 12, karma 420, "418 Active", "1.4k subscribers"). Peer media loads remote URLs (IP tracking).
+- [ ] Mail: every untriaged inbox message is sent to AI on open, with a silent Gemini fallback (Ollama is unreachable from the page), so private mail goes to the cloud unasked. Canned "smart replies" on failure; no attachment size cap.
+
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 
 **Environment gotcha:** this machine's shell has `NODE_ENV=production`, so a plain `npm install` silently skips devDependencies (vite, oxlint, @tauri-apps/cli). Use `npm install --include=dev`.
