@@ -10,7 +10,7 @@ import {
   FOUNDER_ACTION_BUBBLES,
   getOperatorAuthority,
   verifyFounderKey,
-  generateFounderAuthKey,
+  ISSUE_KEY_INSTRUCTIONS,
   listFounderKeys,
   revokeFounderKey,
   setNodeAuthority,
@@ -121,7 +121,7 @@ export default function FounderOfficeSuiteWindow({ onClose }) {
     if (valid) {
       setIsAuthenticated(true);
     } else {
-      setAuthError('Invalid or expired Founder Auth Key. Access restricted to Sovereign Founders.');
+      setAuthError('That is not a valid founder license. It must be a NOVA1 token with a founder tier, signed by the Novaura authority key.');
     }
   };
 
@@ -171,14 +171,6 @@ export default function FounderOfficeSuiteWindow({ onClose }) {
     refreshTabData();
   };
 
-  // Issue new founder key
-  const handleIssueFounderKey = async () => {
-    const record = await generateFounderAuthKey(newKeyLabel.trim() || 'Delegated Founder Key', 90);
-    setNewKeyIssued(record);
-    setNewKeyLabel('');
-    refreshTabData();
-  };
-
   // Revoke founder key
   const handleRevokeKey = async (keyId) => {
     await revokeFounderKey(keyId);
@@ -223,18 +215,18 @@ export default function FounderOfficeSuiteWindow({ onClose }) {
           <div>
             <h2 className="text-lg font-bold text-white tracking-wide">Founder's Office Restricted Enclave</h2>
             <p className="text-xs text-slate-400 mt-1">
-              This administrative suite is strictly reserved for Genesis Founders holding verified cryptographic keys.
+              Reserved for holders of a founder license signed by the Novaura authority key.
             </p>
           </div>
 
           <div className="space-y-2 text-left">
-            <label className="text-xs font-semibold text-slate-300">Enter Founder Auth Key</label>
+            <label className="text-xs font-semibold text-slate-300">Paste your founder license (NOVA1 token)</label>
             <input
               type="password"
               value={authKeyInput}
               onChange={(e) => setAuthKeyInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleKeyLogin()}
-              placeholder="FOUNDER-KEY-XXXXX-XXXX..."
+              placeholder="NOVA1...."
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-cyan-300 placeholder:text-slate-600 outline-none focus:border-cyan-500"
             />
           </div>
@@ -440,21 +432,9 @@ export default function FounderOfficeSuiteWindow({ onClose }) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={newKeyLabel}
-                  onChange={(e) => setNewKeyLabel(e.target.value)}
-                  placeholder="Key Label (e.g. Workstation 2, Mobile Sovereign, Co-Founder Key)..."
-                  className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-cyan-500"
-                />
-                <button
-                  onClick={handleIssueFounderKey}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Mint 90-Day Key</span>
-                </button>
+              {/* Keys are licenses signed with the offline authority key; the app can't mint them. */}
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-300 leading-relaxed select-text">
+                {ISSUE_KEY_INSTRUCTIONS}
               </div>
 
               {newKeyIssued && (

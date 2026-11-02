@@ -18,11 +18,10 @@ Order: fix **Critical** before anyone outside the founder's machines uses these 
 - Media and attachments over a few dozen KB need chunked, content-addressed transfer over the mesh.
 - The mail list still shows the sender's typed address; it should show the contact name for `senderDid`, or warn when it doesn't match. There's no per-sender cap on incoming mail yet.
 - SIWN lifetime could go shorter with silent refresh.
-- **Founder Office (new, in progress):**
-  - `founderAuthService.verifyFounderKey` accepts a hard-coded master key (`NOVA-FOUNDER-GENESIS-7777`) that anyone with the app can read.
-  - `getOperatorAuthority` makes every node "founder" by default, and also when an error occurs.
-
-  This is harmless only while founder authority stays local. Before it controls anything across the mesh, founder authority must be proven by a signature from the owner's authority key (the Ed25519 key kept outside the repo), never by a shared string or a local default.
+- ~~**Founder Office:** hard-coded master key and founder-by-default.~~ Fixed:
+  - Founder or council authority now comes only from a NOVA1 license signed by the authority key (`src/services/founderLicense.js`, tests: `tests/auth/founder.test.mjs`), re-verified so stored fields can't raise the tier.
+  - The Founder Office unlocks with a pasted founder license. Delegated keys are issued offline with `scripts/issue_license.js`, and the app explains how.
+  - `getSavedKeyRecord` now lets the verified fields override stored ones.
 
 ---
 

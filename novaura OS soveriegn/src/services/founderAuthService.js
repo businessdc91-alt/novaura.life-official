@@ -5,8 +5,11 @@
  */
 
 import { db } from '../database/sovereignDatabase.js';
-import { ed25519 } from '@noble/curves/ed25519.js';
 import { getLocalIdentity, getConnectedPeers } from './sovereignMesh.js';
+import { getSavedKeyRecord } from './sovereignAuth.js';
+import { ISSUE_KEY_INSTRUCTIONS, licenseAuthority } from './founderLicense.js';
+
+export { ISSUE_KEY_INSTRUCTIONS };
 
 export const AUTHORITY_TIERS = {
   FOUNDER: {
@@ -61,91 +64,56 @@ export const FOUNDER_ACTION_BUBBLES = [
   { id: 'network_directive', label: '🚨 Emergency Broadcast', icon: 'Radio', prompt: 'Nova, prepare an emergency network-wide founder directive' },
 ];
 
-const FOUNDER_VAULT_KEY = 'sovereign_founder_master_key';
+const tierRank = (tier) => AUTHORITY_TIERS[String(tier || '').toUpperCase()]?.rank ?? 0;
+
+// A license pasted into the Founder Office this session (kept in memory only).
+let _sessionAuthority = null;
 
 /**
- * Check if the active node operator holds Founder authority
+ * The active operator's authority, from the activated license (re-verified)
+ * or a license entered this session, whichever ranks higher.
  */
 export async function getOperatorAuthority() {
+  const identity = getLocalIdentity();
+  let authority = null;
   try {
-    const identity = getLocalIdentity();
-    const storedTier = await db.getVaultKey('operator_authority_tier');
-
-    // Default: Workstation owner is the Genesis Founder
-    if (!storedTier) {
-      await db.setVaultKey('operator_authority_tier', 'founder', 'system');
-    }
-
-    const currentTier = storedTier || 'founder';
-    const isFounder = currentTier === 'founder' || identity?.tier === 'founder';
-
-    return {
-      tier: currentTier,
-      isFounder,
-      tierDefinition: AUTHORITY_TIERS[currentTier.toUpperCase()] || AUTHORITY_TIERS.OPERATOR,
-      handle: identity?.handle || 'operator',
-      displayName: identity?.displayName || 'Sovereign Node Operator',
-      nodeId: identity?.nodeId || `did:nova:${(identity?.publicKey || '').replace(/^0x/, '')}`,
-    };
+    const record = getSavedKeyRecord();
+    if (record?.key) authority = licenseAuthority(record.key, record.nodeId || record.hardwareFingerprint || null);
   } catch (err) {
-    console.warn('[FounderAuth] Authority check note:', err);
-    return {
-      tier: 'founder',
-      isFounder: true,
-      tierDefinition: AUTHORITY_TIERS.FOUNDER,
-    };
+    console.warn('[FounderAuth] License check note:', err);
   }
+  if (_sessionAuthority && tierRank(_sessionAuthority.tier) > tierRank(authority?.tier)) authority = _sessionAuthority;
+
+  const tier = authority?.tier || 'operator';
+  return {
+    tier,
+    isFounder: tier === 'founder',
+    tierDefinition: AUTHORITY_TIERS[tier.toUpperCase()] || AUTHORITY_TIERS.OPERATOR,
+    licenseHolder: authority?.license?.holder || null,
+    handle: identity?.handle || 'operator',
+    displayName: identity?.displayName || 'Sovereign Node Operator',
+    nodeId: identity?.nodeId || `did:nova:${(identity?.publicKey || '').replace(/^0x/, '')}`,
+  };
 }
 
 /**
- * Verify an entered Founder Auth Key
+ * Unlocks the Founder Office for this session with a pasted founder license
+ * (NOVA1 token). Returns true only when its authority signature checks out
+ * and its tier is a founder tier.
  */
 export async function verifyFounderKey(key) {
-  if (!key || typeof key !== 'string') return false;
-  const clean = key.trim().toUpperCase();
-
-  // 1. Check against Genesis Default Founder Key
-  if (clean === 'NOVA-FOUNDER-GENESIS-7777') return true;
-
-  // 2. Check stored founder master key
-  const masterKey = await db.getVaultKey(FOUNDER_VAULT_KEY);
-  if (masterKey && masterKey.trim().toUpperCase() === clean) return true;
-
-  // 3. Check active issued founder directives
-  const directive = await db.founder_directives.get(clean);
-  if (directive && directive.type === 'FOUNDER_KEY' && (!directive.expiresAt || new Date(directive.expiresAt) > new Date())) {
-    return true;
-  }
-
-  return false;
+  const authority = licenseAuthority(key);
+  if (!authority || authority.tier !== 'founder') return false;
+  _sessionAuthority = authority;
+  return true;
 }
 
 /**
- * Generate a new cryptographically signed delegated Founder Auth Key
+ * Delegated keys can't be created inside the app: anything it could sign
+ * would prove nothing on another machine. Throws with how to issue one.
  */
-export async function generateFounderAuthKey(label = 'Founder Delegated Key', expiryDays = 90) {
-  const identity = getLocalIdentity();
-  const randomSegment = Math.random().toString(36).substring(2, 8).toUpperCase() + '-' + Date.now().toString(36).toUpperCase();
-  const keyId = `FOUNDER-KEY-${randomSegment}`;
-
-  const issuedAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
-
-  const record = {
-    id: keyId,
-    type: 'FOUNDER_KEY',
-    label,
-    target: 'delegated_operator',
-    authorityLevel: 'founder',
-    issuerNodeId: identity?.nodeId || 'did:nova:founder',
-    issuedAt,
-    expiresAt,
-    revoked: false,
-  };
-
-  await db.founder_directives.put(record);
-  window.dispatchEvent(new CustomEvent('novaura:founder_key_issued', { detail: record }));
-  return record;
+export async function generateFounderAuthKey() {
+  throw new Error(ISSUE_KEY_INSTRUCTIONS);
 }
 
 /**
@@ -361,18 +329,14 @@ export async function executeNovaFounderCommand(prompt) {
     };
   }
 
-  // 2. Issue Founder Key
+  // 2. Issue Founder Key (done with the offline authority key, not here)
   if (/issue|generate|create.*founder.*key/i.test(q)) {
-    const key = await generateFounderAuthKey('Executive Delegate Key', 90);
     return {
       action: 'ISSUE_KEY',
-      message: `### 👑 Founder Auth Key Successfully Minted\n\n` +
-        `A new cryptographic executive activation key has been signed with your Ed25519 node key:\n\n` +
-        `\`\`\`\n${key.id}\n\`\`\`\n\n` +
-        `**Authority Tier**: Founder Override\n` +
-        `**Validity**: 90 Days (Expires: ${new Date(key.expiresAt).toLocaleDateString()})\n\n` +
-        `Share this key securely with co-founders or secondary hardware nodes to grant executive office access.`,
-      data: key,
+      message: `### 👑 Issuing a founder or council key
+
+${ISSUE_KEY_INSTRUCTIONS}`,
+      data: null,
     };
   }
 

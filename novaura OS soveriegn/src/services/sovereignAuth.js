@@ -246,7 +246,7 @@ export function getSavedKeyRecord() {
     const expectedNode = _cachedRecord.nodeId || _cachedRecord.hardwareFingerprint || null;
     const verification = verifySovereignKey(_cachedRecord.key, expectedNode);
     if (verification.valid) {
-      return { ...verification, ..._cachedRecord };
+      return { ..._cachedRecord, ...verification }; // signed fields win over stored ones
     }
   }
 
@@ -257,7 +257,7 @@ export function getSavedKeyRecord() {
       const expectedNode = parsed.nodeId || parsed.hardwareFingerprint || null;
       const verification = verifySovereignKey(parsed.key, expectedNode);
       if (verification.valid) {
-        _cachedRecord = { ...verification, ...parsed };
+        _cachedRecord = { ...parsed, ...verification };
         return _cachedRecord;
       }
     }
@@ -275,7 +275,7 @@ export function getSavedKeyRecord() {
           // that this machine is still that node.
           const verification = verifySovereignKey(cert.key, cert.nodeId || hw);
           if (verification.valid) {
-            _cachedRecord = { ...verification, ...cert, hardwareFingerprint: hw };
+            _cachedRecord = { ...cert, ...verification, hardwareFingerprint: hw };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(_cachedRecord));
             window.dispatchEvent(new CustomEvent('novaura:auth_updated'));
           }
