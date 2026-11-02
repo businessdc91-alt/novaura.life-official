@@ -7,6 +7,14 @@ import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { admitMeshListing } from './marketplaceListings.js';
 import { admitMeshManuscript } from './meshManuscripts.js';
+import {
+  SOCIAL_LIMITS, signPost as signSocialPost, admitPost as admitSocialPost, signedPostCopy as signedSocialPostCopy,
+  signComment as signSocialComment, admitComment as admitSocialComment, insertComment as insertSocialComment,
+  flattenComments, signVote as signSocialVote, admitVote as admitSocialVote, applyVote as applySocialVote,
+  deriveVotes as deriveSocialVotes, admitVoteMap as admitSocialVoteMap, signStory as signSocialStory,
+  admitStory as admitSocialStory, overflowIds as socialOverflowIds, packetBatches as socialPacketBatches,
+  wirePost as wireSocialPost,
+} from './meshSocial.js';
 import { isPopoutWindow } from './popoutWindows.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
@@ -16,6 +24,9 @@ import {
 
 const STORAGE_KEY = 'novaura_sovereign_identity';
 const MAIL_STORAGE = 'novaura_sovereign_mailstore';
+// Sealed mail is hex-encoded (twice its size) and must fit a 64 KB relay frame.
+const MAX_MAIL_PACKET_CHARS = 60000;
+export const MAX_MAIL_ATTACHMENT_BYTES = 20 * 1024;
 const SOCIAL_STORAGE = 'novaura_sovereign_socialstore';
 
 function generateId() {
@@ -183,7 +194,7 @@ export async function resolveRecipientPublicKey(recipientStr) {
 // In-Memory synchronous cache for fast, zero-flicker UI rendering
 let _identityCache = null;
 let _mailCache = { inbox: [], sent: [], drafts: [] };
-let _socialCache = { profile: null, posts: [], friends: [] };
+let _socialCache = { profile: null, posts: [], stories: [], channels: [], friends: [], following: [] };
 const _peersMap = new Map(); // Keyed by node_id / peer_id (Authentic physical network peers)
 
 // Initialize sync cache from localStorage/cold storage first
@@ -191,11 +202,18 @@ try {
   const rawId = localStorage.getItem(STORAGE_KEY);
   if (rawId) _identityCache = JSON.parse(rawId);
 
-  const rawMail = localStorage.getItem(MAIL_STORAGE);
-  if (rawMail) _mailCache = JSON.parse(rawMail);
+  // Mail lives in IndexedDB. Older versions also kept a decrypted copy here.
+  localStorage.removeItem(MAIL_STORAGE);
 
+  // Only profile edits and follows are kept in localStorage (posts and stories
+  // are in IndexedDB; older versions stored everything here).
   const rawSocial = localStorage.getItem(SOCIAL_STORAGE);
-  if (rawSocial) _socialCache = JSON.parse(rawSocial);
+  if (rawSocial) {
+    const saved = JSON.parse(rawSocial);
+    _socialCache.profile = saved.profile || null;
+    _socialCache.following = Array.isArray(saved.following) ? saved.following : [];
+    _socialCache.followerDids = Array.isArray(saved.followerDids) ? saved.followerDids : [];
+  }
 } catch (e) {
   console.warn('[SovereignMesh] Cold cache init note:', e);
 }
@@ -240,9 +258,16 @@ async function hydrateFromDatabase() {
       drafts: allMails.filter(m => (m.box || m.folder) === 'drafts'),
     };
 
-    // 3. Social Posts (Honest storage - zero fake genesis seed)
+    // 3. Social Posts & Stories (Honest storage - zero fake genesis seed)
     const allPosts = await db.social_posts.toArray();
     _socialCache.posts = allPosts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const nowIso = new Date().toISOString();
+    const allStories = await db.social_stories.toArray();
+    _socialCache.stories = (allStories || []).filter(s => s.expiresAt > nowIso);
+
+    const allChannels = await db.social_channels.toArray();
+    _socialCache.channels = allChannels || [];
 
     // 4. Contacts & Blocked List Cache
     const contacts = await db.contacts.toArray();
@@ -343,9 +368,13 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
               const decrypted = await decryptMailPayload(mail, identity.secretKeyHex);
               displayMail = {
                 ...mail,
-                subject: decrypted.subject,
-                body: decrypted.body,
-                attachments: decrypted.attachments || [],
+                subject: String(decrypted.subject || '').slice(0, 300),
+                body: String(decrypted.body || '').slice(0, 50000),
+                attachments: Array.isArray(decrypted.attachments) ? decrypted.attachments.slice(0, 10) : [],
+                threadId: typeof decrypted.threadId === 'string' ? decrypted.threadId.slice(0, 64) : mail.id,
+                inReplyTo: typeof decrypted.inReplyTo === 'string' ? decrypted.inReplyTo.slice(0, 64) : null,
+                // The signed packet's key, not the address the sender typed.
+                senderDid: verifiedSenderDid(packet),
                 isEncryptedE2EE: true,
               };
             } catch (err) {
@@ -380,84 +409,51 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
       break;
     }
 
-    case 'MESH_POST': {
-      const post = payload?.post || packet?.payload?.post;
-      if (post && !_socialCache.posts.some(p => p.id === post.id)) {
-        _socialCache.posts.unshift(post);
-        db.social_posts.put(post).catch(() => {});
-        window.dispatchEvent(new CustomEvent('novaura:social_updated', { detail: post }));
-        window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-      }
+    // NovaSocial: every item is signed by its author and checked in meshSocial.js.
+    case 'MESH_POST':
+    case 'MESH_REPOST': {
+      if (admitIncomingPosts([payload?.post])) notifySocial();
       break;
     }
 
     case 'MESH_POSTS_REQUEST': {
-      const requesterId = packet.sender_id || payload?.requesterId;
-      if (requesterId) {
-        db.social_posts.toArray().then(posts => {
-          if (posts && posts.length > 0) {
-            const sorted = posts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 20);
-            sendDirectMeshPacket(requesterId, 'MESH_POSTS_RESPONSE', { posts: sorted });
-          }
-        }).catch(() => {});
-      }
+      if (packet.sender_id) sendSocialBatches(packet.sender_id, 'MESH_POSTS_RESPONSE', 'posts', shareablePosts(40));
       break;
     }
 
     case 'MESH_POSTS_RESPONSE': {
-      const incomingPosts = payload?.posts || packet?.payload?.posts;
-      if (Array.isArray(incomingPosts) && incomingPosts.length > 0) {
-        let changed = false;
-        for (const post of incomingPosts) {
-          if (!_socialCache.posts.some(p => p.id === post.id)) {
-            _socialCache.posts.push(post);
-            db.social_posts.put(post).catch(() => {});
-            changed = true;
-          }
-        }
-        if (changed) {
-          _socialCache.posts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-          window.dispatchEvent(new CustomEvent('novaura:social_updated'));
-          window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-        }
-      }
+      if (Array.isArray(payload?.posts) && admitIncomingPosts(payload.posts.slice(0, 60))) notifySocial();
       break;
     }
 
-    case 'MESH_VOTE': {
-      const postId = payload?.postId || packet?.payload?.postId;
-      const voters = payload?.voters || packet?.payload?.voters;
-      const upvotes = payload?.upvotes ?? packet?.payload?.upvotes;
-      const downvotes = payload?.downvotes ?? packet?.payload?.downvotes;
-
-      if (postId) {
-        const post = _socialCache.posts.find(p => p.id === postId);
-        if (post) {
-          if (voters && typeof voters === 'object') post.voters = { ...(post.voters || {}), ...voters };
-          if (typeof upvotes === 'number') post.upvotes = upvotes;
-          if (typeof downvotes === 'number') post.downvotes = downvotes;
-          db.social_posts.put(post).catch(() => {});
-          window.dispatchEvent(new CustomEvent('novaura:social_updated', { detail: post }));
-          window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-        }
-      }
+    case 'MESH_VOTE':
+    case 'MESH_REACTION': {
+      if (admitIncomingVote(payload?.vote)) notifySocial();
       break;
     }
 
     case 'MESH_COMMENT': {
-      const postId = payload?.postId || packet?.payload?.postId;
-      const comment = payload?.comment || packet?.payload?.comment;
-      if (postId && comment) {
-        const post = _socialCache.posts.find(p => p.id === postId);
-        if (post) {
-          if (!post.comments) post.comments = [];
-          if (!post.comments.some(c => c.id === comment.id)) {
-            post.comments.push(comment);
-            db.social_posts.put(post).catch(() => {});
-            window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-          }
-        }
-      }
+      if (admitIncomingComment(payload?.comment)) notifySocial();
+      break;
+    }
+
+    case 'MESH_STORY': {
+      if (admitIncomingStories([payload?.story])) notifyStories();
+      break;
+    }
+
+    case 'MESH_STORIES_REQUEST': {
+      if (packet.sender_id) sendSocialBatches(packet.sender_id, 'MESH_STORIES_RESPONSE', 'stories', getStories().filter(st => st.sig).map(({ reactions: _r, myReaction: _m, viewed: _v, authorNodeId: _a, ...st }) => st));
+      break;
+    }
+
+    case 'MESH_STORIES_RESPONSE': {
+      if (Array.isArray(payload?.stories) && admitIncomingStories(payload.stories.slice(0, 100))) notifyStories();
+      break;
+    }
+
+    case 'MESH_FOLLOW': {
+      receiveFollow(payload, verifiedSenderDid(packet));
       break;
     }
 
@@ -741,9 +737,6 @@ async function receiveBetaFeedback(fb) {
     };
     _mailCache.inbox.unshift(mail);
     await db.mailbox.put(mail).catch(() => {});
-    try {
-      localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
-    } catch {}
     window.dispatchEvent(new CustomEvent('novaura:mail_received', { detail: mail }));
     window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
     dispatchMeshToast({ type: 'info', title: 'Beta report received', message: report.title || 'New tester report in NovaMail' });
@@ -1041,6 +1034,12 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_INFERENCE_ACCESS_REPLY',
   'MESH_INFERENCE_CALL',
   'MESH_INFERENCE_RESULT',
+  'MESH_REACTION',
+  'MESH_STORY',
+  'MESH_STORIES_REQUEST',
+  'MESH_STORIES_RESPONSE',
+  'MESH_FOLLOW',
+  'MESH_REPOST',
 ]);
 
 export function broadcastMeshPacket(type, payload) {
@@ -1258,6 +1257,7 @@ export function requestRoomSocialSync() {
     requesterId: getLocalIdentity()?.publicKey || 'local-op',
     timestamp: Date.now(),
   });
+  requestStoriesSync();
 }
 
 // Automatically sync social feed from the universe room on startup
@@ -1285,7 +1285,7 @@ export function getUnreadCount() {
   return (_mailCache.inbox || []).filter(m => !m.read).length;
 }
 
-export function sendMail({ to, subject, body, attachments = [] }) {
+export function sendMail({ to, subject, body, attachments = [], threadId = null, inReplyTo = null }) {
   const identity = getLocalIdentity();
   const mailId = generateId();
   const senderAddress = identity ? identity.address : 'operator@nova.node';
@@ -1301,6 +1301,8 @@ export function sendMail({ to, subject, body, attachments = [] }) {
     subject: subject.trim(),
     body: body.trim(),
     attachments,
+    threadId: threadId || mailId,
+    inReplyTo: inReplyTo || null,
     timestamp: new Date().toISOString(),
     read: false,
     starred: false,
@@ -1322,9 +1324,6 @@ export function sendMail({ to, subject, body, attachments = [] }) {
     db.mailbox.put(inboxCopy).catch(() => {});
   }
 
-  try {
-    localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
-  } catch {}
 
   // Records why a message could not leave this node. Mail is never broadcast
   // in plaintext: without the recipient's public key it stays local.
@@ -1333,9 +1332,6 @@ export function sendMail({ to, subject, body, attachments = [] }) {
     const idx = _mailCache.sent.findIndex(m => m.id === mailId);
     if (idx !== -1) _mailCache.sent[idx] = updated;
     db.mailbox.put(updated).catch(() => {});
-    try {
-      localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
-    } catch {}
     window.dispatchEvent(new CustomEvent('novaura:mail_delivery_failed', { detail: { id: mailId, reason } }));
     window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
   };
@@ -1351,6 +1347,8 @@ export function sendMail({ to, subject, body, attachments = [] }) {
           subject: plainMail.subject,
           body: plainMail.body,
           attachments: plainMail.attachments,
+          threadId: plainMail.threadId,
+          inReplyTo: plainMail.inReplyTo,
         });
         const meshMail = {
           id: mailId,
@@ -1361,6 +1359,11 @@ export function sendMail({ to, subject, body, attachments = [] }) {
           timestamp: plainMail.timestamp,
           ...encryptedEnvelope,
         };
+        // Relays carry packets of at most 64 KB; a larger one would be dropped silently.
+        if (JSON.stringify(meshMail).length > MAX_MAIL_PACKET_CHARS) {
+          markUndelivered(`Too large to send over the mesh (attachments are limited to about ${Math.round(MAX_MAIL_ATTACHMENT_BYTES / 1024)} KB in total). Remove or shrink the attachments and resend.`);
+          return;
+        }
         broadcastMeshPacket('MESH_MAIL', { mail: meshMail });
       } else if (!identity?.secretKeyHex) {
         markUndelivered('Your node identity has no encryption key yet. Open Sovereign Network to initialize it, then resend.');
@@ -1383,9 +1386,6 @@ export function markAsRead(mailId) {
   if (mail) {
     mail.read = true;
     db.mailbox.update(mailId, { read: true }).catch(() => {});
-    try {
-      localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
-    } catch {}
     window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
   }
 }
@@ -1395,9 +1395,6 @@ export function toggleStar(mailId) {
   if (mail) {
     mail.starred = !mail.starred;
     db.mailbox.update(mailId, { starred: mail.starred }).catch(() => {});
-    try {
-      localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
-    } catch {}
     window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
   }
 }
@@ -1406,9 +1403,6 @@ export function deleteMail(mailId, folder = 'inbox') {
   if (_mailCache[folder]) {
     _mailCache[folder] = _mailCache[folder].filter(m => m.id !== mailId);
     db.mailbox.delete(mailId).catch(() => {});
-    try {
-      localStorage.setItem(MAIL_STORAGE, JSON.stringify(_mailCache));
-    } catch {}
     window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
   }
 }
@@ -1437,186 +1431,479 @@ export function publishManuscriptToMesh(manuscript, note = '') {
   return true;
 }
 
-// ── NovaSocial Layer ────────────────────────────────────────────────────────
+// ── NovaSocial Layer (Facebook + Reddit + YouTube Hybrid on Sovereign Mesh) ──
+
+// Content is signed by its author and checked on arrival (meshSocial.js), so
+// relayed copies can be trusted and no peer can rewrite another's votes,
+// reactions, posts or stories. Profile numbers are counted from real data.
+
+function myDid() {
+  const pub = String(getLocalIdentity()?.publicKey || '').replace(/^0x/, '').toLowerCase();
+  return /^[0-9a-f]{64}$/.test(pub) ? `did:nova:${pub}` : null;
+}
+
+function signer() {
+  const identity = getLocalIdentity();
+  const did = myDid();
+  if (!did || !identity?.secretKeyHex) throw new Error('Your node identity is still loading. Try again in a moment.');
+  return { authorDid: did, voterDid: did, secretHex: identity.secretKeyHex };
+}
+
+function myAuthorFields() {
+  const identity = getLocalIdentity();
+  return {
+    authorHandle: identity?.handle || 'operator',
+    authorName: identity?.displayName || 'Sovereign Operator',
+    authorColor: identity?.avatarColor || '#00f0ff',
+  };
+}
+
+// Fields the UI reads that are derived, not signed.
+function decoratePost(post) {
+  post.authorNodeId = post.authorDid || post.authorNodeId;
+  post.mediaUrl = post.mediaGallery?.[0] || post.mediaUrl || null;
+  if (!post.comments) post.comments = [];
+  deriveSocialVotes(post);
+  for (const c of flattenComments(post.comments)) deriveSocialVotes(c);
+  return post;
+}
+
+// Only the slim, non-derivable part of the social state lives in localStorage
+// (posts and stories are in IndexedDB).
+function persistSocialPrefs() {
+  try {
+    localStorage.setItem(SOCIAL_STORAGE, JSON.stringify({
+      profile: _socialCache.profile,
+      following: _socialCache.following || [],
+      followerDids: _socialCache.followerDids || [],
+    }));
+  } catch { /* storage unavailable */ }
+}
+
+function notifySocial(detail = null) {
+  window.dispatchEvent(new CustomEvent('novaura:social_updated', { detail }));
+  window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+}
+
+function notifyStories(detail = null) {
+  window.dispatchEvent(new CustomEvent('novaura:stories_updated', { detail }));
+  window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+}
+
+function savePost(post) {
+  db.social_posts.put(post).catch(() => {});
+}
+
+function enforcePostCaps() {
+  const drop = socialOverflowIds(_socialCache.posts, { perAuthor: SOCIAL_LIMITS.postsPerAuthor, total: SOCIAL_LIMITS.postsTotal });
+  const mine = myDid();
+  for (const id of drop) {
+    const p = _socialCache.posts.find(x => x.id === id);
+    if (p && p.authorDid === mine) drop.delete(id); // never drop the user's own posts
+  }
+  if (!drop.size) return;
+  _socialCache.posts = _socialCache.posts.filter(p => !drop.has(p.id));
+  db.social_posts.bulkDelete([...drop]).catch(() => {});
+}
+
+/** Admits signed posts from the network. Returns true if the feed changed. */
+function admitIncomingPosts(rawPosts) {
+  let changed = false;
+  const now = Date.now();
+  for (const raw of rawPosts) {
+    const post = admitSocialPost(raw, { now });
+    if (!post) continue;
+    const existing = _socialCache.posts.find(p => p.id === post.id);
+    const target = existing || decoratePost({ ...post, comments: [], voteSigs: {}, reactionSigs: {} });
+    // Votes, reactions and comments travel with a synced post; each is re-verified.
+    let touched = !existing;
+    for (const [kind, key] of [['vote', 'voteSigs'], ['reaction', 'reactionSigs']]) {
+      for (const [did, rec] of Object.entries(admitSocialVoteMap(raw[key], kind, post.id, now))) {
+        if (applySocialVote(target, { ...rec, voterDid: did, kind })) touched = true;
+      }
+    }
+    for (const rawComment of flattenComments(raw.comments).slice(0, SOCIAL_LIMITS.commentsPerPost)) {
+      const comment = admitSocialComment(rawComment, { now });
+      if (comment && comment.postId === post.id && insertSocialComment(target, comment)) touched = true;
+      const stored = comment && flattenComments(target.comments).find(c => c.id === comment.id);
+      if (stored) {
+        for (const [did, rec] of Object.entries(admitSocialVoteMap(rawComment.voteSigs, 'vote', `${post.id}/${comment.id}`, now))) {
+          if (applySocialVote(stored, { ...rec, voterDid: did, kind: 'vote' })) touched = true;
+        }
+      }
+    }
+    if (!existing) _socialCache.posts.push(target);
+    if (touched) { decoratePost(target); savePost(target); changed = true; }
+  }
+  if (changed) {
+    _socialCache.posts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    enforcePostCaps();
+  }
+  return changed;
+}
+
+function admitIncomingVote(raw) {
+  const record = admitSocialVote(raw);
+  if (!record) return false;
+  const [postId, commentId] = record.target.split('/');
+  const post = _socialCache.posts.find(p => p.id === postId);
+  if (!post) return false;
+  const item = commentId ? flattenComments(post.comments).find(c => c.id === commentId) : post;
+  if (!item || !applySocialVote(item, record)) return false;
+  savePost(post);
+  return true;
+}
+
+function admitIncomingComment(raw) {
+  const comment = admitSocialComment(raw);
+  if (!comment) return false;
+  const post = _socialCache.posts.find(p => p.id === comment.postId);
+  if (!post || !insertSocialComment(post, comment)) return false;
+  savePost(post);
+  return true;
+}
+
+/** Signed posts this node can pass on (newest first): its own and verified ones from others. */
+function shareablePosts(limit) {
+  const mine = myDid();
+  return _socialCache.posts
+    .filter(p => p.sig && (p.authorDid === mine || admitSocialPost(p)))
+    .slice(0, limit)
+    .map(wireSocialPost);
+}
+
+// One feed/stories sync answer per requester every 30 s, in packets that fit the relay.
+const _socialSyncServedAt = new Map();
+function sendSocialBatches(requesterId, type, key, items) {
+  const last = _socialSyncServedAt.get(`${type}:${requesterId}`) || 0;
+  if (Date.now() - last < 30000 || !items.length) return;
+  _socialSyncServedAt.set(`${type}:${requesterId}`, Date.now());
+  for (const batch of socialPacketBatches(items).slice(0, 8)) {
+    sendDirectMeshPacket(requesterId, type, { [key]: batch });
+  }
+}
 
 export function getSocialProfile() {
-  if (!_socialCache.profile) {
-    const identity = getLocalIdentity();
-    _socialCache.profile = {
-      handle: identity?.handle || 'operator',
-      displayName: identity?.displayName || 'Sovereign Operator',
-      bio: identity?.bio || 'Local Node Sovereign Operator',
-      avatarColor: identity?.avatarColor || '#00f0ff',
-      followers: 0,
-      following: 0,
-      karma: 0,
-    };
-  }
+  const identity = getLocalIdentity();
+  const did = myDid();
+  const base = _socialCache.profile || {};
+  const myPosts = (_socialCache.posts || []).filter(p => p.authorDid && p.authorDid === did);
+  const postKarma = myPosts.reduce((n, p) => n + (p.upvotes || 0) - (p.downvotes || 0), 0);
+  const commentKarma = (_socialCache.posts || []).reduce((n, p) => n + flattenComments(p.comments)
+    .filter(c => c.authorDid === did).reduce((m, c) => m + (c.upvotes || 0) - (c.downvotes || 0), 0), 0);
+  _socialCache.profile = {
+    handle: identity?.handle || 'operator',
+    displayName: identity?.displayName || 'Sovereign Operator',
+    bio: identity?.bio || '',
+    avatarColor: identity?.avatarColor || '#00f0ff',
+    bannerUrl: null,
+    ...base,
+    // Counted, never stored as free numbers.
+    followers: (_socialCache.followerDids || []).length,
+    following: (_socialCache.following || []).length,
+    postKarma,
+    commentKarma,
+    karma: postKarma + commentKarma,
+    verifiedNode: Boolean(did),
+    nodeId: did || identity?.nodeId || null,
+  };
   return _socialCache.profile;
 }
 
 export function updateSocialProfile(updates) {
-  _socialCache.profile = { ...getSocialProfile(), ...updates };
-  try {
-    localStorage.setItem(SOCIAL_STORAGE, JSON.stringify(_socialCache));
-  } catch {}
-  return _socialCache.profile;
+  const { followers: _f, following: _g, karma: _k, postKarma: _p, commentKarma: _c, verifiedNode: _v, ...editable } = updates || {};
+  _socialCache.profile = { ...(_socialCache.profile || {}), ...editable };
+  persistSocialPrefs();
+  const profile = getSocialProfile();
+  window.dispatchEvent(new CustomEvent('novaura:social_profile_updated', { detail: profile }));
+  return profile;
 }
 
-export function getFeed(filterSubAura = 'all', filterType = 'all') {
+export function getFeed(filterSubAura = 'all', filterType = 'all', sortBy = 'hot', searchQuery = '') {
   const identity = getLocalIdentity();
-  const voterId = identity?.nodeId || identity?.publicKey || 'local_operator';
+  const voterId = myDid() || identity?.nodeId;
+
   let list = (_socialCache.posts || []).map(p => {
     const userVote = p.voters ? p.voters[voterId] || null : null;
+    const userReaction = p.reactionUsers ? p.reactionUsers[voterId] || null : null;
+    const score = (p.upvotes || 0) - (p.downvotes || 0);
+
+    // Compute hot score with time decay
+    const hoursOld = Math.max(0, (Date.now() - new Date(p.timestamp).getTime()) / (1000 * 60 * 60));
+    const hotScore = (score + 1) / Math.pow(hoursOld + 2, 1.5);
+
     return {
       ...p,
       currentUserVote: userVote,
-      score: (p.upvotes || 0) - (p.downvotes || 0),
+      currentUserReaction: userReaction,
+      score,
+      hotScore,
+      reactions: p.reactions || { like: 0, love: 0, fire: 0, insight: 0, rocket: 0, mindblown: 0 },
+      reactionUsers: p.reactionUsers || {},
+      mediaGallery: p.mediaGallery || (p.mediaUrl ? [p.mediaUrl] : []),
+      comments: p.comments || [],
     };
   });
+
+  // Filter by Sub-Aura (Reddit)
   if (filterSubAura && filterSubAura !== 'all') {
     list = list.filter(p => p.subAura === filterSubAura);
   }
+
+  // Filter by Type (FB Wall, YT Video, Reddit Discussion, Shorts)
   if (filterType && filterType !== 'all') {
-    list = list.filter(p => p.type === filterType);
+    if (filterType === 'shorts') {
+      list = list.filter(p => p.type === 'video' && (p.isShort || (p.videoDuration && p.videoDuration.startsWith('00:'))));
+    } else {
+      list = list.filter(p => p.type === filterType);
+    }
   }
+
+  // Search filter
+  if (searchQuery && searchQuery.trim()) {
+    const q = searchQuery.toLowerCase().trim();
+    list = list.filter(p =>
+      (p.title && p.title.toLowerCase().includes(q)) ||
+      (p.content && p.content.toLowerCase().includes(q)) ||
+      (p.authorHandle && p.authorHandle.toLowerCase().includes(q)) ||
+      (p.authorName && p.authorName.toLowerCase().includes(q)) ||
+      (p.flair && p.flair.toLowerCase().includes(q)) ||
+      (p.subAura && p.subAura.toLowerCase().includes(q))
+    );
+  }
+
+  // Sorting: Hot, New, Top, Rising
+  if (sortBy === 'new') {
+    list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  } else if (sortBy === 'top') {
+    list.sort((a, b) => b.score - a.score);
+  } else if (sortBy === 'rising') {
+    list.sort((a, b) => {
+      const aRecent = (a.score + (a.comments?.length || 0)) / Math.max(0.5, (Date.now() - new Date(a.timestamp).getTime()) / 3600000);
+      const bRecent = (b.score + (b.comments?.length || 0)) / Math.max(0.5, (Date.now() - new Date(b.timestamp).getTime()) / 3600000);
+      return bRecent - aRecent;
+    });
+  } else {
+    // Default 'hot'
+    list.sort((a, b) => b.hotScore - a.hotScore);
+  }
+
   return list;
 }
 
-export function createPost({ title, content, type = 'wall', subAura = 'r/general', mediaUrl = null, videoDuration = null }) {
-  const identity = getLocalIdentity();
-  const authorId = identity?.nodeId || identity?.publicKey || 'local_operator';
-  const post = {
-    id: generateId(),
-    authorHandle: identity?.handle || 'operator',
-    authorName: identity?.displayName || 'Sovereign Operator',
-    authorNodeId: authorId,
-    authorColor: identity?.avatarColor || '#00f0ff',
-    title: title ? title.trim() : null,
-    content: content.trim(),
-    type, // 'wall' | 'video' | 'reddit'
-    subAura: subAura || 'r/general',
-    mediaUrl: mediaUrl || null,
-    videoDuration: videoDuration || null,
-    upvotes: 1,
-    downvotes: 0,
-    voters: { [authorId]: 'up' },
-    currentUserVote: 'up',
-    views: 1,
-    comments: [],
-    timestamp: new Date().toISOString(),
-  };
-
+export function createPost({
+  title = null,
+  content = '',
+  type = 'wall',
+  subAura = 'r/general',
+  mediaUrl = null,
+  mediaGallery = [],
+  videoDuration = null,
+  videoChapters = [],
+  feeling = null,
+  flair = null,
+  isShort = false,
+}) {
+  const keys = signer();
+  const gallery = Array.isArray(mediaGallery) && mediaGallery.length > 0 ? mediaGallery : (mediaUrl ? [mediaUrl] : []);
+  const signed = signSocialPost({
+    ...myAuthorFields(), title, content: String(content || '').trim(), type, subAura, flair, feeling,
+    mediaGallery: gallery, videoDuration, videoChapters, isShort,
+  }, keys);
+  if (JSON.stringify(signed).length > SOCIAL_LIMITS.packetBudget) {
+    throw new Error('This post is too large to send over the mesh. Use smaller images or links.');
+  }
+  const post = decoratePost({ ...signed, comments: [], voteSigs: {}, reactionSigs: {}, views: 0 });
+  // The author's own upvote, signed like any other vote.
+  applySocialVote(post, signSocialVote({ target: post.id, value: 'up' }, keys));
+  decoratePost(post);
   _socialCache.posts.unshift(post);
-  db.social_posts.put(post).catch(() => {});
-
-  // Broadcast to other peers/tabs
-  broadcastMeshPacket('MESH_POST', { post });
-
-  try {
-    localStorage.setItem(SOCIAL_STORAGE, JSON.stringify(_socialCache));
-  } catch {}
-
-  window.dispatchEvent(new CustomEvent('novaura:social_updated', { detail: post }));
-  window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+  savePost(post);
+  broadcastMeshPacket('MESH_POST', { post: wireSocialPost(post) });
+  notifySocial(post);
   return post;
+}
+
+function castVote(post, item, target, value, kind) {
+  const record = signSocialVote({ target, value, kind }, signer());
+  applySocialVote(item, record);
+  decoratePost(post);
+  savePost(post);
+  broadcastMeshPacket(kind === 'reaction' ? 'MESH_REACTION' : 'MESH_VOTE', { vote: record });
+  notifySocial(post);
 }
 
 export function votePost(postId, direction) {
-  const identity = getLocalIdentity();
-  const voterId = identity?.nodeId || identity?.publicKey || 'local_operator';
   const post = _socialCache.posts.find(p => p.id === postId);
   if (!post) return null;
-
-  if (!post.voters || typeof post.voters !== 'object') {
-    post.voters = {};
-    if (post.upvotes > 0) {
-      post.voters[post.authorNodeId || 'author'] = 'up';
-    }
-  }
-
-  const prevVote = post.voters[voterId] || null;
-
-  if (prevVote === direction) {
-    // Retract vote (toggle off)
-    delete post.voters[voterId];
-    if (direction === 'up') {
-      post.upvotes = Math.max(0, (post.upvotes || 1) - 1);
-    } else {
-      post.downvotes = Math.max(0, (post.downvotes || 1) - 1);
-    }
-  } else if (prevVote) {
-    // Switch vote direction
-    if (direction === 'up') {
-      post.downvotes = Math.max(0, (post.downvotes || 1) - 1);
-      post.upvotes = (post.upvotes || 0) + 1;
-    } else {
-      post.upvotes = Math.max(0, (post.upvotes || 1) - 1);
-      post.downvotes = (post.downvotes || 0) + 1;
-    }
-    post.voters[voterId] = direction;
-  } else {
-    // First time voting
-    post.voters[voterId] = direction;
-    if (direction === 'up') {
-      post.upvotes = (post.upvotes || 0) + 1;
-    } else {
-      post.downvotes = (post.downvotes || 0) + 1;
-    }
-  }
-
-  post.currentUserVote = post.voters[voterId] || null;
-
-  db.social_posts.update(postId, {
-    upvotes: post.upvotes,
-    downvotes: post.downvotes,
-    voters: post.voters,
-  }).catch(() => {});
-
-  broadcastMeshPacket('MESH_VOTE', {
-    postId,
-    voterId,
-    vote: post.voters[voterId] || 'retracted',
-    upvotes: post.upvotes,
-    downvotes: post.downvotes,
-    voters: post.voters,
-  });
-
-  try {
-    localStorage.setItem(SOCIAL_STORAGE, JSON.stringify(_socialCache));
-  } catch {}
-
-  window.dispatchEvent(new CustomEvent('novaura:social_updated', { detail: post }));
-  window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+  const current = post.voters?.[myDid()] || null;
+  castVote(post, post, post.id, current === direction ? null : direction, 'vote');
+  post.currentUserVote = post.voters?.[myDid()] || null;
   return post;
 }
 
-export function addComment(postId, content) {
+export function reactToPost(postId, reactionType = 'like') {
   const post = _socialCache.posts.find(p => p.id === postId);
-  const identity = getLocalIdentity();
-  if (post && content.trim()) {
-    const comment = {
-      id: generateId(),
-      authorHandle: identity?.handle || 'operator',
-      authorName: identity?.displayName || 'Sovereign Operator',
-      content: content.trim(),
-      timestamp: new Date().toISOString(),
-      upvotes: 0,
-    };
-    if (!post.comments) post.comments = [];
-    post.comments.push(comment);
+  if (!post) return null;
+  const current = post.reactionUsers?.[myDid()] || null;
+  castVote(post, post, post.id, current === reactionType ? null : reactionType, 'reaction');
+  post.currentUserReaction = post.reactionUsers?.[myDid()] || null;
+  return post;
+}
 
-    db.social_posts.update(postId, { comments: post.comments }).catch(() => {});
-    broadcastMeshPacket('MESH_COMMENT', { postId, comment });
+export function addComment(postId, content, parentCommentId = null) {
+  const post = _socialCache.posts.find(p => p.id === postId);
+  const text = String(content || '').trim();
+  if (!post || !text) return null;
+  const keys = signer();
+  const comment = signSocialComment({ ...myAuthorFields(), postId, parentId: parentCommentId, content: text }, keys);
+  if (!insertSocialComment(post, comment)) return null;
+  const stored = flattenComments(post.comments).find(c => c.id === comment.id);
+  applySocialVote(stored, signSocialVote({ target: `${postId}/${comment.id}`, value: 'up' }, keys));
+  decoratePost(post);
+  savePost(post);
+  broadcastMeshPacket('MESH_COMMENT', { comment });
+  broadcastMeshPacket('MESH_VOTE', { vote: stored.voteSigs[keys.voterDid] && { ...stored.voteSigs[keys.voterDid], voterDid: keys.voterDid, kind: 'vote' } });
+  notifySocial(post);
+  return stored;
+}
 
-    try {
-      localStorage.setItem(SOCIAL_STORAGE, JSON.stringify(_socialCache));
-    } catch {}
+export function voteComment(postId, commentId, direction) {
+  const post = _socialCache.posts.find(p => p.id === postId);
+  const comment = post && flattenComments(post.comments).find(c => c.id === commentId);
+  if (!comment) return false;
+  const current = comment.voters?.[myDid()] || null;
+  castVote(post, comment, `${postId}/${commentId}`, current === direction ? null : direction, 'vote');
+  return true;
+}
 
-    window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-    return comment;
+export function repostPost(postId, commentary = '') {
+  const original = _socialCache.posts.find(p => p.id === postId);
+  if (!original) return null;
+  // Reposting a repost shares the original; it is embedded with its own
+  // signature so other nodes can check who really wrote it.
+  const source = original.repostOf || original;
+  if (!source.sig) throw new Error('This post is not signed, so it cannot be reposted.');
+  const embedded = signedSocialPostCopy(source);
+  const keys = signer();
+  const signed = signSocialPost({
+    ...myAuthorFields(),
+    title: null,
+    content: String(commentary || '').trim(),
+    type: source.type,
+    subAura: source.subAura,
+    repostOf: embedded,
+  }, keys);
+  if (JSON.stringify(signed).length > SOCIAL_LIMITS.packetBudget) {
+    throw new Error('This post is too large to repost over the mesh.');
   }
-  return null;
+  const post = decoratePost({ ...signed, comments: [], voteSigs: {}, reactionSigs: {}, views: 0 });
+  _socialCache.posts.unshift(post);
+  savePost(post);
+  broadcastMeshPacket('MESH_REPOST', { post: wireSocialPost(post) });
+  notifySocial(post);
+  return post;
+}
+
+// ── Ephemeral 24h Peer Stories Layer ────────────────────────────────────────
+
+export function getStories() {
+  const now = new Date().toISOString();
+  if (!_socialCache.stories) _socialCache.stories = [];
+  return _socialCache.stories.filter(s => s.expiresAt > now);
+}
+
+function admitIncomingStories(rawStories) {
+  let changed = false;
+  const now = Date.now();
+  for (const raw of rawStories) {
+    const story = admitSocialStory(raw, { now });
+    if (!story || _socialCache.stories.some(s => s.id === story.id)) continue;
+    const stored = { ...story, authorNodeId: story.authorDid, reactions: {} };
+    _socialCache.stories.push(stored);
+    db.social_stories.put(stored).catch(() => {});
+    changed = true;
+  }
+  if (changed) {
+    const nowIso = new Date(now).toISOString();
+    const expired = _socialCache.stories.filter(s => s.expiresAt <= nowIso).map(s => s.id);
+    const over = socialOverflowIds(_socialCache.stories.filter(s => s.expiresAt > nowIso),
+      { perAuthor: SOCIAL_LIMITS.storiesPerAuthor, total: SOCIAL_LIMITS.storiesTotal, timeKey: 'createdAt' });
+    const drop = new Set([...expired, ...over]);
+    _socialCache.stories = _socialCache.stories.filter(s => !drop.has(s.id));
+    if (drop.size) db.social_stories.bulkDelete([...drop]).catch(() => {});
+  }
+  return changed;
+}
+
+export function createStory({ mediaUrl = null, caption = '', bgGradient = null, duration = 24 }) {
+  const signed = signSocialStory({ ...myAuthorFields(), mediaUrl, caption, bgGradient, duration }, signer());
+  if (JSON.stringify(signed).length > SOCIAL_LIMITS.packetBudget) {
+    throw new Error('This story is too large to send over the mesh. Use a smaller image or a link.');
+  }
+  const story = { ...signed, authorNodeId: signed.authorDid, reactions: {}, viewed: true };
+  if (!_socialCache.stories) _socialCache.stories = [];
+  _socialCache.stories.unshift(story);
+  db.social_stories.put(story).catch(() => {});
+  broadcastMeshPacket('MESH_STORY', { story: signed });
+  notifyStories(story);
+  return story;
+}
+
+/** Your own reaction to a story (one per story, kept on this node). */
+export function reactToStory(storyId, reaction = 'fire') {
+  const story = (_socialCache.stories || []).find(s => s.id === storyId);
+  if (!story) return null;
+  story.myReaction = story.myReaction === reaction ? null : reaction;
+  story.reactions = story.myReaction ? { [story.myReaction]: 1 } : {};
+  db.social_stories.put(story).catch(() => {});
+  notifyStories(story);
+  return story;
+}
+
+export function requestStoriesSync() {
+  broadcastMeshPacket('MESH_STORIES_REQUEST', { timestamp: Date.now() });
+}
+
+// ── Channels & Subscriptions Layer (YouTube style) ──────────────────────────
+
+function receiveFollow(payload, senderDid) {
+  if (!senderDid || payload?.targetDid !== myDid()) return;
+  const set = new Set(_socialCache.followerDids || []);
+  const isNew = !set.has(senderDid);
+  if (payload.follow === false) set.delete(senderDid);
+  else set.add(senderDid);
+  _socialCache.followerDids = [...set].slice(-10000);
+  persistSocialPrefs();
+  window.dispatchEvent(new CustomEvent('novaura:social_profile_updated', { detail: getSocialProfile() }));
+  if (payload.follow !== false && isNew) {
+    const handle = String(payload.followerHandle || 'peer').replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 40) || 'peer';
+    dispatchMeshToast({ type: 'peer', title: 'New follower', message: `@${handle} started following you.` });
+  }
+}
+
+export function toggleFollowUser(targetHandle, targetNodeId = null) {
+  if (!_socialCache.following) _socialCache.following = [];
+  const isFollowing = _socialCache.following.includes(targetHandle);
+  _socialCache.following = isFollowing
+    ? _socialCache.following.filter(h => h !== targetHandle)
+    : [..._socialCache.following, targetHandle];
+  // Only nodes with a key can be told; the packet is signed, so the follower is real.
+  if (/^did:nova:[0-9a-f]{64}$/.test(String(targetNodeId || ''))) {
+    broadcastMeshPacket('MESH_FOLLOW', { targetDid: targetNodeId, follow: !isFollowing, followerHandle: getLocalIdentity()?.handle || 'operator' });
+  }
+  persistSocialPrefs();
+  window.dispatchEvent(new CustomEvent('novaura:social_profile_updated', { detail: getSocialProfile() }));
+  return !isFollowing;
+}
+
+export function isFollowingUser(targetHandle) {
+  if (!_socialCache.following) _socialCache.following = [];
+  return _socialCache.following.includes(targetHandle);
+}
+
+export function getChannelVideos(authorHandle) {
+  return (_socialCache.posts || []).filter(p => p.type === 'video' && p.authorHandle === authorHandle);
 }
 
 // ── Ecosystem: System Notification Toast Dispatcher ────────────────────────
@@ -2064,10 +2351,14 @@ export async function publishHostedSite(siteData) {
     ));
   }
 
+  const faction = cleanDomain.endsWith('.aura') ? 'aura' : 'nova';
   const siteRecord = {
     id: cleanDomain,
     domain: cleanDomain,
     title: siteData.title || `${cleanDomain} — Decentralized Sovereign Site`,
+    favicon: siteData.favicon || (faction === 'aura' ? '✨' : '🌐'),
+    faction,
+    category: siteData.category || (faction === 'aura' ? 'Creative & Neural' : 'Infrastructure & Tools'),
     ownerHandle: siteData.ownerHandle || identity.handle || 'operator',
     ownerPhone: siteData.ownerPhone || identity.phoneNumber || '+1-700-NOVA-0001',
     ownerNodeId: identity.nodeId || `did:nova:${(identity.publicKey || '').replace(/^0x/, '')}`,
@@ -2078,6 +2369,8 @@ export async function publishHostedSite(siteData) {
     updatedAt,
     publisherPubkey,
     publisherSig,
+    isPinned: Boolean(siteData.isPinned),
+    isFlagged: false,
   };
 
   await db.hosted_sites.put(siteRecord);
@@ -2087,19 +2380,20 @@ export async function publishHostedSite(siteData) {
   return siteRecord;
 }
 
-// ── Decentralized site admission control ────────────────────────────────────
 // Sites from peers contain HTML/JS. Nothing from the mesh is stored or shown
 // unless it is signed by its publisher, matches its content hash, is bounded in
 // size, and does not take over a domain that someone else already published.
-const NOVA_DOMAIN_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+const NOVA_DOMAIN_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.(nova|aura)$/i;
 const MAX_SITE_HTML_CHARS = 512 * 1024;
 const MAX_SITE_CLOCK_SKEW_MS = 10 * 60 * 1000;
-// Portals shipped inside every node. Until a node stores its own copy they still
-// count as locally owned, so a peer cannot claim them first.
-const BUILTIN_NOVA_DOMAINS = new Set(['genesis.nova', 'docs.nova', 'deca.nova']);
+// Portals shipped inside every node across both Nova and Aura factions.
+const BUILTIN_NOVA_DOMAINS = new Set([
+  'genesis.nova', 'docs.nova', 'deca.nova',
+  'elysium.aura', 'oracle.aura', 'creative.aura'
+]);
 
 function cleanNovaDomain(raw) {
-  return String(raw || '').trim().replace(/^nova:\/\//, '').replace(/\/+$/, '');
+  return String(raw || '').trim().replace(/^(nova|aura):\/\//, '').replace(/\/+$/, '');
 }
 
 function siteHexToBytes(hex) {
@@ -2171,10 +2465,15 @@ export async function admitRemoteSite(site) {
 
     // Whitelisted fields only; the owner identity comes from the verified key,
     // never from a self-asserted field.
+    const faction = domain.endsWith('.aura') ? 'aura' : 'nova';
     const record = {
       id: domain,
       domain,
       title: String(site.title || domain).slice(0, 200),
+      // A short emoji-style icon only (a URL here would load from the network).
+      favicon: (/^[^\s<>"'/\\]{1,4}$/u.test(String(site.favicon || '')) ? site.favicon : null) || (faction === 'aura' ? '✨' : '🌐'),
+      faction,
+      category: String(site.category || (faction === 'aura' ? 'Creative & Neural' : 'Infrastructure & Tools')).slice(0, 60),
       ownerHandle: String(site.ownerHandle || 'peer').slice(0, 64),
       ownerPhone: String(site.ownerPhone || '').slice(0, 32),
       ownerNodeId: `did:nova:${pub}`,
@@ -2186,6 +2485,9 @@ export async function admitRemoteSite(site) {
       publisherPubkey: pub,
       publisherSig: sig,
       receivedFromMesh: true,
+      // Pinning and flagging are this node's own choices, never the publisher's.
+      isPinned: Boolean(existing?.isPinned),
+      isFlagged: Boolean(existing?.isFlagged),
     };
     await db.hosted_sites.put(record);
     return record;
@@ -2223,4 +2525,51 @@ export async function queryRemoteSite(domain, timeoutMs = 8000) {
     });
   });
 }
+
+// ── Decentralized Web Registry Explorer & Administration ────────────────────
+
+export async function getMeshSitesRegistry({ faction = 'all', category = 'all', search = '' } = {}) {
+  try {
+    let list = await db.hosted_sites.toArray();
+    if (faction && faction !== 'all') {
+      list = list.filter(s => (s.faction || (s.domain?.endsWith('.aura') ? 'aura' : 'nova')) === faction);
+    }
+    if (category && category !== 'all') {
+      list = list.filter(s => (s.category || '').toLowerCase() === category.toLowerCase());
+    }
+    if (search && search.trim()) {
+      const q = search.toLowerCase().trim();
+      list = list.filter(s =>
+        (s.domain || '').toLowerCase().includes(q) ||
+        (s.title || '').toLowerCase().includes(q) ||
+        (s.ownerHandle || '').toLowerCase().includes(q)
+      );
+    }
+    // Sort: Pinned first, then newest update
+    list.sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+    });
+    return list;
+  } catch (err) {
+    console.warn('[SovereignMesh] getMeshSitesRegistry error:', err);
+    return [];
+  }
+}
+
+export async function setSitePinStatus(domain, isPinned) {
+  const cleanDomain = cleanNovaDomain(domain);
+  await db.hosted_sites.update(cleanDomain, { isPinned: Boolean(isPinned) }).catch(() => {});
+  window.dispatchEvent(new CustomEvent('novaura:site_updated', { detail: { domain: cleanDomain, isPinned } }));
+  return true;
+}
+
+export async function setSiteFlagStatus(domain, isFlagged, reason = '') {
+  const cleanDomain = cleanNovaDomain(domain);
+  await db.hosted_sites.update(cleanDomain, { isFlagged: Boolean(isFlagged), flagReason: reason }).catch(() => {});
+  window.dispatchEvent(new CustomEvent('novaura:site_updated', { detail: { domain: cleanDomain, isFlagged, flagReason: reason } }));
+  return true;
+}
+
 

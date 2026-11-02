@@ -910,10 +910,13 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [x] Continuity audit: deterministic story-bible check (characters marked dead/missing/captive who appear in the chapter, with excerpt) plus the bible in the AI prompt. Co-author chat now receives the story bible too. Checklist no longer starts pre-ticked.
 - [ ] NovaSocial Stories (Gemini, in progress): `MESH_STORY` / `MESH_STORIES_RESPONSE` accept unsigned, unsized, unsanitized stories with no per-peer cap — needs the same treatment as shared chapters before it ships.
 
-**Review of Gemini's social / mail / auth work (2026-11-02):** full findings with fixes in `novaura OS soveriegn/REVIEW_SOCIAL_MAIL_AUTH.md`. Critical items, all still open (the code is uncommitted and in progress):
-- [ ] SIWN: the requesting page chooses the token's audience (any site can get a login for `bank.nova`); requests accepted from any window (nested iframes); verifier trusts `operator.publicKey` instead of `iss` (impersonation).
-- [ ] Social: any peer can overwrite a post's votes/reactions and vote as others; posts, reposts and stories are unsigned and unvalidated (impersonation, permanent "24 h" stories, no caps). Fake starting numbers (followers 12, karma 420, "418 Active", "1.4k subscribers"). Peer media loads remote URLs (IP tracking).
-- [ ] Mail: every untriaged inbox message is sent to AI on open, with a silent Gemini fallback (Ollama is unreachable from the page), so private mail goes to the cloud unasked. Canned "smart replies" on failure; no attachment size cap.
+**Review of Gemini's social / mail / auth work (2026-11-02):** full findings with fixes in `novaura OS soveriegn/REVIEW_SOCIAL_MAIL_AUTH.md`. Critical items (status at the top of the review file):
+- [x] SIWN: audience now from the tab, requests only from the tab's frame, key bound to `iss`, audience required, optional site nonce, 7-day lifetime, prefixed signatures (`siwnToken.js`, 4 tests).
+- [x] Social: signed posts/comments/stories/votes/reactions verified on arrival (also when relayed), totals recomputed from signed records, ids bound to authors, caps, 24 h story limit, batched sync under 64 KB; real counts only; peer media click-to-load (`meshSocial.js`, 7 tests).
+- [x] Mail: AI local only (no cloud), sequential triage with labelled keyword fallback, no canned replies, 20 KB attachment cap with honest undelivered status, threads kept, no plaintext localStorage copy.
+- [ ] Open: chunked mesh transfer for larger media/attachments; show the verified contact for `senderDid` in the mail list; per-sender mail caps.
+- [ ] Founder Office (Gemini, in progress): hard-coded master key `NOVA-FOUNDER-GENESIS-7777` and every node defaults to "founder". Must become a signature from the owner's authority key before founder authority affects anything beyond the local machine.
+- Real-app smoke test (isolated profile): Social opens with no fake numbers, a post published through the composer appears and its hashtag shows in computed trending, Mail opens, no plaintext mail in localStorage, a spoofed sign-in request from outside the tab frame is ignored. 57/57 unit tests.
 
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 

@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback } from 'react';
 import { Send, Mic, Sparkles, Loader2, LayoutGrid, ChevronDown, ChevronUp } from 'lucide-react';
 import { queryAuraCommander, executeAuraAction } from '../services/sovereignCommandService.js';
 import { chainLogicWeaver } from '../services/chainLogicWeaverService.js';
+import { executeNovaFounderCommand } from '../services/founderAuthService.js';
 import { toast } from 'sonner';
 
 export default function SovereignChatBar({
@@ -29,6 +30,12 @@ export default function SovereignChatBar({
       const lower = query.toLowerCase();
       if (lower.startsWith('open ') || lower.startsWith('launch ') || lower.startsWith('start ')) {
         const target = lower.replace(/^(open|launch|start)\s+/i, '').trim();
+        if (target.includes('founder') || target.includes('admin') || target.includes('office') || target.includes('enclave') || target.includes('council')) {
+          openApp('founder_office');
+          toast.success("Accessing Founder's Office Suite Enclave");
+          setIsProcessing(false);
+          return;
+        }
         if (target.includes('beta') || target.includes('bug') || target.includes('diagnostic') || target.includes('report')) {
           openApp('beta_hub');
           toast.success('Opened Beta Diagnostics & Bug Report Deck');
@@ -152,7 +159,24 @@ export default function SovereignChatBar({
         console.warn('[ChatBar] Chain Weaver intent dispatch note:', intentErr);
       }
 
-      // 3. Query Central AI Commander (local LLM or mesh)
+      // 3. Conversational Nova Ecosystem Directives (Founder Authority & Governance)
+      if (/promote|demote|authority matrix|founder key|issue key|faction balance|nova vs aura|oauth scan/i.test(query)) {
+        try {
+          const founderResult = await executeNovaFounderCommand(query);
+          if (founderResult?.message) {
+            toast.info(founderResult.message.replace(/#+\s+/g, '').slice(0, 140) + '...', { duration: 6000 });
+            if (/office|matrix|enclave|audit|scan/i.test(query)) {
+              openApp('founder_office');
+            }
+            setIsProcessing(false);
+            return;
+          }
+        } catch (fErr) {
+          console.warn('[ChatBar] Founder command dispatch note:', fErr);
+        }
+      }
+
+      // 4. Query Central AI Commander (local LLM or mesh)
       const result = await queryAuraCommander(query);
       if (result.action) {
         const actionResult = await executeAuraAction(result.action, openApp);

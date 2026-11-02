@@ -4,6 +4,26 @@ Cross-check of the uncommitted social, mail and auth work in `novaura OS soverie
 
 Order: fix **Critical** before anyone outside the founder's machines uses these features, then **High**, then the rest.
 
+## Status (updated 2026-11-02, after the fixes)
+
+**Fixed:**
+- **SIWN.** The audience now comes from the tab (`BrowserWindow.jsx`), and only the active tab's own frame may ask. The verifier binds the key to `iss`, requires an audience, and checks an optional site nonce, issue time and lifetime. Signatures carry a `SIWN-v1` prefix, scopes are allow-listed, and lifetime is down from 30 days to 7. Token logic lives in `src/services/siwnToken.js` (tests: `tests/auth/siwn.test.mjs`). The SDK escapes the domain, renders the handle as text and checks nonces.
+- **Social** (`src/services/meshSocial.js`, tests: `tests/social/social.test.mjs`):
+  - Posts, comments, stories, votes and reactions are signed by their author and verified on arrival, including relayed copies. Reposts embed the signed original.
+  - Totals are recomputed from signed per-voter records. Ids are bound to the author, fields are clipped, media must be https or a small inline image, stories last at most 24 h, and there are caps per author and in total. Sync answers are batched to fit 64 KB relay frames and rate-limited.
+  - Follows are a set of verified DIDs. Made-up numbers, fake moderators, fake trending and fake playback are gone. Peer media loads only after a click (`social/PeerMedia.jsx`). Nested replies sync. The localStorage copy is slim, and peers can no longer pin or flag their own sites.
+- **Mail.** All AI is local only (no cloud), triage runs one message at a time with a labelled keyword fallback, and there are no canned replies. Polish failures are shown. Attachments are capped at 20 KB total and oversized mail is marked undelivered (relay frames are 64 KB). Replies keep their thread. The decrypted copy in localStorage is removed, and received mail records the verified sender key.
+
+**Still open:**
+- Media and attachments over a few dozen KB need chunked, content-addressed transfer over the mesh.
+- The mail list still shows the sender's typed address; it should show the contact name for `senderDid`, or warn when it doesn't match. There's no per-sender cap on incoming mail yet.
+- SIWN lifetime could go shorter with silent refresh.
+- **Founder Office (new, in progress):**
+  - `founderAuthService.verifyFounderKey` accepts a hard-coded master key (`NOVA-FOUNDER-GENESIS-7777`) that anyone with the app can read.
+  - `getOperatorAuthority` makes every node "founder" by default, and also when an error occurs.
+
+  This is harmless only while founder authority stays local. Before it controls anything across the mesh, founder authority must be proven by a signature from the owner's authority key (the Ed25519 key kept outside the repo), never by a shared string or a local default.
+
 ---
 
 ## 1. Sign in with NovAura (SIWN)

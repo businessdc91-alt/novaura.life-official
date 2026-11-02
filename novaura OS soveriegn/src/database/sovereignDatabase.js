@@ -18,6 +18,12 @@ const BACKUP_TABLES = [
   'lounge_rooms', 'lounge_agents', 'lounge_messages', 'inference_keys', 'inference_grants', 'inference_access_requests',
   // v16: Music Studio metadata (audio and images live in media_blobs and in ComfyUI's output folder)
   'music_tracks', 'music_albums',
+  // v17: Sovereign Social Stories and Channels
+  'social_stories', 'social_channels',
+  // v18: Decentralized Web Authorized Apps (Sign in with NovAura)
+  'authorized_apps',
+  // v19: Founder Directives and Dual-Mesh Governance
+  'founder_directives',
 ];
 
 class SovereignDatabase extends Dexie {
@@ -140,6 +146,24 @@ class SovereignDatabase extends Dexie {
       media_blobs: 'id, kind, createdAt',
     });
 
+    // v17 — Sovereign Social Mesh: Ephemeral peer stories and social channels
+    this.version(17).stores({
+      social_stories: 'id, authorHandle, authorNodeId, expiresAt, createdAt',
+      social_channels: 'id, handle, subscriberCount, updatedAt',
+    });
+
+    // v18 — Decentralized Web Auth (Sign in with NovAura) & NovaMail enterprise indexing
+    this.version(18).stores({
+      authorized_apps: 'id, domain, appName, scopes, authorizedAt, lastUsedAt',
+      mailbox: 'id, box, folder, category, sender, recipient, timestamp, read, starred, priority, threadId',
+    });
+
+    // v19 — Dual-Mesh Ecosystem (Nova vs Aura Factions), Favicons, and Founder Directives
+    this.version(19).stores({
+      hosted_sites: 'id, domain, name, faction, category, status, updatedAt, isPinned, isFlagged',
+      founder_directives: 'id, type, target, authorityLevel, issuedAt, expiresAt',
+    });
+
     this.identities = this.table('identities');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
@@ -192,6 +216,10 @@ class SovereignDatabase extends Dexie {
     this.music_tracks = this.table('music_tracks');
     this.music_albums = this.table('music_albums');
     this.media_blobs = this.table('media_blobs');
+    this.social_stories = this.table('social_stories');
+    this.social_channels = this.table('social_channels');
+    this.authorized_apps = this.table('authorized_apps');
+    this.founder_directives = this.table('founder_directives');
   }
 
 

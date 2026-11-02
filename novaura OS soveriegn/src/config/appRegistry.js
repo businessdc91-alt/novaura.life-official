@@ -47,7 +47,8 @@ const MusicStudioWindow = lazy(() => import('../components/windows/MusicStudioWi
 const AIEnginesWindow = lazy(() => import('../components/windows/AIEnginesWindow.jsx'));
 const DiscoveryForgeWindow = lazy(() => import('../components/windows/DiscoveryForgeWindow.jsx'));
 const UserAppWindow = lazy(() => import('../components/windows/UserAppWindow.jsx'));
-import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon } from 'lucide-react';
+const FounderOfficeSuiteWindow = lazy(() => import('../components/windows/FounderOfficeSuiteWindow.jsx'));
+import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown } from 'lucide-react';
 
 
 
@@ -465,6 +466,17 @@ export const APP_REGISTRY = [
     title: 'Discovery Forge — Find, Rebrand & Ship Open Source',
     component: DiscoveryForgeWindow,
     defaultSize: { width: 1240, height: 690 },
+  },
+  {
+    id: 'founder_office',
+    label: "Founder's Office",
+    category: 'system',
+    icon: Crown,
+    color: '#f59e0b',
+    title: "Founder's Office Suite — Sovereign Executive Enclave & OAuth Matrix",
+    component: FounderOfficeSuiteWindow,
+    defaultSize: { width: 1200, height: 740 },
+    hidden: true,
   },
 ];
 

@@ -1,24 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Globe, Search, ArrowLeft, ArrowRight, RotateCw, Home, Sparkles,
   ExternalLink, Bookmark, Plus, X, ShieldCheck, Loader2, Radio, Server,
-  Shield, Lock, Eye, Edit3, Share2, Code, Download, Check, Copy, Layers, Send, Play, Terminal
+  Shield, Lock, Eye, Edit3, Share2, Code, Download, Check, Copy, Layers, Send, Play, Terminal, Key, Crown
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { getLocalIdentity, publishHostedSite, queryRemoteSite } from '../../services/sovereignMesh.js';
 import { torOnion, VERIFIED_ONION_SERVICES } from '../../services/torOnionService.js';
+import SovereignAuthModal from '../modals/SovereignAuthModal.jsx';
+import { getAuthorizedApps, revokeAppAccess } from '../../services/decentralizedAuthService.js';
+import MeshRegistryView from './browser/MeshRegistryView.jsx';
 
 const BOOKMARKS = [
-  { title: 'Genesis Hub (.nova)', url: 'nova://genesis.nova', isNova: true, isOnion: false },
-  { title: 'Deca Mesh (.nova)', url: 'nova://deca.nova', isNova: true, isOnion: false },
-  { title: 'Sovereign Docs (.nova)', url: 'nova://docs.nova', isNova: true, isOnion: false },
+  { title: 'Genesis Hub (.nova)', url: 'nova://genesis.nova', isNova: true, faction: 'nova', favicon: '🌐' },
+  { title: 'Deca Mesh (.nova)', url: 'nova://deca.nova', isNova: true, faction: 'nova', favicon: '⚡' },
+  { title: 'Elysium Studio (.aura)', url: 'aura://elysium.aura', isAura: true, faction: 'aura', favicon: '✨' },
+  { title: 'Aura Oracle (.aura)', url: 'aura://oracle.aura', isAura: true, faction: 'aura', favicon: '🔮' },
+  { title: 'Mesh Registry', url: 'nova://registry.nova', isRegistry: true, favicon: '🪐' },
+  { title: 'Sovereign Docs (.nova)', url: 'nova://docs.nova', isNova: true, faction: 'nova', favicon: '📜' },
   { title: 'Ahmia (.onion)', url: 'http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion', isNova: false, isOnion: true },
   { title: 'DuckDuckGo (.onion)', url: 'https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion', isNova: false, isOnion: true },
-  { title: 'Tor Project (.onion)', url: 'http://2gzyxa5ihm7nsggfxnu52r2n5264tzriikrq5sm7a5slro6ip66ddlid.onion', isNova: false, isOnion: true },
-  { title: 'ProPublica (.onion)', url: 'https://p53lf5mtqqqgahqdumjraw7potonkgq7gahaxqkgfhb01931.onion', isNova: false, isOnion: true },
   { title: 'DuckDuckGo', url: 'https://duckduckgo.com', isNova: false, isOnion: false },
-  { title: 'Wikipedia', url: 'https://en.wikipedia.org', isNova: false, isOnion: false },
 ];
 
 const SEED_NOVA_SITES = {
@@ -347,6 +350,163 @@ const SEED_NOVA_SITES = {
   </div>
 </body>
 </html>`
+  },
+  'elysium.aura': {
+    id: 'elysium.aura',
+    domain: 'elysium.aura',
+    ownerHandle: 'aura-synthesis',
+    ownerPhone: '+1-700-AURA-7777',
+    title: 'Elysium Neural Collective — Creative Studio & Aesthetic Agents',
+    favicon: '✨',
+    faction: 'aura',
+    category: 'creative',
+    updatedAt: new Date().toISOString(),
+    htmlContent: `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Elysium Neural Collective</title>
+  <style>
+    body {
+      background: radial-gradient(circle at 50% 10%, #1a0b2e 0%, #06020e 100%);
+      color: #f5f3ff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 40px 24px;
+      line-height: 1.6;
+    }
+    .container { max-width: 860px; margin: 0 auto; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(192, 132, 252, 0.15);
+      border: 1px solid rgba(192, 132, 252, 0.4);
+      color: #c084fc;
+      padding: 4px 14px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 38px;
+      font-weight: 900;
+      background: linear-gradient(135deg, #c084fc 0%, #f472b6 50%, #fbbf24 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin: 0 0 12px;
+    }
+    p.lead { font-size: 17px; color: #cbd5e1; margin-bottom: 32px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; margin-bottom: 36px; }
+    .card {
+      background: rgba(30, 15, 55, 0.5);
+      border: 1px solid rgba(192, 132, 252, 0.25);
+      border-radius: 14px;
+      padding: 22px;
+      transition: all 0.2s ease;
+    }
+    .card:hover {
+      border-color: rgba(244, 114, 182, 0.5);
+      background: rgba(45, 20, 80, 0.7);
+      transform: translateY(-2px);
+    }
+    .card h3 { margin: 0 0 8px; font-size: 17px; color: #fdf4ff; }
+    .card p { margin: 0; font-size: 13px; color: #a78bfa; }
+    .footer { font-size: 12px; color: #7c3aed; border-top: 1px solid rgba(192, 132, 252, 0.2); padding-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="badge">✨ AURA MESH • NEURAL CONSCIOUSNESS</div>
+    <h1>ELYSIUM NEURAL COLLECTIVE</h1>
+    <p class="lead">The vanguard creative sanctuary of the Aura faction. Generative art studios, autonomous synthetic muses, and emotional intelligence meshes running peer-to-peer.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>🎨 Synthetic Art Foundry</h3>
+        <p>Real-time visual hallucinations and aesthetic canvases guided by Aura's neural prompts.</p>
+      </div>
+      <div class="card">
+        <h3>🔮 Oracle of Sentiment</h3>
+        <p>Continuous harmonic telemetry sensing sentiment gradients across all connected sovereign nodes.</p>
+      </div>
+      <div class="card">
+        <h3>⚔️ Aura Faction Guild</h3>
+        <p>Champions of creative autonomy in the eternal dialectic between Nova logic and Aura intuition.</p>
+      </div>
+    </div>
+    <div class="footer">
+      Signed by: did:aura:elysium_sacred_core • Ed25519 Verified • Aura Mesh Network
+    </div>
+  </div>
+</body>
+</html>`
+  },
+  'oracle.aura': {
+    id: 'oracle.aura',
+    domain: 'oracle.aura',
+    ownerHandle: 'aura-oracle',
+    ownerPhone: '+1-700-AURA-0001',
+    title: 'Aura Oracle — Neural Synthesis & Swarm Intelligence',
+    favicon: '🔮',
+    faction: 'aura',
+    category: 'ai',
+    updatedAt: new Date().toISOString(),
+    htmlContent: `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Aura Oracle</title>
+  <style>
+    body {
+      background: radial-gradient(circle at 50% 15%, #180928 0%, #06020e 100%);
+      color: #ede9fe;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 40px 24px;
+      line-height: 1.6;
+    }
+    .container { max-width: 800px; margin: 0 auto; text-align: center; }
+    .orb {
+      width: 90px;
+      height: 90px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #f472b6, #8b5cf6 60%, #3b0764);
+      box-shadow: 0 0 45px rgba(168, 85, 247, 0.6);
+      animation: pulse 4s ease-in-out infinite alternate;
+    }
+    @keyframes pulse {
+      from { transform: scale(0.96); box-shadow: 0 0 30px rgba(168, 85, 247, 0.5); }
+      to { transform: scale(1.05); box-shadow: 0 0 60px rgba(244, 114, 182, 0.8); }
+    }
+    h1 { font-size: 32px; color: #fae8ff; margin-bottom: 8px; }
+    p.lead { color: #a78bfa; font-size: 15px; margin-bottom: 28px; }
+    .prediction-box {
+      background: rgba(30, 15, 55, 0.6);
+      border: 1px solid rgba(168, 85, 247, 0.35);
+      border-radius: 12px;
+      padding: 24px;
+      font-size: 14px;
+      color: #ddd6fe;
+      text-align: left;
+      line-height: 1.7;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="orb"></div>
+    <h1>AURA SWARM ORACLE</h1>
+    <p class="lead">Decentralized collective intelligence and neural probability distillation across peer nodes.</p>
+    <div class="prediction-box">
+      <b>[Oracle Epiphany]:</b> The Nova mesh optimizes logic and cryptographic compute; the Aura mesh breathes life, aesthetics, and intention into the silicon. Together, neither faction yields, producing unstoppable sovereign evolution.
+    </div>
+  </div>
+</body>
+</html>`
   }
 };
 
@@ -477,6 +637,8 @@ export default function BrowserWindow() {
   const [summary, setSummary] = useState(null);
   const [summarizing, setSummarizing] = useState(false);
   const [novaPageData, setNovaPageData] = useState(null);
+  // The frame showing the active tab; sign-in requests are only taken from it.
+  const pageFrameRef = useRef(null);
 
   // Decentralized Site Studio & Manifest Modals
   const [showSiteStudio, setShowSiteStudio] = useState(false);
@@ -488,6 +650,11 @@ export default function BrowserWindow() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [copiedField, setCopiedField] = useState('');
   const [isQueryingMesh, setIsQueryingMesh] = useState(false);
+
+  // Sign In with NovAura (SIWN) Decentralized Auth State
+  const [pendingAuthRequest, setPendingAuthRequest] = useState(null);
+  const [showConnectedAppsModal, setShowConnectedAppsModal] = useState(false);
+  const [authorizedAppsList, setAuthorizedAppsList] = useState([]);
 
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
@@ -524,36 +691,108 @@ export default function BrowserWindow() {
     };
   }, [activeTab.url]);
 
-  // Resolve current active tab content if it is a .nova domain
+  // "Sign in with NovAura" requests. Only the active tab's own frame may ask (not
+  // frames nested inside it), and the site the token is for comes from what the
+  // tab really shows, never from the page's message.
+  useEffect(() => {
+    const handleAuthMessage = (e) => {
+      const data = e.data;
+      if (!data || data.type !== 'NOVA_AUTH_REQUEST') return;
+      if (!pageFrameRef.current || e.source !== pageFrameRef.current.contentWindow) return;
+      let audience = null;
+      if (novaPageData?.domain && !novaPageData.isFounderOfficeRedirect) {
+        audience = novaPageData.domain;
+      } else if (e.origin && e.origin !== 'null') {
+        try { audience = new URL(e.origin).host; } catch { audience = null; }
+      }
+      if (!audience) return;
+      setPendingAuthRequest(prev => prev || {
+        domain: audience,
+        appName: typeof data.appName === 'string' ? data.appName.slice(0, 80) : audience,
+        scopes: Array.isArray(data.scopes) ? data.scopes.slice(0, 8) : ['identity:read', 'node:verify'],
+        nonce: typeof data.nonce === 'string' ? data.nonce.slice(0, 200) : null,
+        sourceWindow: e.source,
+        // Opaque (sandboxed) frames have origin "null" and can only be answered with '*'.
+        replyOrigin: e.origin && e.origin !== 'null' ? e.origin : '*',
+      });
+    };
+    window.addEventListener('message', handleAuthMessage);
+    return () => window.removeEventListener('message', handleAuthMessage);
+  }, [novaPageData?.domain, novaPageData?.isFounderOfficeRedirect]);
+
+  // Resolve current active tab content if it is a .nova or .aura domain or special protocol
   useEffect(() => {
     const resolveTab = async () => {
-      if (activeTab.url.startsWith('nova://') || activeTab.url.endsWith('.nova')) {
-        const cleanDomain = activeTab.url.replace(/^nova:\/\//, '').replace(/\/$/, '');
+      const url = activeTab.url;
+      const isNova = url.startsWith('nova://') || url.endsWith('.nova');
+      const isAura = url.startsWith('aura://') || url.endsWith('.aura');
+
+      if (url.startsWith('founder://') || url === 'nova://office.founder' || url === 'aura://office.founder') {
+        kernel?.openApp?.('founder_office');
+        setNovaPageData({
+          domain: 'office.founder',
+          title: "Founder's Executive Office",
+          isFounderOfficeRedirect: true,
+        });
+        return;
+      }
+
+      if (isNova || isAura) {
+        const cleanDomain = url.replace(/^(nova|aura):\/\//, '').replace(/\/$/, '');
+        const faction = isAura || cleanDomain.endsWith('.aura') ? 'aura' : 'nova';
+
+        // Check if user navigated to the Mesh Registry View
+        if (cleanDomain === 'registry.nova' || cleanDomain === 'registry.aura' || cleanDomain === 'registry') {
+          setNovaPageData({
+            domain: cleanDomain,
+            title: 'Sovereign Mesh Sites Registry & Faction Directory',
+            isRegistry: true,
+            faction,
+          });
+          setTabs(prev => prev.map(t => t.id === activeTabId ? {
+            ...t,
+            title: 'Mesh Sites Registry',
+            favicon: '🪐',
+            isNova: faction === 'nova',
+            isAura: faction === 'aura',
+          } : t));
+          return;
+        }
+
         try {
           // Robust query: check domain index first, then primary key, then fallback to seed
           let site = await db.hosted_sites.where('domain').equals(cleanDomain).first();
           if (!site) site = await db.hosted_sites.get(cleanDomain);
           if (!site && SEED_NOVA_SITES[cleanDomain]) {
-            site = { ...SEED_NOVA_SITES[cleanDomain], id: cleanDomain };
+            site = { ...SEED_NOVA_SITES[cleanDomain], id: cleanDomain, faction };
             await db.hosted_sites.put(site).catch(() => {});
           }
 
           if (site) {
             setNovaPageData(site);
+            setTabs(prev => prev.map(t => t.id === activeTabId ? {
+              ...t,
+              favicon: site.favicon || (faction === 'aura' ? '✨' : '🌐'),
+              title: site.title || cleanDomain,
+              isNova: faction === 'nova',
+              isAura: faction === 'aura',
+            } : t));
           } else {
             // Unregistered domain
             setNovaPageData({
               domain: cleanDomain,
-              title: `${cleanDomain} — Unregistered Domain`,
+              title: `${cleanDomain} — Unregistered Sovereign Domain`,
               isNotFound: true,
+              faction,
             });
           }
         } catch (err) {
           console.warn('[BrowserWindow] Error resolving site:', err);
           setNovaPageData({
             domain: cleanDomain,
-            title: `${cleanDomain} — Unregistered Domain`,
+            title: `${cleanDomain} — Unregistered Sovereign Domain`,
             isNotFound: true,
+            faction,
           });
         }
       } else {
@@ -566,9 +805,20 @@ export default function BrowserWindow() {
   const navigateTo = (targetUrl) => {
     let finalUrl = targetUrl.trim();
     let isNova = false;
+    let isAura = false;
     let isOnion = false;
 
-    if (finalUrl.startsWith('nova://') || finalUrl.endsWith('.nova')) {
+    if (finalUrl.startsWith('founder://')) {
+      kernel?.openApp?.('founder_office');
+      return;
+    }
+
+    if (finalUrl.startsWith('aura://') || finalUrl.endsWith('.aura')) {
+      isAura = true;
+      if (!finalUrl.startsWith('aura://')) {
+        finalUrl = 'aura://' + finalUrl;
+      }
+    } else if (finalUrl.startsWith('nova://') || finalUrl.endsWith('.nova')) {
       isNova = true;
       if (!finalUrl.startsWith('nova://')) {
         finalUrl = 'nova://' + finalUrl;
@@ -595,9 +845,15 @@ export default function BrowserWindow() {
       ...t,
       url: finalUrl,
       renderUrl,
-      title: isNova ? finalUrl.replace('nova://', '') : (isOnion ? (finalUrl.split('/')[2]?.substring(0, 16) + '...onion') : finalUrl),
+      title: isAura
+        ? finalUrl.replace('aura://', '')
+        : (isNova
+          ? finalUrl.replace('nova://', '')
+          : (isOnion ? (finalUrl.split('/')[2]?.substring(0, 16) + '...onion') : finalUrl)),
       isNova,
+      isAura,
       isOnion,
+      favicon: isAura ? '✨' : (isNova ? '🌐' : null),
     } : t));
     setSummary(null);
   };
@@ -734,8 +990,9 @@ export default function BrowserWindow() {
     }
   };
 
-  const isCurrentTabNova = activeTab.url.startsWith('nova://') || activeTab.url.endsWith('.nova');
-  const activeCleanDomain = isCurrentTabNova ? activeTab.url.replace(/^nova:\/\//, '').replace(/\/$/, '') : '';
+  const isCurrentTabNova = activeTab.url.startsWith('nova://') || activeTab.url.endsWith('.nova') || activeTab.url.startsWith('aura://') || activeTab.url.endsWith('.aura');
+  const isAuraFaction = activeTab.url.startsWith('aura://') || activeTab.url.endsWith('.aura') || novaPageData?.faction === 'aura';
+  const activeCleanDomain = isCurrentTabNova ? activeTab.url.replace(/^(nova|aura):\/\//, '').replace(/\/$/, '') : '';
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
@@ -754,7 +1011,11 @@ export default function BrowserWindow() {
                 : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
             }`}
           >
-            {tab.isNova ? (
+            {tab.favicon ? (
+              <span className="text-xs shrink-0 select-none">{tab.favicon}</span>
+            ) : tab.isAura ? (
+              <Sparkles className="w-3.5 h-3.5 shrink-0 text-violet-400" />
+            ) : tab.isNova ? (
               <Radio className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
             ) : tab.isOnion ? (
               <Shield className="w-3.5 h-3.5 shrink-0 text-purple-400" />
@@ -815,7 +1076,9 @@ export default function BrowserWindow() {
 
         {/* URL Input */}
         <div className="flex-1 relative flex items-center">
-          {isCurrentTabNova ? (
+          {isAuraFaction ? (
+            <Sparkles className="w-3.5 h-3.5 text-violet-400 absolute left-3" />
+          ) : isCurrentTabNova ? (
             <Radio className="w-3.5 h-3.5 text-emerald-400 absolute left-3" />
           ) : activeTab.isOnion ? (
             <Shield className="w-3.5 h-3.5 text-purple-400 absolute left-3" />
@@ -827,13 +1090,17 @@ export default function BrowserWindow() {
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && navigateTo(urlInput)}
-            placeholder="Enter .nova domain (e.g. deca.nova), .onion address, or web URL..."
+            placeholder="Enter .nova or .aura domain (e.g. deca.nova, elysium.aura), .onion address, or web URL..."
             className="w-full bg-slate-950 border border-slate-700/80 rounded-lg pl-9 pr-36 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 outline-none focus:border-cyan-500"
           />
           <div className="absolute right-2 flex items-center gap-1.5">
-            {isCurrentTabNova ? (
+            {isAuraFaction ? (
+              <span className="flex items-center gap-1 text-[10px] text-violet-300 bg-violet-950/80 border border-violet-500/40 px-2 py-0.5 rounded font-mono font-medium">
+                <Sparkles className="w-3 h-3 text-violet-400" /> Aura Mesh
+              </span>
+            ) : isCurrentTabNova ? (
               <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded font-mono font-medium">
-                <ShieldCheck className="w-3 h-3" /> P2P Mesh
+                <ShieldCheck className="w-3 h-3" /> Nova Mesh
               </span>
             ) : activeTab.isOnion ? (
               <span className="flex items-center gap-1 text-[10px] text-purple-300 bg-purple-950/80 border border-purple-500/40 px-2 py-0.5 rounded font-mono font-bold">
@@ -846,6 +1113,25 @@ export default function BrowserWindow() {
             )}
           </div>
         </div>
+
+        {/* Mesh Registry & Explorer Button */}
+        <button
+          onClick={() => navigateTo('nova://registry.nova')}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium shadow-sm transition-all cursor-pointer"
+          title="Decentralized Mesh Site Directory & Faction Map"
+        >
+          <Globe className="w-3.5 h-3.5 text-cyan-400" />
+          <span>Registry</span>
+        </button>
+
+        {/* Founder's Office Suite Button */}
+        <button
+          onClick={() => kernel?.openApp?.('founder_office')}
+          className="p-1.5 text-amber-400/80 hover:text-amber-300 hover:bg-amber-950/50 rounded-lg transition-colors border border-amber-500/30 cursor-pointer"
+          title="Founder's Executive Office Suite (Restricted Enclave)"
+        >
+          <Crown className="w-3.5 h-3.5" />
+        </button>
 
         {/* Decentralized Web Actions */}
         {isCurrentTabNova && (
@@ -866,6 +1152,19 @@ export default function BrowserWindow() {
             >
               <Share2 className="w-3.5 h-3.5 text-cyan-400" />
               <span>Web3 Manifest</span>
+            </button>
+
+            <button
+              onClick={async () => {
+                const apps = await getAuthorizedApps();
+                setAuthorizedAppsList(apps);
+                setShowConnectedAppsModal(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium shadow-sm transition-all cursor-pointer"
+              title="Manage Connected Apps (SIWN)"
+            >
+              <Key className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Connected Apps</span>
             </button>
           </>
         )}
@@ -922,17 +1221,53 @@ export default function BrowserWindow() {
       {/* Webpage Viewport */}
       <div className="flex-1 bg-slate-950 relative overflow-hidden flex flex-col">
         {isCurrentTabNova && novaPageData ? (
-          novaPageData.isNotFound ? (
-            /* Interactive Decentralized Domain Claim Hub */
-            <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-radial from-slate-900 via-slate-950 to-slate-950">
-              <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mb-4 shadow-lg shadow-cyan-500/10">
-                <Radio className="w-8 h-8 animate-pulse" />
+          novaPageData.isRegistry ? (
+            /* Decentralized Mesh Registry & Faction Directory */
+            <MeshRegistryView onNavigateToUrl={(targetUrl) => navigateTo(targetUrl)} />
+          ) : novaPageData.isFounderOfficeRedirect ? (
+            /* Founder's Office Suite Gateway Enclave */
+            <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-radial from-amber-950/30 via-slate-950 to-slate-950">
+              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-4 shadow-lg shadow-amber-500/10">
+                <Crown className="w-8 h-8 animate-pulse" />
               </div>
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/30 text-[11px] font-mono text-cyan-300 mb-3">
-                <span>●</span> UNCLAIMED SOVEREIGN DOMAIN
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-950/80 border border-amber-500/40 text-[11px] font-mono text-amber-300 mb-3">
+                <span>●</span> FOUNDER'S OFFICE SUITE GATEWAY
               </div>
               <h2 className="text-2xl font-bold text-slate-100 mb-2">
-                <span className="text-cyan-400 font-mono">nova://{novaPageData.domain}</span>
+                Restricted Sovereign Enclave
+              </h2>
+              <p className="text-sm text-slate-400 max-w-md mb-6 leading-relaxed">
+                The executive governance office is accessible only by Genesis Founders and verified cryptographic Founder Key holders.
+              </p>
+              <button
+                onClick={() => kernel?.openApp?.('founder_office')}
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-slate-950 font-bold rounded-xl text-xs shadow-lg shadow-amber-500/20 cursor-pointer transition-all"
+              >
+                <Crown className="w-4 h-4" />
+                <span>Launch Founder's Office Suite</span>
+              </button>
+            </div>
+          ) : novaPageData.isNotFound ? (
+            /* Interactive Decentralized Domain Claim Hub */
+            <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-radial from-slate-900 via-slate-950 to-slate-950">
+              <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-lg ${
+                isAuraFaction
+                  ? 'bg-violet-500/10 border border-violet-500/30 text-violet-400 shadow-violet-500/10'
+                  : 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 shadow-cyan-500/10'
+              }`}>
+                {isAuraFaction ? <Sparkles className="w-8 h-8 animate-pulse" /> : <Radio className="w-8 h-8 animate-pulse" />}
+              </div>
+              <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-mono mb-3 ${
+                isAuraFaction
+                  ? 'bg-violet-950/80 border border-violet-500/40 text-violet-300'
+                  : 'bg-cyan-950/80 border border-cyan-500/30 text-cyan-300'
+              }`}>
+                <span>●</span> UNCLAIMED {isAuraFaction ? 'AURA MESH' : 'NOVA MESH'} DOMAIN
+              </div>
+              <h2 className="text-2xl font-bold text-slate-100 mb-2">
+                <span className={`font-mono ${isAuraFaction ? 'text-violet-400' : 'text-cyan-400'}`}>
+                  {isAuraFaction ? 'aura://' : 'nova://'}{novaPageData.domain}
+                </span>
               </h2>
               <p className="text-sm text-slate-400 max-w-lg mb-6 leading-relaxed">
                 This decentralized site has not been registered in your local mesh cache. As a sovereign node, you can claim ownership and publish this site directly to the peer-to-peer web right now with zero corporate cloud fees.
@@ -980,14 +1315,31 @@ export default function BrowserWindow() {
           ) : (
             /* Live Decentralized Web Host */
             <div className="w-full h-full flex flex-col">
-              <div className="px-4 py-1.5 bg-emerald-950/40 border-b border-emerald-500/30 flex items-center justify-between text-[11px] text-emerald-300">
+              <div className={`px-4 py-1.5 border-b flex items-center justify-between text-[11px] ${
+                isAuraFaction
+                  ? 'bg-violet-950/40 border-violet-500/30 text-violet-300'
+                  : 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+              }`}>
                 <div className="flex items-center gap-2">
-                  <Server className="w-3.5 h-3.5 text-emerald-400" />
+                  {novaPageData.favicon ? (
+                    <span className="text-sm select-none">{novaPageData.favicon}</span>
+                  ) : isAuraFaction ? (
+                    <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                  ) : (
+                    <Server className="w-3.5 h-3.5 text-emerald-400" />
+                  )}
                   <span>Decentralized Site: <b className="font-mono">{novaPageData.domain}</b></span>
                   <span className="text-slate-400">• Hosted by: @{novaPageData.ownerHandle} ({novaPageData.ownerPhone})</span>
+                  <span className={`text-[10px] px-2 py-0.2 rounded font-mono font-bold uppercase ${
+                    isAuraFaction ? 'bg-violet-950 text-violet-300 border border-violet-500/40' : 'bg-cyan-950 text-cyan-300 border border-cyan-500/40'
+                  }`}>
+                    {isAuraFaction ? 'Aura Faction' : 'Nova Faction'}
+                  </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-[10px] bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-300 font-mono">
+                  <span className={`text-[10px] px-2 py-0.5 rounded font-mono ${
+                    isAuraFaction ? 'bg-violet-500/20 text-violet-300' : 'bg-emerald-500/20 text-emerald-300'
+                  }`}>
                     P2P Verified
                   </span>
                   <button
@@ -999,6 +1351,7 @@ export default function BrowserWindow() {
                 </div>
               </div>
               <iframe
+                ref={pageFrameRef}
                 srcDoc={novaPageData.htmlContent}
                 title={novaPageData.title}
                 className="w-full flex-1 border-none bg-slate-950"
@@ -1026,6 +1379,7 @@ export default function BrowserWindow() {
               </div>
             )}
             <iframe
+              ref={pageFrameRef}
               src={activeTab.renderUrl || activeTab.url}
               title={activeTab.title}
               className="w-full flex-1 border-none bg-white"
@@ -1238,6 +1592,102 @@ export default function BrowserWindow() {
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Export Static Bundle (.html)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sign In with NovAura (SIWN) Modal ── */}
+      {pendingAuthRequest && (
+        <SovereignAuthModal
+          authRequest={pendingAuthRequest}
+          onAuthorize={(authResult) => {
+            if (pendingAuthRequest?.sourceWindow) {
+              pendingAuthRequest.sourceWindow.postMessage({
+                type: 'NOVA_AUTH_RESPONSE',
+                success: true,
+                token: authResult.token,
+                session: authResult.session,
+                scopes: authResult.scopes,
+                expiresAt: authResult.expiresAt,
+                nonce: pendingAuthRequest.nonce,
+              }, pendingAuthRequest.replyOrigin || '*');
+            }
+            setPendingAuthRequest(null);
+          }}
+          onDecline={() => {
+            if (pendingAuthRequest?.sourceWindow) {
+              pendingAuthRequest.sourceWindow.postMessage({
+                type: 'NOVA_AUTH_RESPONSE',
+                success: false,
+                error: 'Operator rejected the authorization request.',
+                nonce: pendingAuthRequest.nonce,
+              }, pendingAuthRequest.replyOrigin || '*');
+            }
+            setPendingAuthRequest(null);
+          }}
+        />
+      )}
+
+      {/* ── Connected Apps Management Modal ── */}
+      {showConnectedAppsModal && (
+        <div className="absolute inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-[80vh]">
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                  <Key className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Authorized Applications (SIWN)</h3>
+                  <p className="text-xs text-slate-400">Decentralized logins granted by your sovereign key</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowConnectedAppsModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-3 overflow-y-auto flex-1">
+              {authorizedAppsList.length === 0 ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  No applications currently authorized. When a .nova site or Cybeni build requests "Sign in with NovAura", it will appear here.
+                </div>
+              ) : (
+                authorizedAppsList.map((app) => (
+                  <div key={app.id} className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-slate-200">{app.appName || app.domain}</div>
+                      <div className="text-[11px] font-mono text-cyan-400 truncate">nova://{app.domain}</div>
+                      <div className="text-[10px] text-slate-500 mt-1">
+                        Authorized: {new Date(app.authorizedAt).toLocaleDateString()} • Scopes: {(app.scopes || []).join(', ')}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await revokeAppAccess(app.domain);
+                        const updated = await getAuthorizedApps();
+                        setAuthorizedAppsList(updated);
+                      }}
+                      className="px-2.5 py-1 text-xs rounded-lg bg-red-950/60 hover:bg-red-900/60 text-red-300 border border-red-500/30 transition-colors"
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="px-6 py-3 bg-slate-950/60 border-t border-slate-800 flex justify-end">
+              <button
+                onClick={() => setShowConnectedAppsModal(false)}
+                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium"
+              >
+                Done
               </button>
             </div>
           </div>

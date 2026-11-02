@@ -1,197 +1,461 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Mail, Inbox, Send, FileText, Trash2, Plus, Search, Star,
-  ArrowLeft, Paperclip, X, RefreshCw, Circle, CheckCircle2, AlertTriangle, Lock
-} from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Mail, X } from 'lucide-react';
+import { db } from '../../database/sovereignDatabase.js';
 import {
   getInbox, getSentMail, getDrafts, sendMail, markAsRead,
   toggleStar, deleteMail, getUnreadCount, getLocalIdentity
-} from '../../services/sovereignMesh';
+} from '../../services/sovereignMesh.js';
+import { triageInboxMail } from '../../services/mailAiService.js';
+import MailSidebar from './mail/MailSidebar.jsx';
+import MailListPane from './mail/MailListPane.jsx';
+import MailReadingPane from './mail/MailReadingPane.jsx';
+import MailComposerModal from './mail/MailComposerModal.jsx';
+import MailKeyboardShortcutsModal from './mail/MailKeyboardShortcutsModal.jsx';
 
 export default function NovaMailWindow({ onClose }) {
-  const [folder, setFolder] = useState('inbox');
-  const [mails, setMails] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [currentFolder, setCurrentFolder] = useState('inbox');
+  const [currentCategory, setCurrentCategory] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [allMails, setAllMails] = useState([]);
+  const [selectedMail, setSelectedMail] = useState(null);
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [selectedMailIds, setSelectedMailIds] = useState(new Set());
   const [composing, setComposing] = useState(false);
-  const [unread, setUnread] = useState(0);
-  const [composeTo, setComposeTo] = useState('');
-  const [composeSubject, setComposeSubject] = useState('');
-  const [composeBody, setComposeBody] = useState('');
+  const [composeDefaults, setComposeDefaults] = useState({ to: '', subject: '', body: '' });
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [starredCount, setStarredCount] = useState(0);
+  const [draftsCount, setDraftsCount] = useState(0);
+  // Messages already queued for triage, so reopening the inbox doesn't queue them again.
+  const triageQueued = useRef(new Set());
 
-  const identity = getLocalIdentity();
+  // Hydrate all emails from Dexie and in-memory mesh cache
+  const refreshMails = useCallback(async () => {
+    try {
+      let list = [];
+      if (currentFolder === 'inbox') {
+        const memInbox = getInbox();
+        const dbInbox = await db.mailbox.where('box').equals('inbox').toArray().catch(() => []);
+        // Merge without duplicates
+        const map = new Map();
+        [...memInbox, ...dbInbox].forEach(m => {
+          if (m?.id && !map.has(m.id)) map.set(m.id, m);
+        });
+        list = Array.from(map.values());
+      } else if (currentFolder === 'sent') {
+        const memSent = getSentMail();
+        const dbSent = await db.mailbox.where('box').equals('sent').toArray().catch(() => []);
+        const map = new Map();
+        [...memSent, ...dbSent].forEach(m => {
+          if (m?.id && !map.has(m.id)) map.set(m.id, m);
+        });
+        list = Array.from(map.values());
+      } else if (currentFolder === 'drafts') {
+        list = await db.mailbox.where('box').equals('drafts').toArray().catch(() => getDrafts());
+      } else if (currentFolder === 'starred') {
+        list = await db.mailbox.where('starred').equals(true).toArray().catch(() => []);
+      } else if (currentFolder === 'archive') {
+        list = await db.mailbox.where('box').equals('archive').toArray().catch(() => []);
+      } else if (currentFolder === 'trash') {
+        list = await db.mailbox.where('box').equals('trash').toArray().catch(() => []);
+      }
 
-  const refresh = () => {
-    if (folder === 'inbox') setMails(getInbox());
-    else if (folder === 'sent') setMails(getSentMail());
-    else if (folder === 'drafts') setMails(getDrafts());
-    setUnread(getUnreadCount());
-  };
+      // Sort by newest first
+      list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setAllMails(list);
 
-  useEffect(() => { refresh(); }, [folder]);
+      // Update counters
+      setUnreadCount(getUnreadCount());
+      const st = await db.mailbox.where('starred').equals(true).count().catch(() => 0);
+      setStarredCount(st);
+      const dr = await db.mailbox.where('box').equals('drafts').count().catch(() => 0);
+      setDraftsCount(dr);
 
-  // Pick up incoming mail and delivery-status changes from the mesh.
+      // Triage untriaged inbox mail in the background, one message at a time
+      // (on this machine only; see mailAiService.js).
+      if (currentFolder === 'inbox') {
+        const pending = list.filter(m => !m.aiSynopsis && !m.triaged && !triageQueued.current.has(m.id));
+        pending.forEach(m => triageQueued.current.add(m.id));
+        (async () => {
+          for (const m of pending) {
+            try {
+              const triage = await triageInboxMail(m);
+              if (!triage) continue;
+              const updated = {
+                ...m,
+                priority: triage.priority,
+                aiSynopsis: triage.synopsis,
+                category: triage.category,
+                actionRequired: triage.actionRequired,
+                triageSource: triage.source,
+                triaged: true,
+              };
+              db.mailbox.update(m.id, updated).catch(() => {});
+              setAllMails(prev => prev.map(p => p.id === m.id ? updated : p));
+            } catch { /* leave it untriaged */ }
+          }
+        })();
+      }
+    } catch (e) {
+      console.warn('[NovaMail] Mail refresh note:', e);
+    }
+  }, [currentFolder]);
+
   useEffect(() => {
-    const onUpdate = () => refresh();
-    window.addEventListener('novaura:mesh_updated', onUpdate);
-    window.addEventListener('novaura:mail_delivery_failed', onUpdate);
+    refreshMails();
+  }, [refreshMails]);
+
+  // Real-time mesh listeners
+  useEffect(() => {
+    const handleUpdate = () => refreshMails();
+    window.addEventListener('novaura:mesh_updated', handleUpdate);
+    window.addEventListener('novaura:mail_received', handleUpdate);
+    window.addEventListener('novaura:mail_sent', handleUpdate);
+    window.addEventListener('novaura:mail_delivery_failed', handleUpdate);
     return () => {
-      window.removeEventListener('novaura:mesh_updated', onUpdate);
-      window.removeEventListener('novaura:mail_delivery_failed', onUpdate);
+      window.removeEventListener('novaura:mesh_updated', handleUpdate);
+      window.removeEventListener('novaura:mail_received', handleUpdate);
+      window.removeEventListener('novaura:mail_sent', handleUpdate);
+      window.removeEventListener('novaura:mail_delivery_failed', handleUpdate);
     };
-  }, [folder]);
+  }, [refreshMails]);
 
-  // Mail records store full addresses in sender/recipient; older records used from/to handles.
-  const addr = (value) => {
-    if (!value) return 'unknown';
-    return value.includes('@') ? value : `${value}@nova.node`;
-  };
+  // Filtered mails based on category and search query
+  const filteredMails = useMemo(() => {
+    return allMails.filter(m => {
+      // Category filter (inbox only)
+      if (currentFolder === 'inbox' && currentCategory !== 'all') {
+        if (currentCategory === 'swarm') {
+          const isSwarm = m.category === 'swarm' || /mesh|relay|node|swarm|genesis|p2p/i.test(m.subject + (m.sender || ''));
+          if (!isSwarm) return false;
+        } else if (currentCategory === 'alerts') {
+          const isAlert = m.category === 'alerts' || /alert|critical|security|emergency|failure/i.test(m.subject + (m.body || ''));
+          if (!isAlert) return false;
+        } else if (currentCategory === 'primary') {
+          const isSpecial = /mesh|relay|node|swarm|genesis|p2p|alert|critical/i.test(m.subject + (m.sender || ''));
+          if (m.category !== 'primary' && isSpecial) return false;
+        }
+      }
 
-  const handleSend = () => {
-    if (!composeTo.trim() || !composeSubject.trim()) return;
-    sendMail({ to: composeTo, subject: composeSubject, body: composeBody });
-    setComposing(false);
-    setComposeTo('');
-    setComposeSubject('');
-    setComposeBody('');
-    refresh();
-  };
+      // Search query filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matches =
+          (m.subject || '').toLowerCase().includes(q) ||
+          (m.body || '').toLowerCase().includes(q) ||
+          (m.sender || '').toLowerCase().includes(q) ||
+          (m.recipient || '').toLowerCase().includes(q) ||
+          (m.aiSynopsis || '').toLowerCase().includes(q);
+        if (!matches) return false;
+      }
 
-  const handleSelect = (mail) => {
-    setSelected(mail);
-    if (!mail.read && folder === 'inbox') {
+      return true;
+    });
+  }, [allMails, currentFolder, currentCategory, searchQuery]);
+
+  // Handle email selection & read state
+  const handleSelectMail = (mail) => {
+    setSelectedMail(mail);
+    if (!mail.read && currentFolder === 'inbox') {
       markAsRead(mail.id);
-      refresh();
+      db.mailbox.update(mail.id, { read: true }).catch(() => {});
+      setAllMails(prev => prev.map(m => m.id === mail.id ? { ...m, read: true } : m));
     }
   };
 
-  const handleDelete = (id) => {
-    deleteMail(id, folder);
-    setSelected(null);
-    refresh();
+  // Toggle star
+  const handleToggleStar = (mailId) => {
+    toggleStar(mailId);
+    setAllMails(prev => prev.map(m => m.id === mailId ? { ...m, starred: !m.starred } : m));
+    if (selectedMail?.id === mailId) {
+      setSelectedMail(prev => ({ ...prev, starred: !prev.starred }));
+    }
   };
 
-  const handleStar = (id) => {
-    toggleStar(id);
-    refresh();
+  // Archive mail
+  const handleArchiveMail = (mailId = null) => {
+    const idsToArchive = mailId ? [mailId] : Array.from(selectedMailIds);
+    if (idsToArchive.length === 0 && selectedMail) idsToArchive.push(selectedMail.id);
+
+    idsToArchive.forEach(id => {
+      db.mailbox.update(id, { box: 'archive' }).catch(() => {});
+    });
+
+    setAllMails(prev => prev.filter(m => !idsToArchive.includes(m.id)));
+    if (idsToArchive.includes(selectedMail?.id)) {
+      setSelectedMail(null);
+    }
+    setSelectedMailIds(new Set());
   };
 
-  const folders = [
-    { key: 'inbox', label: 'Inbox', icon: Inbox, badge: unread },
-    { key: 'sent', label: 'Sent', icon: Send },
-    { key: 'drafts', label: 'Drafts', icon: FileText },
-  ];
+  // Delete mail
+  const handleDeleteMail = (mailId = null) => {
+    const idsToDelete = mailId ? [mailId] : Array.from(selectedMailIds);
+    if (idsToDelete.length === 0 && selectedMail) idsToDelete.push(selectedMail.id);
 
-  const formatTime = (ts) => {
-    const d = new Date(ts);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    idsToDelete.forEach(id => {
+      deleteMail(id, currentFolder);
+      db.mailbox.update(id, { box: 'trash' }).catch(() => {});
+    });
+
+    setAllMails(prev => prev.filter(m => !idsToDelete.includes(m.id)));
+    if (idsToDelete.includes(selectedMail?.id)) {
+      setSelectedMail(null);
+    }
+    setSelectedMailIds(new Set());
   };
+
+  // Mark all as read
+  const handleMarkAllRead = () => {
+    filteredMails.forEach(m => {
+      if (!m.read) {
+        markAsRead(m.id);
+        db.mailbox.update(m.id, { read: true }).catch(() => {});
+      }
+    });
+    setAllMails(prev => prev.map(m => ({ ...m, read: true })));
+  };
+
+  // Batch selection
+  const handleToggleSelectId = (id) => {
+    setSelectedMailIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedMailIds.size === filteredMails.length) {
+      setSelectedMailIds(new Set());
+    } else {
+      setSelectedMailIds(new Set(filteredMails.map(m => m.id)));
+    }
+  };
+
+  // Send new message
+  const handleSendCompose = (msg) => {
+    sendMail(msg);
+    refreshMails();
+  };
+
+  // Inline quick reply handler
+  const handleSendInlineReply = async ({ to, subject, body, threadId }) => {
+    sendMail({ to, subject, body, threadId, inReplyTo: selectedMail?.id || null });
+    refreshMails();
+  };
+
+  // Attachment download
+  const handleDownloadAttachment = (att) => {
+    if (!att || !att.dataUrl) return;
+    const a = document.createElement('a');
+    a.href = att.dataUrl;
+    a.download = att.name || 'attachment';
+    a.click();
+  };
+
+  // Superhuman Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ignore if user is typing in an input or textarea
+      const tag = e.target.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) {
+        if (e.key === 'Escape') {
+          e.target.blur();
+        }
+        return;
+      }
+
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        setComposeDefaults({ to: '', subject: '', body: '' });
+        setComposing(true);
+      } else if (e.key === 'j' || e.key === 'J') {
+        e.preventDefault();
+        setFocusedIndex(prev => {
+          const next = Math.min(prev + 1, filteredMails.length - 1);
+          if (filteredMails[next]) handleSelectMail(filteredMails[next]);
+          return next;
+        });
+      } else if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault();
+        setFocusedIndex(prev => {
+          const next = Math.max(prev - 1, 0);
+          if (filteredMails[next]) handleSelectMail(filteredMails[next]);
+          return next;
+        });
+      } else if (e.key === 'Enter') {
+        if (filteredMails[focusedIndex]) {
+          handleSelectMail(filteredMails[focusedIndex]);
+        }
+      } else if (e.key === 'r' || e.key === 'R') {
+        if (selectedMail) {
+          e.preventDefault();
+          setComposeDefaults({
+            to: selectedMail.sender || selectedMail.from,
+            subject: selectedMail.subject.startsWith('Re:') ? selectedMail.subject : `Re: ${selectedMail.subject}`,
+            body: `\n\n--- On ${new Date(selectedMail.timestamp).toLocaleString()} ${selectedMail.sender} wrote:\n> ${selectedMail.body}`,
+          });
+          setComposing(true);
+        }
+      } else if (e.key === 's' || e.key === 'S') {
+        if (selectedMail) {
+          e.preventDefault();
+          handleToggleStar(selectedMail.id);
+        }
+      } else if (e.key === 'e' || e.key === 'E') {
+        if (selectedMail) {
+          e.preventDefault();
+          handleArchiveMail(selectedMail.id);
+        }
+      } else if (e.key === '#') {
+        if (selectedMail) {
+          e.preventDefault();
+          handleDeleteMail(selectedMail.id);
+        }
+      } else if (e.key === '/') {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[placeholder*="Search mail"]');
+        if (searchInput) searchInput.focus();
+      } else if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcutsModal(prev => !prev);
+      } else if (e.key === 'Escape') {
+        setSelectedMail(null);
+        setComposing(false);
+        setShowShortcutsModal(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [filteredMails, focusedIndex, selectedMail]);
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#0a0f1e', color: '#e2e8f0', fontFamily: "'Inter', sans-serif", borderRadius: '8px', overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1rem', borderBottom: '1px solid rgba(0,240,255,0.15)', backgroundColor: 'rgba(15,23,42,0.9)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Mail size={18} color="#00f0ff" />
-          <span style={{ fontWeight: 700, color: '#00f0ff', fontSize: '0.95rem' }}>NovaMail</span>
-          <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Sovereign P2P</span>
+    <div className="w-full h-full flex flex-col bg-slate-950 text-slate-100 font-sans select-none overflow-hidden">
+      {/* Superhuman Top Header Ribbon */}
+      <div className="h-11 px-4 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shadow-sm shadow-cyan-500/20">
+            <Mail className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-xs tracking-wide text-white">NovaMail</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/40">
+                Superhuman P2P
+              </span>
+            </div>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={() => { setComposing(true); setSelected(null); }} style={{ background: '#0284c7', border: 'none', color: '#fff', padding: '0.35rem 0.75rem', borderRadius: '6px', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <Plus size={14} /> Compose
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowShortcutsModal(true)}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors"
+            title="Shortcuts (?)"
+          >
+            <kbd className="font-mono text-[10px] px-1 bg-slate-800 border border-slate-700 rounded">?</kbd>
+            <span className="hidden sm:inline">Shortcuts</span>
           </button>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}><X size={18} /></button>
+          <button
+            onClick={onClose}
+            className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Sidebar */}
-        <div style={{ width: '180px', borderRight: '1px solid rgba(255,255,255,0.08)', padding: '0.75rem 0.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          {folders.map(f => (
-            <button key={f.key} onClick={() => { setFolder(f.key); setSelected(null); setComposing(false); }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.65rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.82rem', backgroundColor: folder === f.key ? 'rgba(0,240,255,0.12)' : 'transparent', color: folder === f.key ? '#00f0ff' : '#94a3b8', width: '100%', textAlign: 'left' }}>
-              <f.icon size={15} />
-              <span style={{ flex: 1 }}>{f.label}</span>
-              {f.badge > 0 && <span style={{ backgroundColor: '#0284c7', color: '#fff', borderRadius: '10px', padding: '0.1rem 0.4rem', fontSize: '0.68rem', fontWeight: 600 }}>{f.badge}</span>}
-            </button>
-          ))}
-          <div style={{ marginTop: 'auto', padding: '0.5rem', fontSize: '0.7rem', color: '#475569', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-            <div>Signed in as:</div>
-            <div style={{ color: '#00f0ff', fontWeight: 600 }}>{identity?.handle || 'anon'}@nova.node</div>
-          </div>
-        </div>
+      {/* 3-Column Enterprise Workspace */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Column 1: Sidebar */}
+        <MailSidebar
+          currentFolder={currentFolder}
+          onSelectFolder={(f) => { setCurrentFolder(f); setSelectedMail(null); }}
+          currentCategory={currentCategory}
+          onSelectCategory={(c) => setCurrentCategory(c)}
+          unreadCount={unreadCount}
+          starredCount={starredCount}
+          draftsCount={draftsCount}
+          onOpenCompose={() => {
+            setComposeDefaults({ to: '', subject: '', body: '' });
+            setComposing(true);
+          }}
+          onToggleShortcuts={() => setShowShortcutsModal(prev => !prev)}
+        />
 
-        {/* Mail List or Compose */}
-        {composing ? (
-          <div style={{ flex: 1, padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <div style={{ fontSize: '1rem', fontWeight: 600, color: '#f1f5f9' }}>New Message</div>
-            <input value={composeTo} onChange={e => setComposeTo(e.target.value)} placeholder="To: handle@nova.node" style={{ padding: '0.6rem 0.8rem', backgroundColor: 'rgba(2,6,23,0.7)', border: '1px solid rgba(0,240,255,0.2)', borderRadius: '6px', color: '#e2e8f0', fontSize: '0.85rem', outline: 'none' }} />
-            <input value={composeSubject} onChange={e => setComposeSubject(e.target.value)} placeholder="Subject" style={{ padding: '0.6rem 0.8rem', backgroundColor: 'rgba(2,6,23,0.7)', border: '1px solid rgba(0,240,255,0.2)', borderRadius: '6px', color: '#e2e8f0', fontSize: '0.85rem', outline: 'none' }} />
-            <textarea value={composeBody} onChange={e => setComposeBody(e.target.value)} placeholder="Write your message..." rows={10} style={{ flex: 1, padding: '0.8rem', backgroundColor: 'rgba(2,6,23,0.7)', border: '1px solid rgba(0,240,255,0.2)', borderRadius: '6px', color: '#e2e8f0', fontSize: '0.85rem', outline: 'none', resize: 'none', fontFamily: 'inherit' }} />
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button onClick={handleSend} style={{ background: '#0284c7', border: 'none', color: '#fff', padding: '0.55rem 1.2rem', borderRadius: '6px', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600 }}>Send</button>
-              <button onClick={() => setComposing(false)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.15)', color: '#94a3b8', padding: '0.55rem 1rem', borderRadius: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>Cancel</button>
-            </div>
-          </div>
-        ) : selected ? (
-          <div style={{ flex: 1, padding: '1.25rem', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
-            <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', color: '#00f0ff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', marginBottom: '1rem', padding: 0 }}>
-              <ArrowLeft size={15} /> Back to {folder}
-            </button>
-            <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#f1f5f9', marginBottom: '0.5rem' }}>{selected.subject || '(No Subject)'}</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: '#94a3b8', marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-              <span>From: <strong style={{ color: '#38bdf8' }}>{addr(selected.sender || selected.from)}</strong> → To: <strong>{addr(selected.recipient || selected.to)}</strong></span>
-              <span>{formatTime(selected.timestamp)}</span>
-            </div>
-            {selected.deliveryStatus === 'undelivered' && (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.6rem 0.75rem', marginBottom: '1rem', borderRadius: '6px', backgroundColor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', fontSize: '0.78rem' }}>
-                <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-                <span>Not delivered. {selected.deliveryError}</span>
-              </div>
-            )}
-            {selected.isEncryptedE2EE && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '1rem', color: '#34d399', fontSize: '0.75rem' }}>
-                <Lock size={13} /> End-to-end encrypted
-              </div>
-            )}
-            <div style={{ flex: 1, fontSize: '0.88rem', lineHeight: '1.7', color: '#cbd5e1', whiteSpace: 'pre-wrap' }}>{selected.body || '(Empty message)'}</div>
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-              <button onClick={() => handleStar(selected.id)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.15)', color: selected.starred ? '#fbbf24' : '#94a3b8', padding: '0.4rem 0.7rem', borderRadius: '6px', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                <Star size={14} fill={selected.starred ? '#fbbf24' : 'none'} /> {selected.starred ? 'Starred' : 'Star'}
-              </button>
-              <button onClick={() => handleDelete(selected.id)} style={{ background: 'none', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', padding: '0.4rem 0.7rem', borderRadius: '6px', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                <Trash2 size={14} /> Delete
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: 1, overflow: 'auto' }}>
-            {mails.length === 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#475569', gap: '0.5rem' }}>
-                <Mail size={36} />
-                <span style={{ fontSize: '0.88rem' }}>No messages in {folder}</span>
-              </div>
-            ) : (
-              mails.map(mail => (
-                <div key={mail.id} onClick={() => handleSelect(mail)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.7rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', backgroundColor: !mail.read ? 'rgba(0,240,255,0.04)' : 'transparent' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: mail.read ? 'transparent' : '#0284c7', flexShrink: 0 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.15rem' }}>
-                      <span style={{ fontSize: '0.82rem', fontWeight: mail.read ? 400 : 600, color: mail.read ? '#94a3b8' : '#f1f5f9' }}>{folder === 'sent' ? `To: ${addr(mail.recipient || mail.to)}` : addr(mail.sender || mail.from)}</span>
-                      <span style={{ fontSize: '0.72rem', color: '#64748b', flexShrink: 0 }}>{formatTime(mail.timestamp)}</span>
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: '#cbd5e1', fontWeight: mail.read ? 400 : 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mail.subject || '(No Subject)'}</div>
-                  </div>
-                  {mail.deliveryStatus === 'undelivered' && <AlertTriangle size={14} color="#f87171" title="Not delivered" />}
-                  {mail.starred && <Star size={14} color="#fbbf24" fill="#fbbf24" />}
-                </div>
-              ))
-            )}
-          </div>
-        )}
+        {/* Column 2: Mail List Pane */}
+        <MailListPane
+          mails={filteredMails}
+          selectedMail={selectedMail}
+          onSelectMail={handleSelectMail}
+          onToggleStar={handleToggleStar}
+          onDeleteMail={handleDeleteMail}
+          onArchiveMail={handleArchiveMail}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          currentCategory={currentCategory}
+          onSelectCategory={setCurrentCategory}
+          selectedMailIds={selectedMailIds}
+          onToggleSelectId={handleToggleSelectId}
+          onSelectAll={handleSelectAll}
+          onMarkAllRead={handleMarkAllRead}
+          focusedIndex={focusedIndex}
+          onRefresh={refreshMails}
+        />
+
+        {/* Column 3: Mail Reading Pane */}
+        <MailReadingPane
+          mail={selectedMail}
+          onReply={() => {
+            setComposeDefaults({
+              to: selectedMail.sender || selectedMail.from,
+              subject: selectedMail.subject.startsWith('Re:') ? selectedMail.subject : `Re: ${selectedMail.subject}`,
+              body: `\n\n--- On ${new Date(selectedMail.timestamp).toLocaleString()} ${selectedMail.sender} wrote:\n> ${selectedMail.body}`,
+            });
+            setComposing(true);
+          }}
+          onReplyAll={() => {
+            setComposeDefaults({
+              to: `${selectedMail.sender}, ${selectedMail.recipient}`,
+              subject: selectedMail.subject.startsWith('Re:') ? selectedMail.subject : `Re: ${selectedMail.subject}`,
+              body: `\n\n--- On ${new Date(selectedMail.timestamp).toLocaleString()}:\n> ${selectedMail.body}`,
+            });
+            setComposing(true);
+          }}
+          onForward={() => {
+            setComposeDefaults({
+              to: '',
+              subject: `Fwd: ${selectedMail.subject}`,
+              body: `\n\n---------- Forwarded message ---------\nFrom: ${selectedMail.sender}\nDate: ${new Date(selectedMail.timestamp).toLocaleString()}\nSubject: ${selectedMail.subject}\n\n${selectedMail.body}`,
+            });
+            setComposing(true);
+          }}
+          onToggleStar={handleToggleStar}
+          onArchive={handleArchiveMail}
+          onDelete={handleDeleteMail}
+          onSendInlineReply={handleSendInlineReply}
+          onDownloadAttachment={handleDownloadAttachment}
+        />
       </div>
+
+      {/* Floating Modal Composer */}
+      <MailComposerModal
+        isOpen={composing}
+        onClose={() => setComposing(false)}
+        onSend={handleSendCompose}
+        initialTo={composeDefaults.to}
+        initialSubject={composeDefaults.subject}
+        initialBody={composeDefaults.body}
+      />
+
+      {/* Keyboard Shortcuts Reference Modal */}
+      <MailKeyboardShortcutsModal
+        isOpen={showShortcutsModal}
+        onClose={() => setShowShortcutsModal(false)}
+      />
     </div>
   );
 }

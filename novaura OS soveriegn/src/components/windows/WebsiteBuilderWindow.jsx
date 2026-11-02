@@ -3,11 +3,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import '../../config/monacoConfig.js';
 import {
   Globe, Sparkles, Code2, Eye, Download, Layers, Palette, Layout,
-  Smartphone, Tablet, Monitor, Save, RefreshCw, Check, Loader2
+  Smartphone, Tablet, Monitor, Save, RefreshCw, Check, Loader2,
+  Radio, Rocket, ShieldCheck, ExternalLink, X
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { saveFile } from '../../services/fileStorageService.js';
+import { publishHostedSite, getLocalIdentity } from '../../services/sovereignMesh.js';
+import { generateAuthEmbedSnippet } from '../../services/novaAuthClient.js';
 
 const TEMPLATES = [
   {
@@ -68,6 +71,19 @@ export default function WebsiteBuilderWindow() {
   const [prompt, setPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
+
+  // 1-Click Decentralized Mesh Deployment State
+  const [showDeployModal, setShowDeployModal] = useState(false);
+  const [deployDomain, setDeployDomain] = useState('mysite.nova');
+  const [deployTitle, setDeployTitle] = useState('My Sovereign Website');
+  const [deployOwner, setDeployOwner] = useState('operator');
+  const [deployFaction, setDeployFaction] = useState('nova'); // 'nova' | 'aura'
+  const [deployFavicon, setDeployFavicon] = useState('🌐');
+  const [deployCategory, setDeployCategory] = useState('Infrastructure & Tools');
+  const [injectAuthSdk, setInjectAuthSdk] = useState(true);
+  const [deploying, setDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState(null);
+  const [deployError, setDeployError] = useState('');
 
   const iframeRef = useRef(null);
 
@@ -143,6 +159,48 @@ Respond with JSON only:
     a.download = 'index.html';
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleOpenDeployModal = () => {
+    const id = getLocalIdentity();
+    setDeployOwner(id?.handle || 'operator');
+    setDeployError('');
+    setDeployResult(null);
+    setShowDeployModal(true);
+  };
+
+  const handlePublishToMesh = async () => {
+    setDeploying(true);
+    setDeployError('');
+    try {
+      let rawHtml = getCombinedDoc();
+
+      // Automatically inject NovAura Auth SDK if user enabled it
+      if (injectAuthSdk && !rawHtml.includes('window.NovaAuth')) {
+        const snippet = generateAuthEmbedSnippet(deployDomain);
+        if (rawHtml.includes('</head>')) {
+          rawHtml = rawHtml.replace('</head>', `${snippet}\n</head>`);
+        } else {
+          rawHtml = `${snippet}\n${rawHtml}`;
+        }
+      }
+
+      const published = await publishHostedSite({
+        domain: deployDomain,
+        title: deployTitle,
+        ownerHandle: deployOwner,
+        htmlContent: rawHtml,
+        faction: deployFaction,
+        favicon: deployFavicon || (deployFaction === 'aura' ? '✨' : '🌐'),
+        category: deployCategory,
+      });
+
+      setDeployResult(published);
+    } catch (err) {
+      setDeployError(err.message || 'Failed to publish to mesh.');
+    } finally {
+      setDeploying(false);
+    }
   };
 
   return (
@@ -223,10 +281,19 @@ Respond with JSON only:
 
           <button
             onClick={handleDownload}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-medium transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-3.5 h-3.5 text-slate-400" />
             <span>Export HTML</span>
+          </button>
+
+          {/* 1-Click Free Decentralized Hosting */}
+          <button
+            onClick={handleOpenDeployModal}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold shadow-md shadow-cyan-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+          >
+            <Radio className="w-3.5 h-3.5 text-cyan-200" />
+            <span>Deploy to .nova Mesh</span>
           </button>
         </div>
       </div>
@@ -345,6 +412,294 @@ Respond with JSON only:
           </div>
         )}
       </div>
+
+      {/* ── 1-Click Decentralized Mesh Deploy Modal ── */}
+      {showDeployModal && (
+        <div className="absolute inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="w-full max-w-lg bg-slate-900 border border-cyan-500/40 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in duration-150">
+            {/* Header */}
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                  <Radio className="w-4 h-4 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Deploy to Decentralized Sovereign Mesh</h3>
+                  <p className="text-xs text-slate-400">100% Free P2P Hosting • Zero Cloud Dependency</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDeployModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              {deployResult ? (
+                /* Success State */
+                <div className="space-y-4 text-center py-2">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 mx-auto shadow-lg shadow-emerald-500/20">
+                    <ShieldCheck className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold text-white">Successfully Published to Sovereign Mesh!</h4>
+                    <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                      Your website has been signed with your node key and broadcast to peer machines across the network.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-left space-y-2 font-mono text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Domain:</span>
+                      <span className={`font-bold flex items-center gap-1.5 ${deployResult.faction === 'aura' ? 'text-violet-400' : 'text-cyan-400'}`}>
+                        <span>{deployResult.favicon || '🌐'}</span>
+                        <span>{deployResult.faction === 'aura' ? 'aura://' : 'nova://'}{deployResult.domain}</span>
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Mesh Faction:</span>
+                      <span className={`text-[10px] uppercase px-2 py-0.5 rounded font-bold ${
+                        deployResult.faction === 'aura' ? 'bg-violet-950 text-violet-300 border border-violet-500/40' : 'bg-cyan-950 text-cyan-300 border border-cyan-500/40'
+                      }`}>
+                        {deployResult.faction === 'aura' ? '✨ Aura Mesh (Neural)' : '⚡ Nova Mesh (Logic)'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Content ID (CID):</span>
+                      <span className="text-slate-300 truncate max-w-[200px]" title={deployResult.cid}>{deployResult.cid}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Node Signature:</span>
+                      <span className="text-emerald-400">Ed25519 Verified</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <button
+                      onClick={() => {
+                        setShowDeployModal(false);
+                        kernel?.openApp?.('browser');
+                      }}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 shadow-lg shadow-cyan-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open in Sovereign Browser</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Form State */
+                <>
+                  {/* Faction Selector */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                      <span>Mesh Network Faction</span>
+                      <span className="text-[10px] text-slate-500 font-normal">Dual-Mesh Ecosystem</span>
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeployFaction('nova');
+                          setDeployDomain(prev => prev.replace(/\.aura$/, '.nova').replace(/(?<!\.nova)$/, '.nova'));
+                          if (deployFavicon === '✨') setDeployFavicon('🌐');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          deployFaction === 'nova'
+                            ? 'bg-cyan-950/60 border-cyan-500 text-cyan-200 shadow-md shadow-cyan-500/10'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 font-bold text-xs text-white">
+                          <Radio className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Nova Mesh (.nova)</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-tight">
+                          Logic, compute density, and cryptographic privacy network.
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeployFaction('aura');
+                          setDeployDomain(prev => prev.replace(/\.nova$/, '.aura').replace(/(?<!\.aura)$/, '.aura'));
+                          if (deployFavicon === '🌐') setDeployFavicon('✨');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          deployFaction === 'aura'
+                            ? 'bg-violet-950/60 border-violet-500 text-violet-200 shadow-md shadow-violet-500/10'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 font-bold text-xs text-white">
+                          <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                          <span>Aura Mesh (.aura)</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-tight">
+                          Neural synthesis, creative agents, and aesthetic consciousness.
+                        </p>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Target Domain Input */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">
+                      Target {deployFaction === 'aura' ? '.aura' : '.nova'} Domain
+                    </label>
+                    <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono">
+                      <span className="text-slate-500 select-none mr-1">
+                        {deployFaction === 'aura' ? 'aura://' : 'nova://'}
+                      </span>
+                      <input
+                        type="text"
+                        value={deployDomain}
+                        onChange={(e) => setDeployDomain(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ''))}
+                        placeholder={deployFaction === 'aura' ? 'mysite.aura' : 'mysite.nova'}
+                        className={`flex-1 bg-transparent border-none outline-none font-bold ${
+                          deployFaction === 'aura' ? 'text-violet-300' : 'text-cyan-300'
+                        }`}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Favicon & Category Grid */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Site Favicon (Emoji / Icon)</label>
+                      <div className="flex items-center gap-2">
+                        <div className="w-9 h-9 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-lg select-none shrink-0">
+                          {deployFavicon}
+                        </div>
+                        <input
+                          type="text"
+                          value={deployFavicon}
+                          onChange={(e) => setDeployFavicon(e.target.value)}
+                          maxLength={4}
+                          placeholder="🌐"
+                          className="w-16 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-center text-xs text-slate-100 outline-none focus:border-cyan-500"
+                        />
+                        <div className="flex items-center gap-1 overflow-x-auto py-1">
+                          {['🌐', '⚡', '✨', '🔮', '🚀', '🛡️', '🪐', '👑', '🎨', '🔥', '🧬'].map(emoji => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => setDeployFavicon(emoji)}
+                              className="w-6 h-6 rounded hover:bg-slate-800 flex items-center justify-center text-xs cursor-pointer transition-colors"
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Mesh Category</label>
+                      <select
+                        value={deployCategory}
+                        onChange={(e) => setDeployCategory(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-cyan-500"
+                      >
+                        <option value="Infrastructure & Tools">Infrastructure & Tools</option>
+                        <option value="Creative & Neural">Creative & Neural</option>
+                        <option value="DeFi & Treasury">DeFi & Treasury</option>
+                        <option value="Social & Community">Social & Community</option>
+                        <option value="Games & Metaverse">Games & Metaverse</option>
+                        <option value="AI & Autonomous Agents">AI & Autonomous Agents</option>
+                        <option value="General & Personal">General & Personal</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Site Title</label>
+                      <input
+                        type="text"
+                        value={deployTitle}
+                        onChange={(e) => setDeployTitle(e.target.value)}
+                        placeholder="My Project Title"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Publisher Handle</label>
+                      <input
+                        type="text"
+                        value={deployOwner}
+                        onChange={(e) => setDeployOwner(e.target.value)}
+                        placeholder="operator"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Auth SDK Injection Toggle */}
+                  <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={injectAuthSdk}
+                        onChange={(e) => setInjectAuthSdk(e.target.checked)}
+                        className="mt-0.5 rounded border-slate-700 text-cyan-500 focus:ring-cyan-500"
+                      />
+                      <div className="text-xs">
+                        <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                          <span>Enable "Sign in with NovAura" (SIWN)</span>
+                          <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-400 font-mono">
+                            Decentralized Auth
+                          </span>
+                        </div>
+                        <p className="text-slate-400 text-[11px] mt-0.5 leading-relaxed">
+                          Automatically injects the zero-dependency client SDK so visitors can sign in with their cryptographic node key.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+
+                  {deployError && (
+                    <div className="p-2.5 rounded-lg bg-red-950/60 border border-red-500/40 text-xs text-red-300 flex items-center gap-2">
+                      <X className="w-4 h-4 text-red-400 shrink-0" />
+                      <span>{deployError}</span>
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex justify-end gap-3">
+                    <button
+                      onClick={() => setShowDeployModal(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handlePublishToMesh}
+                      disabled={deploying || !deployDomain.trim()}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 shadow-lg shadow-cyan-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                    >
+                      {deploying ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Signing & Broadcasting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Rocket className="w-3.5 h-3.5" />
+                          <span>Publish to Sovereign Mesh</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

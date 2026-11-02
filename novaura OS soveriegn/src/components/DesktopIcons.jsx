@@ -134,7 +134,7 @@ export default function DesktopIcons({ openApp, openWindows = [], unreadMail = 0
   // ── Items ─────────────────────────────────────────────────────────────────
 
   const items = useMemo(() => {
-    const apps = APP_REGISTRY.filter(app => !app.desktopHidden).map(app => ({
+    const apps = APP_REGISTRY.filter(app => !app.desktopHidden && !app.hidden).map(app => ({
       ref: `app:${app.id}`,
       kind: 'app',
       app,

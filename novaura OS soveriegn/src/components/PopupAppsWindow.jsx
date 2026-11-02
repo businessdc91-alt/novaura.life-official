@@ -126,6 +126,12 @@ export default function PopupAppsWindow({ onOpenWindow, openWindows = [], onClos
   // Filtered apps for grid mode
   const filteredGridApps = useMemo(() => {
     return APP_REGISTRY.filter(app => {
+      if (app.hidden) {
+        const q = search.trim().toLowerCase();
+        if (!q || (!q.includes('founder') && !q.includes('admin') && !q.includes('office') && !q.includes('enclave') && !app.label.toLowerCase().includes(q))) {
+          return false;
+        }
+      }
       const matchesCategory = activeCategory === 'all' || app.category === activeCategory;
       const matchesSearch = !search.trim() ||
         app.label.toLowerCase().includes(search.toLowerCase()) ||
