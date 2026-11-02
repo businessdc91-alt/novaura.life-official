@@ -48,11 +48,15 @@ export default function DraggableWindow({
       const action = pointerAction.current;
       if (!action) return;
       if (action.type === 'drag') {
+        // Windows may hang off the left/right/bottom edges; enough of the title
+        // bar always stays on the desktop to grab it again.
         const workspace = windowRef.current?.parentElement;
+        const ownWidth = windowRef.current?.offsetWidth || 0;
+        const minX = Math.min(0, 120 - ownWidth);
         const maxX = Math.max(0, (workspace?.clientWidth || window.innerWidth) - 120);
         const maxY = Math.max(0, (workspace?.clientHeight || window.innerHeight) - 48);
         setPosition({
-          x: Math.max(0, Math.min(maxX, event.clientX - action.offsetX)),
+          x: Math.max(minX, Math.min(maxX, event.clientX - action.offsetX)),
           y: Math.max(0, Math.min(maxY, event.clientY - action.offsetY)),
         });
       } else {
@@ -123,6 +127,9 @@ export default function DraggableWindow({
       ref={windowRef}
       className={`absolute ${activeStyle.border} rounded-2xl transition-shadow duration-300`}
       style={{
+        // Inline so the .rgb-border-* classes (position: relative) can't put
+        // windows back into normal flow, stacked under each other.
+        position: 'absolute',
         display: minimized ? 'none' : 'block',
         left: maximized ? 0 : position.x,
         top: maximized ? 0 : position.y,
