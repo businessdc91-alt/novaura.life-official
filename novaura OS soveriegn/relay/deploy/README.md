@@ -1,8 +1,9 @@
 # NovAura server: relay + TURN
 
-One Linux machine with a public IP runs two things:
+One Linux machine with a public IP runs three things:
 
 - **Mesh relay** (`novaura_relay`, TCP 43889). Every Sovereign node dials out to it, so people on hotspots, 5G home internet or any other carrier NAT can still join the mesh.
+- **Marketplace archive** (inside the relay). It keeps every signed marketplace listing, so a node that was offline when something was published catches up when it connects. Nodes check each publisher's signature themselves, so the server can't fake or edit a listing, and only the original publisher can update one.
 - **TURN server** (coturn, 3478 + UDP 49152-50151). It carries a call's audio and video when the two callers can't reach each other directly, which is common on mobile carriers. The media stays end-to-end encrypted (DTLS-SRTP), so the server can't see or hear it.
 
 The relay hands each node short-lived TURN logins, signed with a secret it shares with coturn. No TURN password is ever stored in the app.
@@ -64,7 +65,7 @@ journalctl -u novaura-relay -f     # joins, leaves, rejected packets
 journalctl -u coturn -f            # TURN sessions
 ```
 
-The relay's startup lines say whether TURN logins are on: `TURN credentials: turn:...`.
+The relay's startup lines say whether TURN logins are on (`TURN credentials: turn:...`) and how many listings the archive holds (`Listing archive: N stored in /var/lib/novaura`).
 
 ## Files on the server
 
@@ -74,3 +75,4 @@ The relay's startup lines say whether TURN logins are on: `TURN credentials: tur
 | `/etc/turnserver.conf` | coturn config, rewritten by the script. The original is saved as `.orig`. |
 | `/etc/systemd/system/novaura-relay.service` | relay service |
 | `/usr/local/bin/novaura_relay` | relay binary |
+| `/var/lib/novaura/archive.jsonl` | marketplace listing archive (one signed packet per line). Back it up if you care about the history; deleting it only means nodes stop getting old listings from the relay. |

@@ -5,6 +5,7 @@
 
 import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
+import { admitMeshListing } from './marketplaceListings.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
   FEEDBACK_INBOX_VAULT_KEY,
@@ -565,16 +566,20 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_MARKETPLACE_LISTING': {
-      const listing = payload?.listing || payload;
-      if (listing && listing.id) {
-        db.marketplace_publications.put(listing).catch(() => {});
-        window.dispatchEvent(new CustomEvent('novaura:marketplace_updated', { detail: listing }));
-        dispatchMeshToast({
-          type: 'store',
-          title: 'New P2P Creation Listed',
-          message: `"${listing.title}" by ${listing.authorHandle || 'Peer'} published to Sovereign Marketplace.`
-        });
-      }
+      // Bound to the signing publisher; peers cannot overwrite local or others' listings.
+      admitMeshListing(payload?.listing, verifiedSenderDid(packet)).then((admitted) => {
+        if (!admitted) return;
+        const { record, isNew } = admitted;
+        window.dispatchEvent(new CustomEvent('novaura:marketplace_updated', { detail: record }));
+        // Catch-up replays from the relay archive arrive in bulk: no toast for those.
+        if (isNew && !packet._archive_replay) {
+          dispatchMeshToast({
+            type: 'store',
+            title: 'New P2P Creation Listed',
+            message: `"${record.title}" by ${record.authorHandle} published to Sovereign Marketplace.`
+          });
+        }
+      }).catch(() => {});
       break;
     }
 
@@ -1030,6 +1035,7 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_FILE_CHUNK',
   'MESH_FILE_COMPLETE',
   'MESH_MARKETPLACE_LISTING',
+  'MESH_ARCHIVE_SYNC',
   'MESH_HOSTED_SITE',
   'MESH_SITE_QUERY',
   'MESH_SITE_RESPONSE',

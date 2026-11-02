@@ -19,6 +19,9 @@ pub const DEFAULT_UDP_BEACON_PORT: u16 = 43888;
 pub const DEFAULT_TCP_LISTEN_PORT: u16 = 43889;
 pub const DEFAULT_PUBLIC_RELAY: &str = "relay.novaura.life:43889";
 
+/// Packet types the relay may replay from its archive (see relay/src/archive.rs).
+const ARCHIVE_REPLAY_TYPES: &[&str] = &["MESH_MARKETPLACE_LISTING"];
+
 /// The relay chosen in the Peering window, kept across restarts. An empty file
 /// means the user turned the relay off; no file means the default relay.
 fn relay_setting_path() -> std::path::PathBuf {
@@ -743,6 +746,11 @@ impl MeshManager {
         .unwrap_or_default();
         let mut turn_check = tokio::time::interval(tokio::time::Duration::from_secs(600));
 
+        // The UI asks the relay for missed listings once it hears the tunnel is up.
+        if let Some(ref handle) = self.app_handle {
+            let _ = handle.emit("novaura://mesh-relay-connected", relay_addr);
+        }
+
         // 2. Read incoming packets routed from other WAN nodes with bounded buffer
         let mut buf_reader = BufReader::new(reader);
         let mut line = String::new();
@@ -759,17 +767,15 @@ impl MeshManager {
                             let trimmed = line.trim();
                             if !trimmed.is_empty() {
                                 if let Ok(packet) = serde_json::from_str::<MeshPacket>(trimmed) {
-                                    if packet.packet_type == "MESH_TURN_CREDENTIALS" {
-                                        // Only the relay itself may issue these; it never forwards
-                                        // client packets claiming its reserved sender ID.
-                                        if packet.sender_id == "relay_supervisor" {
-                                            if let Some(grant) = TurnGrant::from_payload(&packet.payload) {
-                                                log::info!("[SovereignMesh] TURN credentials received from relay");
-                                                self.inner.write().await.turn = Some(grant);
+                                    match packet.packet_type.as_str() {
+                                        // Relay-only packets. The relay never forwards client packets
+                                        // claiming its reserved sender ID, so this check is sound here.
+                                        "MESH_TURN_CREDENTIALS" | "MESH_ARCHIVE_ITEM" | "MESH_ARCHIVE_DONE" => {
+                                            if packet.sender_id == "relay_supervisor" {
+                                                self.handle_relay_packet(packet, relay_addr).await;
                                             }
                                         }
-                                    } else {
-                                        self.process_incoming_packet(packet, Some(relay_addr.to_string())).await;
+                                        _ => self.process_incoming_packet(packet, Some(relay_addr.to_string())).await,
                                     }
                                 }
                             }
@@ -812,6 +818,45 @@ impl MeshManager {
         let mut state = self.inner.write().await;
         state.relay_connected = false;
         state.relay_tx = None;
+    }
+
+    async fn handle_relay_packet(&self, packet: MeshPacket, relay_addr: &str) {
+        match packet.packet_type.as_str() {
+            "MESH_TURN_CREDENTIALS" => {
+                if let Some(grant) = TurnGrant::from_payload(&packet.payload) {
+                    log::info!("[SovereignMesh] TURN credentials received from relay");
+                    self.inner.write().await.turn = Some(grant);
+                }
+            }
+            "MESH_ARCHIVE_ITEM" => {
+                // A stored copy of someone else's packet: the relay vouches for nothing,
+                // so the publisher's own signature must verify. The usual 5-minute
+                // freshness window does not apply to an archive.
+                let inner = packet
+                    .payload
+                    .get("packet")
+                    .and_then(|p| serde_json::from_value::<MeshPacket>(p.clone()).ok());
+                if let Some(inner) = inner {
+                    if ARCHIVE_REPLAY_TYPES.contains(&inner.packet_type.as_str()) && verify_packet_signature(&inner) {
+                        if let (Some(handle), Ok(mut value)) = (&self.app_handle, serde_json::to_value(&inner)) {
+                            value["_archive_replay"] = serde_json::Value::Bool(true);
+                            let _ = handle.emit("novaura://mesh-packet", &value);
+                        }
+                    }
+                }
+            }
+            "MESH_ARCHIVE_DONE" => {
+                if let Some(ref handle) = self.app_handle {
+                    let mut done = packet.payload.clone();
+                    if !done.is_object() {
+                        done = serde_json::json!({});
+                    }
+                    done["relay"] = serde_json::Value::String(relay_addr.to_string());
+                    let _ = handle.emit("novaura://mesh-archive-done", &done);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Queue a serialized frame into the live relay tunnel. Returns false when no

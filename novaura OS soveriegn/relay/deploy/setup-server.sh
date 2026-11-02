@@ -156,6 +156,9 @@ Wants=network-online.target
 User=novaura
 Group=novaura
 EnvironmentFile=${ENV_FILE}
+# Marketplace listing archive: /var/lib/novaura/archive.jsonl
+StateDirectory=novaura
+Environment=NOVAURA_DATA_DIR=/var/lib/novaura
 ExecStart=/usr/local/bin/novaura_relay --port ${RELAY_PORT}
 Restart=always
 RestartSec=3
@@ -205,6 +208,7 @@ check "TURN service running"      "systemctl is-active --quiet coturn"
 check "relay listening on TCP ${RELAY_PORT}" "ss -ltn | grep -q ':${RELAY_PORT} '"
 check "TURN listening on UDP ${TURN_PORT}"   "ss -lun | grep -q ':${TURN_PORT} '"
 check "relay issuing TURN logins" "journalctl -u novaura-relay -n 50 --no-pager | grep -q 'TURN credentials: turn:'"
+check "listing archive on disk"   "journalctl -u novaura-relay -n 50 --no-pager | grep -q 'stored in /var/lib/novaura'"
 
 cat <<EOF
 

@@ -8,6 +8,9 @@
 // - Strict sender ID ownership & anti-spoofing enforcement
 // - Zero-knowledge forwarding for E2EE envelopes
 // - Short-lived TURN credentials for calls, when a TURN server shares this relay's secret
+// - Always-on archive of signed listings, replayed to nodes that were offline (archive.rs)
+
+mod archive;
 
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -16,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -32,6 +36,7 @@ pub const RATE_LIMIT_REFILL_PER_SEC: f64 = 15.0;     // Token refill rate per se
 pub const CLIENT_QUEUE_CAPACITY: usize = 128;        // Bounded outbound mpsc capacity
 pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;        // Outbound socket write timeout
 pub const DEFAULT_TURN_TTL_SECS: u64 = 86_400;       // TURN credential lifetime
+pub const ARCHIVE_SYNC_INTERVAL_MS: u64 = 30_000;    // Min gap between catch-up syncs per socket
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RelayPacket {
@@ -145,6 +150,25 @@ fn turn_payload(cfg: &TurnConfig, node_id: &str, now_secs: u64) -> serde_json::V
         "ttl_secs": cfg.ttl_secs,
         "expires_at_ms": expires * 1000,
     })
+}
+
+static SUPERVISOR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// One newline-terminated packet from the relay itself to `recipient`.
+fn supervisor_line(recipient: &str, packet_type: &str, payload: serde_json::Value) -> String {
+    let now = current_timestamp_ms();
+    let pkt = RelayPacket {
+        id: format!("sup_{}_{}", now, SUPERVISOR_SEQ.fetch_add(1, Ordering::Relaxed)),
+        sender_id: "relay_supervisor".to_string(),
+        sender_name: "NovAura Universe Relay".to_string(),
+        sender_pubkey: None,
+        recipient_id: Some(recipient.to_string()),
+        packet_type: packet_type.to_string(),
+        payload,
+        signature: None,
+        timestamp_ms: now,
+    };
+    format!("{}\n", serde_json::to_string(&pkt).unwrap_or_default())
 }
 
 fn current_timestamp_ms() -> u64 {
@@ -268,6 +292,10 @@ async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut port: u16 = 43889;
+    let mut data_dir: Option<std::path::PathBuf> = std::env::var("NOVAURA_DATA_DIR")
+        .ok()
+        .filter(|d| !d.trim().is_empty())
+        .map(std::path::PathBuf::from);
 
     let args: Vec<String> = std::env::args().collect();
     for i in 1..args.len() {
@@ -275,6 +303,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(p) = args[i + 1].parse::<u16>() {
                 port = p;
             }
+        }
+        if args[i] == "--data-dir" && i + 1 < args.len() {
+            data_dir = Some(std::path::PathBuf::from(&args[i + 1]));
         }
     }
 
@@ -291,6 +322,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match turn.as_ref() {
         Some(cfg) => println!("  TURN credentials: {} (valid {}h)", cfg.urls.join(", "), cfg.ttl_secs / 3600),
         None => println!("  TURN credentials: off (set NOVAURA_TURN_SECRET and NOVAURA_TURN_URLS)"),
+    }
+
+    let archive = Arc::new(Mutex::new(archive::Archive::open(data_dir.clone())));
+    {
+        let a = archive.lock().await;
+        match &data_dir {
+            Some(dir) if a.is_persistent() => println!("  Listing archive: {} stored in {}", a.len(), dir.display()),
+            _ => println!("  Listing archive: memory only (set NOVAURA_DATA_DIR or --data-dir to keep it)"),
+        }
     }
 
     let shared_state: SharedState = Arc::new(Mutex::new(RelayState {
@@ -311,6 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let peer_ip = peer_addr.ip();
         let state_clone = Arc::clone(&shared_state);
         let turn = Arc::clone(&turn);
+        let archive = Arc::clone(&archive);
 
         // 1. Connection Limits & Concurrency Preflight
         {
@@ -366,6 +407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut buf_reader = BufReader::new(reader);
             let mut line = String::new();
             let mut rate_limiter = TokenBucket::new();
+            let mut last_sync_ms: u64 = 0;
 
             // 3. Inbound Reader Loop with 64KB Frame Bounds
             while let Ok(n) = read_bounded_line(&mut buf_reader, &mut line, MAX_LINE_BYTES).await {
@@ -586,8 +628,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // 6. Route Regular Packets
+                // 6. Catch-up for a node that was offline: every archived listing newer
+                //    than its cursor (original signed packets, oldest first), then a
+                //    done marker carrying the new cursor. Never forwarded.
+                if packet.packet_type == "MESH_ARCHIVE_SYNC" {
+                    let registered_id = {
+                        let state = state_clone.lock().await;
+                        state.sessions.get(&peer_addr).and_then(|s| s.node_id.clone())
+                    };
+                    let now_ms = current_timestamp_ms();
+                    if let Some(node_id) = registered_id {
+                        if now_ms.saturating_sub(last_sync_ms) >= ARCHIVE_SYNC_INTERVAL_MS {
+                            last_sync_ms = now_ms;
+                            let since = packet.payload.get("since_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let entries = archive.lock().await.since(since);
+                            let (mut until, mut sent) = (since, 0usize);
+                            for entry in entries {
+                                let item = serde_json::json!({ "packet": entry.packet, "archived_ms": entry.archived_ms });
+                                // Awaiting send (not try_send) paces the replay to the socket.
+                                if tx.send(supervisor_line(&node_id, "MESH_ARCHIVE_ITEM", item)).await.is_err() {
+                                    break;
+                                }
+                                until = entry.archived_ms;
+                                sent += 1;
+                            }
+                            let done = serde_json::json!({ "until_ms": until, "count": sent });
+                            let _ = tx.send(supervisor_line(&node_id, "MESH_ARCHIVE_DONE", done)).await;
+                        }
+                    }
+                    line.clear();
+                    continue;
+                }
+
+                // 7. Route Regular Packets
                 let mut target_senders: Vec<mpsc::Sender<String>> = Vec::new();
+                let mut accepted = false;
                 let out_line = format!("{}\n", trimmed);
 
                 {
@@ -608,6 +683,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             line.clear();
                             continue;
                         }
+                        accepted = true;
 
                         let sender_room = &session.room;
 
@@ -639,6 +715,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } // Lock released immediately! Zero blocking on I/O.
 
+                // Keep publisher-signed listings for nodes that are offline right now.
+                if accepted
+                    && archive::ARCHIVED_TYPES.contains(&packet.packet_type.as_str())
+                    && identity_signature_valid(&packet)
+                {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        let stored = archive.lock().await.offer(
+                            &packet.packet_type,
+                            &packet.sender_id,
+                            packet.timestamp_ms,
+                            value,
+                            trimmed.len(),
+                            current_timestamp_ms(),
+                        );
+                        if let Err(reason) = stored {
+                            eprintln!("[Archive] Listing from {} not stored: {}", peer_addr, reason);
+                        }
+                    }
+                }
+
                 for target_tx in target_senders {
                     let _ = target_tx.try_send(out_line.clone());
                 }
@@ -646,7 +742,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 line.clear();
             }
 
-            // 7. Client Disconnect Cleanup & Roster Notification
+            // 8. Client Disconnect Cleanup & Roster Notification
             let (departed_id, departed_room, peers_to_notify) = {
                 let mut state = state_clone.lock().await;
                 // Decrement IP count

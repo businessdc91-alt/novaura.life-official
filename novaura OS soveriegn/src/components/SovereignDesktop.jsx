@@ -16,6 +16,8 @@ import { getLocalIdentity, getUnreadCount } from '../services/sovereignMesh';
 import '../services/aiLoungeService';
 // Registers the user's own apps (Cybeni / Discovery Forge builds) in the launcher.
 import '../services/forge/userApps';
+// Asks the relay for marketplace listings published while this node was offline.
+import '../services/meshArchiveSync';
 import { callService, CallState } from '../services/sovereignCallService';
 import { Phone, PhoneCall, PhoneOff, Video } from 'lucide-react';
 import SovereignLeftSidebar from './SovereignLeftSidebar';
