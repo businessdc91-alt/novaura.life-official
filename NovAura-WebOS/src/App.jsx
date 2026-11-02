@@ -119,21 +119,41 @@ const windowComponents = {
 };
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [isSetupComplete, setIsSetupComplete] = useState(false);
+  const isDesktopApp = typeof window !== 'undefined' && (
+    Boolean(window.__IS_DESKTOP_BUILD__) ||
+    Boolean(window.__TAURI_INTERNALS__) ||
+    Boolean(window.__TAURI__) ||
+    window.location.protocol === 'tauri:' ||
+    window.location.protocol === 'asset:' ||
+    window.location.protocol === 'file:' ||
+    window.location.hostname === 'tauri.localhost' ||
+    window.location.origin.includes('tauri') ||
+    new URLSearchParams(window.location.search).has('desktop')
+  );
+
+  const [isAuthenticated, setIsAuthenticated] = useState(() => isDesktopApp);
+  const [currentUser, setCurrentUser] = useState(() => isDesktopApp ? {
+    id: 'sovereign-operator',
+    uid: 'sovereign-operator',
+    email: 'operator@novaura.life',
+    name: 'Operator',
+    displayName: 'Operator',
+    photoURL: null,
+    avatar: null,
+  } : null);
+  const [isSetupComplete, setIsSetupComplete] = useState(() => isDesktopApp);
   const [llmConfig, setLlmConfig] = useState(null);
   const [windows, setWindows] = useState([]);
   const [particleConfig, setParticleConfig] = useState('idle');
   const [toolbarOpen, setToolbarOpen] = useState(false);
   const [nextZIndex, setNextZIndex] = useState(1000);
   const [theme, setTheme] = useState('cosmic');
-  const [showOS, setShowOS] = useState(false);
+  const [showOS, setShowOS] = useState(() => isDesktopApp);
   const [pendingWindow, setPendingWindow] = useState(null);
   const [showAuraHistory, setShowAuraHistory] = useState(false);
   const [auraHistory, setAuraHistory] = useState([]);
   const [promptLibrary, setPromptLibrary] = useState([]);
-  const [userTier, setUserTier] = useState('free');
+  const [userTier, setUserTier] = useState(() => isDesktopApp ? 'pro' : 'free');
   const orchestratorRef = useRef(null);
   const { isOpen: isCommandPaletteOpen, close: closeCommandPalette } = useCommandPalette();
   
@@ -179,6 +199,13 @@ export default function App() {
       }
     }
 
+    if (isDesktopApp) {
+      setShowOS(true);
+      setIsAuthenticated(true);
+      setIsSetupComplete(true);
+      setUserTier('pro');
+    }
+
     // Load saved theme
     const savedTheme = kernelStorage.getItem('novaura-theme');
     if (savedTheme) {
@@ -201,6 +228,12 @@ export default function App() {
           setWindows(restored);
           setNextZIndex(1000 + restored.length);
         }
+      } else if (isDesktopApp) {
+        setWindows([
+          { id: 'win-default-ide', type: 'ide', title: 'NovAura IDE — Code & Architecture', zIndex: 1001, props: {} },
+          { id: 'win-default-files', type: 'files', title: 'Files & Storage Explorer', zIndex: 1002, props: {} },
+        ]);
+        setNextZIndex(1003);
       }
     } catch (e) {
       console.error('Error restoring session windows:', e);
@@ -216,10 +249,9 @@ export default function App() {
     }
   }, []);
 
-
-
-  // Firebase Auth — sole source of truth. No localStorage bypass.
+  // Firebase Auth — sole source of truth. No localStorage bypass (bypassed in desktop app mode).
   useEffect(() => {
+    if (isDesktopApp) return;
     if (!isFirebaseConfigured || !auth) return;
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -659,8 +691,8 @@ export default function App() {
     );
   }
 
-  // Landing page (search engine) - entry point for all users
-  if (!showOS) {
+  // Landing page (search engine) - entry point for web guests
+  if (!showOS && !isDesktopApp) {
     return (
       <>
         <LandingPage 
@@ -672,8 +704,8 @@ export default function App() {
     );
   }
 
-  // Auth screen (when launching OS but not authenticated)
-  if (!isAuthenticated) {
+  // Auth screen (when launching OS on web but not authenticated)
+  if (!isAuthenticated && !isDesktopApp) {
     return (
       <>
         <AuthPage onAuthComplete={handleAuthComplete} />
@@ -683,7 +715,7 @@ export default function App() {
   }
 
   // Setup screen
-  if (!isSetupComplete) {
+  if (!isSetupComplete && !isDesktopApp) {
     return (
       <>
         <SetupPage onComplete={handleSetupComplete} />

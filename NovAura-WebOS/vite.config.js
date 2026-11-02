@@ -53,11 +53,6 @@ export default defineConfig(({ mode }) => ({
         os: path.resolve(__dirname, 'os.html'),
       },
       external: [
-        'isomorphic-git',
-        'isomorphic-git/http/web',
-        /^isomorphic-git/,
-        '@isomorphic-git/lightning-fs',
-        /^@isomorphic-git/,
         /^@tauri-apps/,
         /^@mlc-ai/,
       ],

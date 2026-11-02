@@ -11,14 +11,21 @@ import LightningFS from '@isomorphic-git/lightning-fs';
 
 export class GitEngine {
   constructor(options = {}) {
-    this.fs = new LightningFS('cybeni-git-fs');
+    try {
+      this.fs = typeof LightningFS === 'function' ? new LightningFS('cybeni-git-fs') : null;
+    } catch (e) {
+      console.warn('[GitEngine] LightningFS initialization failed:', e);
+      this.fs = null;
+    }
     this.dir = options.dir || '/repo';
     this.author = options.author || { name: 'Cybeni User', email: 'user@cybeni.dev' };
     this.token = options.token || null;
     this.remote = options.remote || null;
     
     // Initialize repo directory
-    this.fs.mkdir(this.dir, { recursive: true }).catch(() => {});
+    if (this.fs && typeof this.fs.mkdir === 'function') {
+      this.fs.mkdir(this.dir, { recursive: true }).catch(() => {});
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════

@@ -9,8 +9,8 @@ const STORAGE_KEY = 'novaura_layout_mode';
  */
 export const useLayoutMode = () => {
   const [layoutMode, setLayoutMode] = useState(() => {
-    // Tauri / headless detection (window.__TAURI__ or ?headless query param)
-    if (window.__TAURI_INTERNALS__ || new URLSearchParams(window.location.search).has('headless')) {
+    // Only enter headless if explicitly requested via query param
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('headless')) {
       return 'headless';
     }
 
@@ -21,8 +21,8 @@ export const useLayoutMode = () => {
     }
     
     // Default to auto-detect on first load
-    const isMobileDevice = window.innerWidth < 768 || 
-      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const isMobileDevice = typeof window !== 'undefined' && (window.innerWidth < 768 || 
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
     
     return isMobileDevice ? 'mobile' : 'desktop';
   });

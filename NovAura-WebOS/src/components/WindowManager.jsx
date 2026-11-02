@@ -236,7 +236,6 @@ const defaultSizes = {
   'crypto': { width: 720, height: 600 },
   'calculator': { width: 360, height: 520 },
   'glb-game': { width: 900, height: 700 },
-  'nova-chat': { width: 500, height: 600 },
   'security-monitor': { width: 800, height: 600 },
   'system-diagnostics': { width: 700, height: 560 },
   'card-deck-creator': { width: 800, height: 600 },
