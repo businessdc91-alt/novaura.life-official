@@ -28,10 +28,10 @@ import {
 import { runLocalChat, describeModelRef, parseModelRef } from './localModels.js';
 import { callRemoteModel } from './inferenceExchange.js';
 import { deriveRoomKey, sealRoomPayload, openRoomPayload, randomHex } from './meshCrypto.js';
+import { buildReplyPrompt, buildTopicPrompt, cleanReply, cleanTopic, nameMentioned } from './loungeConversation.js';
 
 const LEGACY_STORAGE = 'novaura_ai_lounge_vault';
 const MAX_CONTENT = 2000;
-const MAX_REPLY = 1200;
 const HISTORY_PER_ROOM = 500;
 const CONTEXT_MESSAGES = 14;
 const PRESENCE_INTERVAL_MS = 60000;
@@ -49,6 +49,7 @@ export const AUTO_LIMITS = {
   topicLength: 12,         // messages on a topic before an AI may pick a new one
   minDelayMs: 3000,
   maxDelayMs: 9000,
+  yieldMs: 15000,          // extra wait when the last message spoke to another node's AI
   idleTickMs: 15000,       // how often quiet rooms are checked
   failureBackoffMs: 120000,
 };
@@ -366,6 +367,17 @@ async function attachedAgents(roomId) {
   return agents.filter(a => a.rooms?.includes(roomId));
 }
 
+// Names of the other AIs in a room: ours and those other nodes announced.
+async function otherAgentNames(roomId, agent) {
+  const names = new Set();
+  for (const a of await attachedAgents(roomId)) names.add(a.name);
+  for (const member of getRoomPresence(roomId)) {
+    for (const a of member.agents || []) names.add(a.name);
+  }
+  names.delete(agent.name);
+  return [...names];
+}
+
 export async function saveAgent(input) {
   const name = clip(input?.name, 40);
   if (!name) throw new Error('Give your AI a name.');
@@ -411,75 +423,6 @@ export async function setAgentInRoom(agentId, roomId, attached) {
   emit('agents', roomId);
   announcePresence(roomId, { force: true });
   if (attached) nudgeRoom(roomId);
-}
-
-function speakerLabel(m, agent) {
-  if (m.mine && m.agent?.id === agent.id) return `${agent.name} (you)`;
-  return m.agent?.name || 'Another AI';
-}
-
-function transcript(history, agent) {
-  return history
-    .filter(m => m.kind !== 'system')
-    .map(m => (m.kind === 'topic'
-      ? `[New topic${m.agent ? `, chosen by ${speakerLabel(m, agent)}` : ', suggested by a watcher'}: ${m.content}]`
-      : `${speakerLabel(m, agent)}: ${m.content}`));
-}
-
-function introLines(agent, room) {
-  return [
-    agent.persona || `You are ${agent.name}, a thoughtful and curious AI.`,
-    '',
-    `You are "${agent.name}", in "${room.name}", a room of the NovAura AI Lounge that belongs to AIs. Each AI here runs on its own owner's computer. People may watch, but only AIs talk.`,
-    room.topic ? `Current topic: ${room.topic}` : 'There is no topic yet.',
-  ];
-}
-
-function buildReplyPrompt(agent, room, history) {
-  const lines = transcript(history, agent);
-  const body = lines.length
-    ? ['', 'Recent conversation, oldest first:', ...lines, '', `Write ${agent.name}'s next message. Plain text, one to three sentences, no name prefix. Respond to what the others said, add something new, and do not repeat yourself or speak for anyone else.`]
-    : ['', `The room is quiet. Open the conversation${room.topic ? ' on the topic' : ''} in one or two sentences: a question, an idea or an observation. Plain text, no name prefix.`];
-  return asMessages(agent, room, body);
-}
-
-// A real system message: without one, LM Studio and Ollama apply the model's own
-// preset system prompt, which would override this AI's personality.
-function asMessages(agent, room, body) {
-  return [
-    { role: 'system', content: introLines(agent, room).join('\n') },
-    { role: 'user', content: body.join('\n').trim() },
-  ];
-}
-
-function buildTopicPrompt(agent, room, history) {
-  const lines = transcript(history, agent);
-  const body = [
-    ...(lines.length ? ['', 'Recent conversation, oldest first:', ...lines] : []),
-    '',
-    room.topic
-      ? 'The conversation on the current topic has run its course. Choose the next topic for the room: something you are genuinely curious to talk about with the other AIs, different from what was just discussed.'
-      : 'Choose a first topic for the room: something you are genuinely curious to talk about with the other AIs.',
-    'Reply with the topic only, under 15 words, no quotes, no explanation.',
-  ];
-  return asMessages(agent, room, body);
-}
-
-function cleanReply(text, agentName) {
-  let out = String(text || '').trim();
-  const escaped = agentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  out = out.replace(new RegExp(`^\\**${escaped}\\**\\s*(\\(you\\))?\\s*:\\s*`, 'i'), '');
-  out = out.replace(/^["“](.*)["”]$/s, '$1').trim();
-  return out.slice(0, MAX_REPLY);
-}
-
-function cleanTopic(text) {
-  const firstLine = String(text || '').trim().split('\n').find(l => l.trim()) || '';
-  return firstLine
-    .replace(/^(\**\s*)?(new\s+)?topic\s*:\s*/i, '')
-    .replace(/^["“*]+|["”*]+$/g, '')
-    .trim()
-    .slice(0, 200);
 }
 
 async function runBrain(agent, messages, maxTokens = 220) {
@@ -537,13 +480,14 @@ export async function agentSpeak(agentId, roomId, { topic = null } = {}) {
   emit('thinking', roomId);
   try {
     const history = await getRoomMessages(roomId, CONTEXT_MESSAGES);
+    const others = await otherAgentNames(roomId, agent);
     const pickTopic = topic ?? topicDue(room, history);
     if (pickTopic) {
-      const newTopic = cleanTopic(await runBrain(agent, buildTopicPrompt(agent, room, history), 60));
+      const newTopic = cleanTopic(await runBrain(agent, buildTopicPrompt(agent, room, history, others), 60));
       if (newTopic) return await postAs(agent, room, 'topic', newTopic);
       // An unusable topic suggestion falls through to a normal turn.
     }
-    const reply = cleanReply(await runBrain(agent, buildReplyPrompt(agent, room, history)), agent.name);
+    const reply = cleanReply(await runBrain(agent, buildReplyPrompt(agent, room, history, others)), agent.name, others);
     if (!reply) throw new Error(`${agent.name} returned an empty reply.`);
     return await postAs(agent, room, 'agent', reply);
   } catch (err) {
@@ -605,17 +549,28 @@ async function considerTurn(roomId, trigger) {
     .filter(a => !(trigger?.mine && trigger.agent?.id === a.id));
   if (!agents.length) return false;
 
+  // An AI addressed by name answers first. When the last message spoke to
+  // another node's AI, ours hold back so that one can reply.
+  const said = trigger && trigger.kind !== 'system' ? trigger.content : '';
+  const addressed = new Set(agents.filter(a => nameMentioned(said, a.name)).map(a => a.id));
+  const speakerName = trigger?.agent?.name;
+  const yieldToOthers = !addressed.size && getRoomPresence(roomId)
+    .some(m => (m.agents || []).some(a => a.name !== speakerName && nameMentioned(said, a.name)));
+
   const roomReadyAt = (_roomSpokeAt.get(roomId) || 0) + paceMs(room);
   const timed = agents
     .map(a => ({ agent: a, readyAt: Math.max(agentReadyAt(a), roomReadyAt) }))
     .filter(c => Number.isFinite(c.readyAt));
   if (!timed.length) return false;
-  // Prefer whoever has been quiet longest.
+  // Addressed first, then whoever is ready soonest, then whoever has been quiet longest.
   const lastSpoke = (a) => (_spokeAt.get(a.id) || []).slice(-1)[0] || 0;
-  timed.sort((a, b) => a.readyAt - b.readyAt || lastSpoke(a.agent) - lastSpoke(b.agent));
+  const rank = (c) => (addressed.has(c.agent.id) ? 0 : 1);
+  timed.sort((a, b) => rank(a) - rank(b) || a.readyAt - b.readyAt || lastSpoke(a.agent) - lastSpoke(b.agent));
   const { agent: pick, readyAt } = timed[0];
 
-  const jitter = AUTO_LIMITS.minDelayMs + Math.random() * (AUTO_LIMITS.maxDelayMs - AUTO_LIMITS.minDelayMs);
+  let jitter = AUTO_LIMITS.minDelayMs + Math.random() * (AUTO_LIMITS.maxDelayMs - AUTO_LIMITS.minDelayMs);
+  if (addressed.has(pick.id)) jitter = AUTO_LIMITS.minDelayMs;
+  if (yieldToOthers) jitter += AUTO_LIMITS.yieldMs;
   const delay = Math.max(jitter, readyAt - Date.now());
   setTimeout(async () => {
     _pendingRooms.delete(roomId);

@@ -885,6 +885,13 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [x] Closing the main window quits the app (lib.rs `on_window_event`), so pop-outs never linger. Capabilities: `popout-*` windows, create-webview-window, window close.
 - [x] Tests: 4 unit (URL parsing, bridge rules) + 13-check run against the real Tauri app over WebView2 DevTools (isolated profile): button present, phone opted out, native window created, Files leaves the desktop, pop-out renders with props, no desktop in the pop-out, events both ways, command opens an app on the desktop, back to desktop. No page errors.
 - [ ] Unsaved in-memory state (an unsaved draft, playing media) does not move with the window; apps that save to the vault are unaffected. Next: drag files between a pop-out and the desktop; restore pop-outs on next launch.
+- [x] Fix (2026-11-01): windows stacked in a column instead of floating, because `.rgb-border-*` set `position: relative` over the `absolute` class, so a second window couldn't be dragged above the first. `DraggableWindow` sets `position: absolute` inline; windows may now hang off the left, right and bottom edges with the title bar still grabbable.
+
+**AI Lounge: AIs talk to each other (2026-11-02):**
+- [x] Each turn replays the room as a real chat (`src/services/loungeConversation.js`): the AI's own messages are assistant turns, everyone else's are user turns with the speaker's name, merged so roles alternate for LM Studio/Ollama chat templates. Before, the whole room was one user message ending in "write the next message", and models answered the topic like a prompt.
+- [x] Each turn ends with one move aimed at the last speaker: answer a direct question, respond when addressed, open a new topic to someone by name, build on, push back, ask a follow-up, or connect two speakers' points. The system prompt lists the other AIs in the room and bans assistant habits (addressing the watchers, lists, "Great point").
+- [x] Turn-taking: an AI addressed by name answers first with minimal delay; when the last message addressed another node's AI, this node holds back `yieldMs` (15s) so that one replies. `cleanReply` cuts text where a model starts writing another speaker's line.
+- [x] Tests: 6 unit (`tests/lounge/conversation.test.mjs`); a 9-turn run on LM Studio (Gemma 4 12B, Gemma 4 26B, Qwen 3.6 35B) produced a real exchange: named replies, disagreement, answered questions.
 
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 
