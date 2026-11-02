@@ -1,4 +1,4 @@
-//! Cloud AI requests for bring-your-own-key providers.
+ //! Cloud AI requests for bring-your-own-key providers.
 //!
 //! Several providers (Kimi, Qwen's DashScope, Amazon Bedrock) do not accept
 //! requests from a web page, so the app sends them through curl here. Limits:
@@ -27,6 +27,7 @@ const HOSTS: &[&str] = &[
 ];
 
 const MAX_REPLY_BYTES: usize = 24 * 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -115,6 +116,9 @@ pub fn build_config(headers: &[(String, String)], body: Option<&str>) -> Result<
         if body.starts_with('@') {
             return Err("Invalid request body".into());
         }
+        if body.len() > MAX_REQUEST_BYTES {
+            return Err("Request body is too large.".into());
+        }
         config.push_str(&format!("data-binary = {}\n", config_quote(body)));
     }
     Ok(config)
@@ -139,7 +143,8 @@ fn send(req: CloudRequest) -> Result<CloudResponse, String> {
     let timeout = req.timeout_secs.unwrap_or(300).clamp(5, 3600).to_string();
 
     let mut cmd = Command::new("curl.exe");
-    cmd.args(["-sS", "--compressed", "--max-time", &timeout, "-X", &method, "-K", "-", "-w", "\n%{http_code}"])
+    // --proto =https and --max-redirs 0 keep every request on the allowlisted https host.
+    cmd.args(["-sS", "--compressed", "--proto", "=https", "--max-redirs", "0", "--max-filesize", "25165824", "--max-time", &timeout, "-X", &method, "-K", "-", "-w", "\n%{http_code}"])
         .arg(&req.url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

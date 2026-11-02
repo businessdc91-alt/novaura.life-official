@@ -4,6 +4,7 @@ import DraggableWindow from './DraggableWindow';
 import SystemBar from './SystemBar';
 import DesktopIcons from './DesktopIcons';
 import Toolbar from './Toolbar';
+import PopupAppsWindow from './PopupAppsWindow';
 import FloatingCompanions from './companions/FloatingCompanions';
 import AppLauncherModal from './AppLauncherModal';
 import { KernelErrorBoundary } from '../kernel/KernelErrorBoundary';
@@ -19,7 +20,7 @@ import '../services/forge/userApps';
 // Asks the relay for marketplace listings published while this node was offline.
 import '../services/meshArchiveSync';
 import { callService, CallState } from '../services/sovereignCallService';
-import { Phone, PhoneCall, PhoneOff, Video } from 'lucide-react';
+import { Phone, PhoneCall, PhoneOff, Video, ChevronUp, ChevronDown, Sparkles } from 'lucide-react';
 import SovereignLeftSidebar from './SovereignLeftSidebar';
 import SovereignRightSidebar from './SovereignRightSidebar';
 import SovereignChatBar from './SovereignChatBar';
@@ -54,7 +55,14 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
   const [unreadMail, setUnreadMail] = useState(0);
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [incomingCall, setIncomingCall] = useState(null);
-  const [isDockOpen, setIsDockOpen] = useState(true);
+  const [isDockOpen, setIsDockOpen] = useState(false);
+  const [isPromptBarHidden, setIsPromptBarHidden] = useState(() => {
+    try {
+      return localStorage.getItem('novaura-promptbar-hidden') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [focusedId, setFocusedId] = useState(null);
   const [meshToasts, setMeshToasts] = useState([]);
 
@@ -366,17 +374,48 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
         })}
       </div>
 
-      {/* 6. Bottom UI Layer (Toolbar dock slides up above SovereignChatBar) */}
-      <div className="fixed bottom-0 left-0 right-0 z-[8000] flex flex-col items-center pointer-events-none pb-3">
-        {/* Toolbar — slides up from behind ChatBar */}
+      {/* 6. Bottom UI Layer (Interactive Prompt Bar + Popup Apps Window + Transparent Pull-Up Tab) */}
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-[8000] flex flex-col items-center pointer-events-none transition-transform duration-300 ease-out ${
+          isPromptBarHidden ? 'translate-y-[calc(100%-8px)]' : 'translate-y-0 pb-3'
+        }`}
+      >
+        {/* Transparent Pull-Up / Drop-Down Tab matching Sovereign OS hideable menus */}
+        <div className="pointer-events-auto flex justify-center mb-1">
+          <button
+            onClick={() => {
+              setIsPromptBarHidden(prev => {
+                const next = !prev;
+                try { localStorage.setItem('novaura-promptbar-hidden', String(next)); } catch {}
+                return next;
+              });
+            }}
+            aria-label={isPromptBarHidden ? "Pull Up Prompt & Apps Bar" : "Drop Prompt Bar Out of Sight"}
+            title={isPromptBarHidden ? "Pull up interactive prompt & apps bar" : "Drop prompt bar down out of sight"}
+            className="flex items-center gap-2 px-5 py-1 bg-slate-950/70 hover:bg-slate-900/90 border-t border-x border-cyan-500/40 text-cyan-400 rounded-t-xl backdrop-blur-md shadow-[0_-4px_20px_rgba(0,0,0,0.6)] cursor-pointer transition-all duration-200 group hover:border-cyan-400 hover:text-cyan-300 active:scale-95"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-pulse group-hover:scale-110 transition-transform" />
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-white/70 group-hover:text-white transition-colors">
+              {isPromptBarHidden ? "Aura Prompt & Apps" : "Hide Bar"}
+            </span>
+            {isPromptBarHidden ? (
+              <ChevronUp className="w-3.5 h-3.5 text-cyan-400 group-hover:-translate-y-0.5 transition-transform" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 text-cyan-400 group-hover:translate-y-0.5 transition-transform" />
+            )}
+          </button>
+        </div>
+
+        {/* Popup Apps Window — slides up above SovereignChatBar */}
         <div
           className={`pointer-events-auto transition-all duration-300 ease-in-out ${
-            isDockOpen ? 'max-h-24 opacity-100 mb-2' : 'max-h-0 opacity-0 overflow-hidden mb-0'
+            isDockOpen ? 'max-h-[380px] opacity-100 mb-2' : 'max-h-0 opacity-0 overflow-hidden mb-0'
           }`}
         >
-          <Toolbar
+          <PopupAppsWindow
             onOpenWindow={openApp}
             openWindows={windows}
+            onClose={() => setIsDockOpen(false)}
           />
         </div>
 
@@ -386,6 +425,14 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
             openApp={openApp}
             isDockOpen={isDockOpen}
             onToggleDock={() => setIsDockOpen(prev => !prev)}
+            isPromptBarHidden={isPromptBarHidden}
+            onTogglePromptBar={() => {
+              setIsPromptBarHidden(prev => {
+                const next = !prev;
+                try { localStorage.setItem('novaura-promptbar-hidden', String(next)); } catch {}
+                return next;
+              });
+            }}
           />
         </div>
       </div>

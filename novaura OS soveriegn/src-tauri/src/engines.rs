@@ -319,7 +319,7 @@ pub fn engine_download_model(
     }
     let mut cmd = Command::new("curl.exe");
     // Resume (-C -) after drops; a transfer stuck under 1 KB/s for a minute counts as dropped.
-    cmd.args(["-L", "--fail", "--retry", "20", "--retry-delay", "10", "--speed-limit", "1024", "--speed-time", "60", "-C", "-"]);
+    cmd.args(["-L", "--fail", "--proto", "=https", "--proto-redir", "=https", "--retry", "20", "--retry-delay", "10", "--speed-limit", "1024", "--speed-time", "60", "-C", "-"]);
     if curl_retries_all_errors() {
         cmd.arg("--retry-all-errors");
     }

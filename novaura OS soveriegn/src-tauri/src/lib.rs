@@ -594,18 +594,21 @@ fn load_vault_state(filename: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn get_authentic_drive_telemetry() -> Result<String, String> {
-    let candidates = [
-        "scripts/get_authentic_storage_telemetry.ps1",
-        "../scripts/get_authentic_storage_telemetry.ps1",
-    ];
+    // Look for the helper script next to the executable only. A working-directory
+    // relative path would run whatever script the launch folder happens to contain.
+    let candidates: Vec<std::path::PathBuf> = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("scripts").join("get_authentic_storage_telemetry.ps1")))
+        .into_iter()
+        .collect();
 
     let mut command = std::process::Command::new("powershell");
     command.args(&["-NoProfile", "-ExecutionPolicy", "Bypass"]);
 
     let mut found = false;
     for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            command.args(&["-File", c]);
+        if c.is_file() {
+            command.arg("-File").arg(c);
             found = true;
             break;
         }

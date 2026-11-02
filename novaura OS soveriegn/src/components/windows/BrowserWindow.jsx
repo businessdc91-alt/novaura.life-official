@@ -1002,7 +1002,12 @@ export default function BrowserWindow() {
                 srcDoc={novaPageData.htmlContent}
                 title={novaPageData.title}
                 className="w-full flex-1 border-none bg-slate-950"
-                sandbox="allow-scripts allow-forms allow-same-origin allow-modals"
+                // No allow-same-origin: without it the page gets an opaque origin and cannot
+                // reach the OS's DOM, Tauri IPC, IndexedDB vault or localStorage.
+                sandbox="allow-scripts allow-forms allow-modals"
+                referrerPolicy="no-referrer"
+                // Pages that arrived over the mesh are untrusted: no network at all.
+                csp={novaPageData.receivedFromMesh ? "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'" : undefined}
               />
             </div>
           )
@@ -1024,7 +1029,10 @@ export default function BrowserWindow() {
               src={activeTab.renderUrl || activeTab.url}
               title={activeTab.title}
               className="w-full flex-1 border-none bg-white"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              // A frame pointed at localhost / tauri.localhost would be same-origin with the OS
+              // itself, so those targets never get allow-same-origin.
+              sandbox={/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/:]*\.localhost)(:|\/|$)/i.test(activeTab.renderUrl || activeTab.url || '') ? 'allow-scripts allow-forms allow-popups' : 'allow-scripts allow-same-origin allow-forms allow-popups'}
+              referrerPolicy="no-referrer"
             />
           </div>
         )}

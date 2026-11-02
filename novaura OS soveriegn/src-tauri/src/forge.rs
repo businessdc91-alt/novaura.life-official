@@ -44,7 +44,7 @@ pub fn forge_fetch_text(url: String) -> Result<String, String> {
         return Err("That site is not on the Forge's fetch list".into());
     }
     let mut cmd = Command::new("curl.exe");
-    cmd.args(["-sL", "--fail", "--max-time", "20", "--max-filesize", "6000000", "-A", "Mozilla/5.0 (NovauraSovereign Forge)"])
+    cmd.args(["-sL", "--fail", "--proto", "=https", "--proto-redir", "=https", "--max-time", "20", "--max-filesize", "6000000", "-A", "Mozilla/5.0 (NovauraSovereign Forge)"])
         .arg(&url)
         .stdin(Stdio::null());
     let out = hidden(&mut cmd).output().map_err(|e| e.to_string())?;

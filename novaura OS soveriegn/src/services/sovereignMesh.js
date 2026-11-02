@@ -6,6 +6,7 @@
 import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { admitMeshListing } from './marketplaceListings.js';
+import { sanitizeRichHtml } from './htmlSanitizer.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
   FEEDBACK_INBOX_VAULT_KEY,
@@ -460,19 +461,14 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_HOSTED_SITE': {
+      // Peer-supplied HTML is untrusted. It is stored only if it is signed by its
+      // publisher, intact, size-bounded and not a takeover of an existing domain.
       const site = payload?.site || packet?.payload?.site;
-      if (site && site.domain) {
-        const cleanDomain = site.domain.replace(/^nova:\/\//, '').replace(/\/$/, '');
-        const record = {
-          ...site,
-          id: cleanDomain,
-          domain: cleanDomain,
-          updatedAt: site.updatedAt || new Date().toISOString()
-        };
-        db.hosted_sites.put(record).catch(() => {});
+      admitRemoteSite(site).then((record) => {
+        if (!record) return;
         window.dispatchEvent(new CustomEvent('novaura:site_updated', { detail: record }));
         window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-      }
+      }).catch(() => {});
       break;
     }
 
@@ -493,19 +489,15 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_SITE_RESPONSE': {
+      // A relayed copy: the responder is not necessarily the publisher, so the
+      // publisher's own signature inside the record is what gets verified.
       const site = payload?.site || packet?.payload?.site;
-      if (site && site.domain) {
-        const cleanDomain = site.domain.replace(/^nova:\/\//, '').replace(/\/$/, '');
-        const record = {
-          ...site,
-          id: cleanDomain,
-          domain: cleanDomain,
-        };
-        db.hosted_sites.put(record).catch(() => {});
+      admitRemoteSite(site).then((record) => {
+        if (!record) return;
         window.dispatchEvent(new CustomEvent('novaura:site_resolved', { detail: record }));
         window.dispatchEvent(new CustomEvent('novaura:site_updated', { detail: record }));
         window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-      }
+      }).catch(() => {});
       break;
     }
 
@@ -516,7 +508,7 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
           id: 'mesh_' + (manuscript.id || generateId()),
           name: `[Mesh] ${manuscript.name || 'Shared Chapter'}`,
           type: manuscript.type || 'chapter',
-          content: manuscript.content || '',
+          content: sanitizeRichHtml(typeof manuscript.content === 'string' ? manuscript.content : '', { allowRemoteImages: false }),
           wordCount: manuscript.wordCount || 0,
           author: payload?.authorName || packet?.sender_name || 'Network Peer',
           authorId: packet?.sender_id || 'remote_peer',
@@ -2044,15 +2036,33 @@ export async function getTransfers() {
 
 export async function publishHostedSite(siteData) {
   if (!siteData || !siteData.domain) throw new Error('Missing domain for decentralized site publishing.');
-  const cleanDomain = siteData.domain.replace(/^nova:\/\//, '').replace(/\/$/, '');
+  const cleanDomain = cleanNovaDomain(siteData.domain);
+  if (!NOVA_DOMAIN_RE.test(cleanDomain)) {
+    throw new Error('Invalid domain. Use letters, numbers, dots and hyphens only (for example: mysite.nova).');
+  }
   const identity = getLocalIdentity();
+  const publisherPubkey = String(identity.publicKey || '').replace(/^0x/, '').toLowerCase();
+  const priorRecord = (await db.hosted_sites.get(cleanDomain)) || (await db.hosted_sites.where('domain').equals(cleanDomain).first());
+  if (priorRecord?.publisherPubkey && priorRecord.publisherPubkey !== publisherPubkey) {
+    throw new Error(`${cleanDomain} is already published by another node and cannot be overwritten. Choose a different domain.`);
+  }
   
-  // Calculate deterministic SHA-256 content digest (CIDv1 formatted)
-  const encoder = new TextEncoder();
-  const contentBytes = encoder.encode((siteData.htmlContent || '') + (siteData.cssContent || '') + (siteData.jsContent || ''));
-  const hashBuffer = await crypto.subtle.digest('SHA-256', contentBytes);
-  const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  // Deterministic SHA-256 digest of the HTML that is actually stored and sent (CIDv1 formatted)
+  const publishedHtml = siteData.htmlContent || '<!DOCTYPE html><html><body><h1>Decentralized Site</h1></body></html>';
+  if (publishedHtml.length > MAX_SITE_HTML_CHARS) {
+    throw new Error(`Site is too large: ${Math.round(publishedHtml.length / 1024)} KB (limit ${MAX_SITE_HTML_CHARS / 1024} KB of HTML).`);
+  }
+  const hashHex = await sha256Hex(publishedHtml);
   const cid = `bafy2bzace${hashHex.substring(0, 32)}`;
+  const updatedAt = new Date().toISOString();
+  // The publisher signs (domain, content, time) so any peer can verify a relayed copy.
+  let publisherSig = null;
+  if (identity.secretKeyHex && /^[0-9a-f]{64}$/.test(publisherPubkey)) {
+    publisherSig = siteBytesToHex(ed25519.sign(
+      new TextEncoder().encode(siteSigningString(cleanDomain, hashHex, updatedAt, publisherPubkey)),
+      siteHexToBytes(identity.secretKeyHex)
+    ));
+  }
 
   const siteRecord = {
     id: cleanDomain,
@@ -2063,19 +2073,130 @@ export async function publishHostedSite(siteData) {
     ownerNodeId: identity.nodeId || `did:nova:${(identity.publicKey || '').replace(/^0x/, '')}`,
     cid,
     contentHash: hashHex,
-    htmlContent: siteData.htmlContent || '<!DOCTYPE html><html><body><h1>Decentralized Site</h1></body></html>',
+    htmlContent: publishedHtml,
     status: 'ACTIVE_MESH',
-    updatedAt: new Date().toISOString(),
+    updatedAt,
+    publisherPubkey,
+    publisherSig,
   };
 
   await db.hosted_sites.put(siteRecord);
-  broadcastMeshPacket('MESH_HOSTED_SITE', { site: siteRecord });
+  // Unsigned sites stay local: peers would (correctly) reject them.
+  if (publisherSig) broadcastMeshPacket('MESH_HOSTED_SITE', { site: siteRecord });
   window.dispatchEvent(new CustomEvent('novaura:site_updated', { detail: siteRecord }));
   return siteRecord;
 }
 
+// ── Decentralized site admission control ────────────────────────────────────
+// Sites from peers contain HTML/JS. Nothing from the mesh is stored or shown
+// unless it is signed by its publisher, matches its content hash, is bounded in
+// size, and does not take over a domain that someone else already published.
+const NOVA_DOMAIN_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+const MAX_SITE_HTML_CHARS = 512 * 1024;
+const MAX_SITE_CLOCK_SKEW_MS = 10 * 60 * 1000;
+// Portals shipped inside every node. Until a node stores its own copy they still
+// count as locally owned, so a peer cannot claim them first.
+const BUILTIN_NOVA_DOMAINS = new Set(['genesis.nova', 'docs.nova', 'deca.nova']);
+
+function cleanNovaDomain(raw) {
+  return String(raw || '').trim().replace(/^nova:\/\//, '').replace(/\/+$/, '');
+}
+
+function siteHexToBytes(hex) {
+  return new Uint8Array(String(hex).replace(/^0x/, '').match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+}
+
+function siteBytesToHex(bytes) {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return siteBytesToHex(new Uint8Array(digest));
+}
+
+function siteSigningString(domain, contentHash, updatedAt, publisherPubkey) {
+  return `NOVA-SITE-V1:${domain}:${contentHash}:${updatedAt}:${publisherPubkey}`;
+}
+
+async function isAllyPublisher(pubkeyHex) {
+  try {
+    const direct = await db.contacts.get(`did:nova:${pubkeyHex}`);
+    const contact = direct || (await db.contacts.where('publicKey').anyOf([pubkeyHex, `0x${pubkeyHex}`]).first());
+    return contact?.trustTier === 'ally';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a site received from the mesh and store it. Returns the stored record,
+ * or null when the site is rejected (never throws on hostile input).
+ */
+export async function admitRemoteSite(site) {
+  try {
+    if (!site || typeof site !== 'object') return null;
+    const domain = cleanNovaDomain(site.domain);
+    if (!NOVA_DOMAIN_RE.test(domain)) return null;
+
+    const pub = String(site.publisherPubkey || '').replace(/^0x/, '').toLowerCase();
+    const sig = String(site.publisherSig || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(pub) || !/^[0-9a-f]{128}$/.test(sig)) return null;
+
+    const html = typeof site.htmlContent === 'string' ? site.htmlContent : null;
+    if (!html || html.length > MAX_SITE_HTML_CHARS) return null;
+    const contentHash = await sha256Hex(html);
+    if (String(site.contentHash || '').toLowerCase() !== contentHash) return null;
+
+    const updatedAt = String(site.updatedAt || '');
+    const updatedMs = Date.parse(updatedAt);
+    if (updatedAt.length > 40 || !Number.isFinite(updatedMs) || updatedMs > Date.now() + MAX_SITE_CLOCK_SKEW_MS) return null;
+
+    const signedOk = ed25519.verify(
+      siteHexToBytes(sig),
+      new TextEncoder().encode(siteSigningString(domain, contentHash, updatedAt, pub)),
+      siteHexToBytes(pub)
+    );
+    if (!signedOk) return null;
+
+    // Ownership: first valid publisher owns the domain (pinned). A built-in or
+    // unsigned local copy only yields to an ally; a signed copy only to its owner.
+    const existing = (await db.hosted_sites.get(domain)) || (await db.hosted_sites.where('domain').equals(domain).first());
+    if (existing?.publisherPubkey) {
+      if (existing.publisherPubkey !== pub) return null;
+      if (updatedMs <= (Date.parse(existing.updatedAt || '') || 0)) return null; // replay / rollback
+    } else if (existing || BUILTIN_NOVA_DOMAINS.has(domain.toLowerCase())) {
+      if (!(await isAllyPublisher(pub))) return null;
+    }
+
+    // Whitelisted fields only; the owner identity comes from the verified key,
+    // never from a self-asserted field.
+    const record = {
+      id: domain,
+      domain,
+      title: String(site.title || domain).slice(0, 200),
+      ownerHandle: String(site.ownerHandle || 'peer').slice(0, 64),
+      ownerPhone: String(site.ownerPhone || '').slice(0, 32),
+      ownerNodeId: `did:nova:${pub}`,
+      cid: `bafy2bzace${contentHash.substring(0, 32)}`,
+      contentHash,
+      htmlContent: html,
+      status: 'ACTIVE_MESH',
+      updatedAt,
+      publisherPubkey: pub,
+      publisherSig: sig,
+      receivedFromMesh: true,
+    };
+    await db.hosted_sites.put(record);
+    return record;
+  } catch (err) {
+    console.warn('[SovereignMesh] Rejected remote site:', err?.message || err);
+    return null;
+  }
+}
+
 export async function queryRemoteSite(domain, timeoutMs = 8000) {
-  const cleanDomain = domain.replace(/^nova:\/\//, '').replace(/\/$/, '');
+  const cleanDomain = cleanNovaDomain(domain);
   const identity = getLocalIdentity();
 
   return new Promise((resolve) => {

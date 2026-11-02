@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { Send, Mic, Sparkles, Loader2 } from 'lucide-react';
+import { Send, Mic, Sparkles, Loader2, LayoutGrid, ChevronDown, ChevronUp } from 'lucide-react';
 import { queryAuraCommander, executeAuraAction } from '../services/sovereignCommandService.js';
 import { chainLogicWeaver } from '../services/chainLogicWeaverService.js';
 import { toast } from 'sonner';
@@ -8,6 +8,8 @@ export default function SovereignChatBar({
   openApp,
   isDockOpen = true,
   onToggleDock,
+  isPromptBarHidden = false,
+  onTogglePromptBar,
 }) {
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -238,29 +240,41 @@ export default function SovereignChatBar({
   return (
     <div className="w-full max-w-4xl mx-auto px-4 md:px-6">
       <div className="relative">
-        {/* Centered slide-up chevron toggle button (mirroring WebOS) */}
-        {onToggleDock && (
-          <button
-            onClick={onToggleDock}
-            aria-label="Toggle Apps Dock"
-            className="absolute -top-3 left-1/2 -translate-x-1/2 z-20 px-4 py-0.5 bg-black/85 border border-white/10 rounded-t-lg text-white/40 hover:text-white/80 hover:border-white/25 transition-all backdrop-blur-sm cursor-pointer flex items-center justify-center"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={`transition-transform duration-300 ${isDockOpen ? 'rotate-180' : ''}`}
+        {/* Centered slide-up tabs on top of chat bar */}
+        <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5">
+          {onToggleDock && (
+            <button
+              onClick={onToggleDock}
+              type="button"
+              aria-label="Toggle Apps Dock"
+              title={isDockOpen ? "Close Apps Window" : "Open Apps Window"}
+              className={`px-3 py-0.5 border rounded-t-lg transition-all backdrop-blur-sm cursor-pointer flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider ${
+                isDockOpen
+                  ? 'bg-slate-950 border-cyan-500/40 text-cyan-300 shadow-[0_-2px_10px_rgba(0,240,255,0.2)]'
+                  : 'bg-black/85 border-white/10 text-white/50 hover:text-white hover:border-white/25'
+              }`}
             >
-              <polyline points="18 15 12 9 6 15" />
-            </svg>
-          </button>
-        )}
+              <LayoutGrid size={11} className={isDockOpen ? "text-cyan-400" : ""} />
+              <span>Apps</span>
+              <ChevronDown
+                size={11}
+                className={`transition-transform duration-300 ${isDockOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+          )}
+
+          {onTogglePromptBar && (
+            <button
+              onClick={onTogglePromptBar}
+              type="button"
+              aria-label="Drop prompt bar down out of sight"
+              title="Drop prompt bar down out of sight"
+              className="px-2.5 py-0.5 bg-black/85 border border-white/10 hover:border-cyan-500/30 rounded-t-lg text-white/40 hover:text-cyan-400 transition-all backdrop-blur-sm cursor-pointer flex items-center justify-center text-[9px] font-mono"
+            >
+              <ChevronDown size={12} />
+            </button>
+          )}
+        </div>
 
         {/* RGB liquid light flowing border */}
         <div className="rgb-border rounded-2xl shadow-2xl backdrop-blur-xl">
@@ -283,6 +297,23 @@ export default function SovereignChatBar({
                   </span>
                 </div>
               </div>
+
+              {/* Apps Window Quick Toggle Button */}
+              {onToggleDock && (
+                <button
+                  type="button"
+                  onClick={onToggleDock}
+                  title={isDockOpen ? "Close Apps Window" : "Open Apps Window"}
+                  className={`rounded-lg transition-all px-2.5 py-1.5 flex items-center gap-1.5 flex-shrink-0 cursor-pointer border ${
+                    isDockOpen
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-[0_0_12px_rgba(0,217,255,0.25)]'
+                      : 'bg-white/5 text-white/50 border-white/10 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider hidden sm:inline">Apps</span>
+                </button>
+              )}
 
               {/* Command / Chat Input */}
               <input
@@ -320,6 +351,18 @@ export default function SovereignChatBar({
               >
                 <Send className="w-4 h-4 md:w-5 md:h-5 text-black" />
               </button>
+
+              {/* Drop-Down Out of Sight Button */}
+              {onTogglePromptBar && (
+                <button
+                  type="button"
+                  onClick={onTogglePromptBar}
+                  title="Drop prompt bar down out of sight"
+                  className="rounded-lg transition-all w-8 h-8 md:w-9 md:h-9 flex items-center justify-center flex-shrink-0 cursor-pointer text-white/40 hover:text-cyan-400 hover:bg-white/5"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+              )}
             </form>
           </div>
         </div>
