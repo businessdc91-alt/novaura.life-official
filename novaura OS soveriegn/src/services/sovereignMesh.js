@@ -6,6 +6,7 @@
 import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { admitMeshListing } from './marketplaceListings.js';
+import { isPopoutWindow } from './popoutWindows.js';
 import { sanitizeRichHtml } from './htmlSanitizer.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
@@ -946,7 +947,7 @@ if (typeof window !== 'undefined' && isTauri()) {
       const peer = event.payload;
       if (peer && peer.id) {
         _peersMap.set(peer.id, peer);
-        flushOutboxForPeer(peer.id);
+        if (!isPopoutWindow()) flushOutboxForPeer(peer.id); // queued mail is sent once, by the desktop
         window.dispatchEvent(new CustomEvent('novaura:peer_discovered', { detail: peer }));
         window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
       }
@@ -961,12 +962,17 @@ if (typeof window !== 'undefined' && isTauri()) {
       }
     }).catch(err => console.warn('[SovereignMesh] Peer lost listen note:', err));
 
-    listen('novaura://mesh-packet', (event) => {
-      const packet = event.payload;
-      if (packet) {
-        handleIncomingMeshPacket(packet.packet_type, packet.payload, packet);
-      }
-    }).catch(err => console.warn('[SovereignMesh] Mesh packet listen note:', err));
+    // Only the main window handles incoming packets; pop-out windows get the
+    // resulting UI events through the window bridge (popoutWindows.js), so
+    // nothing (mail, inference jobs, file transfers) is processed twice.
+    if (!isPopoutWindow()) {
+      listen('novaura://mesh-packet', (event) => {
+        const packet = event.payload;
+        if (packet) {
+          handleIncomingMeshPacket(packet.packet_type, packet.payload, packet);
+        }
+      }).catch(err => console.warn('[SovereignMesh] Mesh packet listen note:', err));
+    }
   });
 
   // Pull initial network status from native Rust supervisor
@@ -989,6 +995,7 @@ if (typeof window !== 'undefined' && window.BroadcastChannel) {
   try {
     meshChannel = new BroadcastChannel('novaura_mesh_bus');
     meshChannel.onmessage = (event) => {
+      if (isPopoutWindow()) return; // the main window handles these (see above)
       const data = event.data;
       if (!data || (!data.type && !data.packet_type)) return;
       const pktType = data.packet_type || data.type;

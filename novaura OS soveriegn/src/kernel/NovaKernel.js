@@ -18,6 +18,7 @@ import MemoryMap from './subsystems/MemoryMap.js';
 import PluginRegistry from './subsystems/PluginRegistry.js';
 import Scheduler from './subsystems/Scheduler.js';
 import CrashHandler from './subsystems/CrashHandler.js';
+import { isPopoutWindow } from '../services/popoutWindows.js';
 import LocalModelSubsystem from './subsystems/LocalModelSubsystem.js';
 import NovaAgent from './subsystems/NovaAgent.js';
 import SentinelShield from './subsystems/SentinelShield.js';
@@ -130,7 +131,10 @@ export class NovaKernel {
         this.memory.init(this);
         await this.memory.onReady?.();
         const snapshot = this.memory.get('workspace:snapshot');
-        if (snapshot?.windows?.length) {
+        if (isPopoutWindow()) {
+          // A pop-out window hosts one app; the desktop layout belongs to the main window.
+          this._log(5, 'Pop-out window: desktop workspace left to the main window.');
+        } else if (snapshot?.windows?.length) {
           this._log(5, `Restoring ${snapshot.windows.length} windows from workspace snapshot.`);
           this.memory.restoreWorkspace();
         } else {

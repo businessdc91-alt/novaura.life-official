@@ -1626,6 +1626,14 @@ pub fn run() {
         .manage(mesh_manager.clone())
         // Cybeni previews run on their own origin, isolated from the OS UI (see preview.rs).
         .register_uri_scheme_protocol("cyprev", |_ctx, request| preview::handle(&request))
+        // Pop-out windows (src/services/popoutWindows.js) belong to the desktop:
+        // closing the main window quits the app instead of leaving them orphaned.
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                use tauri::Manager;
+                window.app_handle().exit(0);
+            }
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             mesh_manager.set_app_handle(handle);

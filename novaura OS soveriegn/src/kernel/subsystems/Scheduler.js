@@ -3,6 +3,8 @@
  * Local background tasks, autosave, AI diagnostics, and local mesh heartbeats.
  */
 
+import { isPopoutWindow } from '../../services/popoutWindows.js';
+
 let _taskCounter = 0;
 
 class Scheduler {
@@ -105,10 +107,13 @@ class Scheduler {
   }
 
   _registerSystemTasks() {
-    // Workspace autosave to private cloud DB every 2 min
-    this.schedule('workspace:autosave', () => {
-      if (this._kernel.memory) this._kernel.memory.snapshotWorkspace();
-    }, { interval: 2 * 60_000, tags: ['system', 'workspace'] });
+    // Workspace autosave to private cloud DB every 2 min. Pop-out windows skip it:
+    // their empty window list would overwrite the desktop's saved layout.
+    if (!isPopoutWindow()) {
+      this.schedule('workspace:autosave', () => {
+        if (this._kernel.memory) this._kernel.memory.snapshotWorkspace();
+      }, { interval: 2 * 60_000, tags: ['system', 'workspace'] });
+    }
 
     // AI provider health check every 5 min
     this.schedule('ai:providers:probe', async () => {

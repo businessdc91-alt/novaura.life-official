@@ -877,6 +877,15 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [x] Security fix: peer listings used to be written to the local DB as sent, so any peer could overwrite your own listing or any other by reusing its ID. Now `marketplaceListings.js` admits only publishCreation-shaped IDs, binds each to the signing identity, never replaces local listings, clips fields and drops extras. Tests: 4.
 - [ ] Later: TURN over TLS on 443 for networks that block UDP/odd ports; encrypted save backups; unpublish (the archive already lets a newer signed version replace a listing, so a "removed" version would spread; the client and Marketplace UI don't support it yet).
 
+**Pop-out windows (2026-11-01):**
+- [x] Any app window can pop out into its own native window (title-bar button), opening over the same spot on screen, movable to any monitor; "Back to desktop" returns it. `src/services/popoutWindows.js`, `src/components/PopoutHost.jsx`; `main.jsx` loads either the desktop or a single app (`?popout=<appId>`, props in the URL hash).
+- [x] One owner for shared work: only the main window handles incoming mesh packets, the BroadcastChannel mesh bus and the mesh outbox, so nothing is processed or sent twice. Pop-out kernels skip the workspace restore and the 2-minute layout autosave (it would overwrite the desktop's saved layout).
+- [x] Window bridge (BroadcastChannel): state events (`novaura:*_updated/_changed/...`, theme, graphics) flow between all windows; commands from pop-outs (open a window, open a project) run on the desktop.
+- [x] Opted out (`popout: false`): NovaPhone (live call), NovaSocial (live feed cache), AI Lounge (room presence/hosting).
+- [x] Closing the main window quits the app (lib.rs `on_window_event`), so pop-outs never linger. Capabilities: `popout-*` windows, create-webview-window, window close.
+- [x] Tests: 4 unit (URL parsing, bridge rules) + 13-check run against the real Tauri app over WebView2 DevTools (isolated profile): button present, phone opted out, native window created, Files leaves the desktop, pop-out renders with props, no desktop in the pop-out, events both ways, command opens an app on the desktop, back to desktop. No page errors.
+- [ ] Unsaved in-memory state (an unsaved draft, playing media) does not move with the window; apps that save to the vault are unaffected. Next: drag files between a pop-out and the desktop; restore pop-outs on next launch.
+
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 
 **Environment gotcha:** this machine's shell has `NODE_ENV=production`, so a plain `npm install` silently skips devDependencies (vite, oxlint, @tauri-apps/cli). Use `npm install --include=dev`.

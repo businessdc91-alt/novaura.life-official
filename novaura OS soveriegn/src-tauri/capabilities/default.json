@@ -3,11 +3,14 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": [
-    "main"
+    "main",
+    "popout-*"
   ],
   "permissions": [
     "core:default",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close"
   ]
 }

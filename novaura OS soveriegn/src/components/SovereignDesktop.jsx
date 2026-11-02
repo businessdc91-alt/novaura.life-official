@@ -19,6 +19,7 @@ import '../services/aiLoungeService';
 import '../services/forge/userApps';
 // Asks the relay for marketplace listings published while this node was offline.
 import '../services/meshArchiveSync';
+import { isTauriApp, popOutApp } from '../services/popoutWindows';
 import { callService, CallState } from '../services/sovereignCallService';
 import { Phone, PhoneCall, PhoneOff, Video, ChevronUp, ChevronDown, Sparkles } from 'lucide-react';
 import SovereignLeftSidebar from './SovereignLeftSidebar';
@@ -272,6 +273,19 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
     setFocusedId(prev => prev === id ? null : prev);
   }, [kernel]);
 
+  // Moves an app into its own native window (any monitor), then off the desktop.
+  // Apps whose live state can't be split across windows opt out with popout: false.
+  const handlePopOut = useCallback((win, appDef, rect) => {
+    popOutApp(appDef.id, { props: win.props, title: appDef.title, rect })
+      .then(() => handleCloseWindow(win.id))
+      .catch((err) => {
+        console.warn('[Desktop] Pop-out failed:', err);
+        window.dispatchEvent(new CustomEvent('novaura:mesh_toast', {
+          detail: { type: 'info', title: 'Could not pop out', message: String(err?.message || err) },
+        }));
+      });
+  }, [handleCloseWindow]);
+
   const handleFocusWindow = useCallback((id) => {
     if (focusedId === id) return;
     setFocusedId(id);
@@ -359,6 +373,7 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
               onFocus={() => handleFocusWindow(win.id)}
               onClose={() => handleCloseWindow(win.id)}
               onMinimize={() => handleMinimizeWindow(win.id)}
+              onPopOut={isTauriApp() && appDef.popout !== false ? (rect) => handlePopOut(win, appDef, rect) : null}
             >
               <KernelErrorBoundary windowId={win.id} appType={win.type || win.appType}>
                 <Suspense fallback={<WindowLoading color={appDef.color} />}>

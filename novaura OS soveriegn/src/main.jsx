@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
+import { isPopoutWindow, startWindowBridge } from './services/popoutWindows.js'
 
 // Proactively unregister any legacy service workers or stale caches from past web sessions
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -19,8 +19,15 @@ if (typeof window !== 'undefined' && 'caches' in window) {
   }).catch(() => {});
 }
 
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// Relays UI events between the desktop and any pop-out windows.
+startWindowBridge();
+
+// A pop-out window loads just its one app, not the desktop and its boot-time services.
+const root = isPopoutWindow() ? import('./components/PopoutHost.jsx') : import('./App.jsx');
+root.then(({ default: Root }) => {
+  createRoot(document.getElementById('root')).render(
+    <StrictMode>
+      <Root />
+    </StrictMode>,
+  )
+})

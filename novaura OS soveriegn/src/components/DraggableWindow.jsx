@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { Maximize2, Minimize2, Minus, X, GripHorizontal } from 'lucide-react';
+import { Maximize2, Minimize2, Minus, X, GripHorizontal, ExternalLink } from 'lucide-react';
 
 const MIN_WIDTH = 340;
 const MIN_HEIGHT = 240;
@@ -24,6 +24,7 @@ export default function DraggableWindow({
   onMinimize,
   onClose,
   onFocus,
+  onPopOut = null,
   focused = false,
   titleColor = '#22d3ee',
   borderStyle = null,
@@ -165,6 +166,17 @@ export default function DraggableWindow({
 
           {/* Window Action Controls */}
           <div className="flex items-center gap-1 shrink-0 no-drag">
+            {onPopOut && (
+              <button
+                type="button"
+                title="Pop out into its own window (any monitor)"
+                aria-label={`Pop out ${title}`}
+                onClick={() => onPopOut(windowRef.current?.getBoundingClientRect() || null)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-violet-300 hover:bg-violet-400/10 transition-colors cursor-pointer"
+              >
+                <ExternalLink size={13} />
+              </button>
+            )}
             <button
               type="button"
               title="Minimize"

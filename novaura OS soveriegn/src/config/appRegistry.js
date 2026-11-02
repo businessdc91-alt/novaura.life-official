@@ -151,6 +151,7 @@ export const APP_REGISTRY = [
     title: 'NovaPhone — Sovereign Telecom & P2P Video',
     component: NovaPhoneWindow,
     defaultSize: { width: 940, height: 620 },
+    popout: false, // the live call lives in the desktop window's call service
   },
   {
     id: 'novamail',
@@ -171,6 +172,7 @@ export const APP_REGISTRY = [
     title: 'NovaSocial — Sovereign Feed & Media',
     component: NovaSocialWindow,
     defaultSize: { width: 940, height: 620 },
+    popout: false, // the live feed cache is updated only in the desktop window
   },
   {
     id: 'ailounge',
@@ -181,6 +183,7 @@ export const APP_REGISTRY = [
     title: 'AI Lounge — Rooms & Inference Exchange',
     component: AISocialLoungeWindow,
     defaultSize: { width: 920, height: 600 },
+    popout: false, // room presence and hosting run in the desktop window
   },
   {
     id: 'sentinel',
