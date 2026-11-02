@@ -275,8 +275,10 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
 
   // Moves an app into its own native window (any monitor), then off the desktop.
   // Apps whose live state can't be split across windows opt out with popout: false.
-  const handlePopOut = useCallback((win, appDef, rect) => {
-    popOutApp(appDef.id, { props: win.props, title: appDef.title, rect })
+  // From the title-bar button (rect) or by dragging the window past the edge
+  // of the desktop (drag: { screenX, screenY, grabX, stillHeld }).
+  const handlePopOut = useCallback((win, appDef, rect, drag = null) => {
+    popOutApp(appDef.id, { props: win.props, title: appDef.title, rect, at: drag, stillHeld: drag?.stillHeld })
       .then(() => handleCloseWindow(win.id))
       .catch((err) => {
         console.warn('[Desktop] Pop-out failed:', err);
@@ -373,7 +375,7 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
               onFocus={() => handleFocusWindow(win.id)}
               onClose={() => handleCloseWindow(win.id)}
               onMinimize={() => handleMinimizeWindow(win.id)}
-              onPopOut={isTauriApp() && appDef.popout !== false ? (rect) => handlePopOut(win, appDef, rect) : null}
+              onPopOut={isTauriApp() && appDef.popout !== false ? (rect, drag) => handlePopOut(win, appDef, rect, drag) : null}
             >
               <KernelErrorBoundary windowId={win.id} appType={win.type || win.appType}>
                 <Suspense fallback={<WindowLoading color={appDef.color} />}>

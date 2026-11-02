@@ -3,6 +3,8 @@ import { Maximize2, Minimize2, Minus, X, GripHorizontal, ExternalLink } from 'lu
 
 const MIN_WIDTH = 340;
 const MIN_HEIGHT = 240;
+// How far past the edge of the app a dragged window goes before it pops out.
+const POP_OUT_MARGIN = 24;
 
 const RGB_BORDER_STYLES = [
   { border: 'rgb-border-rainbow', glow: 'rgb-glow-rainbow' },
@@ -31,6 +33,7 @@ export default function DraggableWindow({
 }) {
   const windowRef = useRef(null);
   const pointerAction = useRef(null);
+  const buttonHeld = useRef(false);
   const [position, setPosition] = useState({ x: 80 + initialOffset, y: 46 + initialOffset });
   const [size, setSize] = useState(defaultSize);
   const [maximized, setMaximized] = useState(false);
@@ -43,11 +46,30 @@ export default function DraggableWindow({
     return RGB_BORDER_STYLES[charCodeSum % RGB_BORDER_STYLES.length];
   }, [title, borderStyle]);
 
+  // Read inside the pointer handlers, which are registered once.
+  const onPopOutRef = useRef(onPopOut);
+  onPopOutRef.current = onPopOut;
+
   useEffect(() => {
     const handlePointerMove = (event) => {
       const action = pointerAction.current;
       if (!action) return;
       if (action.type === 'drag') {
+        // Dragged past the edge of the app: becomes a native window under the
+        // cursor, which keeps following the mouse onto any monitor.
+        const outside = event.clientX < -POP_OUT_MARGIN || event.clientY < -POP_OUT_MARGIN
+          || event.clientX > window.innerWidth + POP_OUT_MARGIN || event.clientY > window.innerHeight + POP_OUT_MARGIN;
+        if (outside && onPopOutRef.current) {
+          pointerAction.current = null;
+          buttonHeld.current = true;
+          onPopOutRef.current(windowRef.current?.getBoundingClientRect() || null, {
+            screenX: event.screenX,
+            screenY: event.screenY,
+            grabX: action.grabX,
+            stillHeld: () => buttonHeld.current,
+          });
+          return;
+        }
         // Windows may hang off the left/right/bottom edges; enough of the title
         // bar always stays on the desktop to grab it again.
         const workspace = windowRef.current?.parentElement;
@@ -68,6 +90,7 @@ export default function DraggableWindow({
     };
     const handlePointerUp = () => {
       pointerAction.current = null;
+      buttonHeld.current = false;
     };
 
     window.addEventListener('pointermove', handlePointerMove);
@@ -81,11 +104,16 @@ export default function DraggableWindow({
   const startDrag = (event) => {
     if (maximized || event.target.closest('button')) return;
     event.preventDefault();
+    // Keeps pointer events coming when the cursor leaves the app window.
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* not supported */ }
     onFocus?.();
     pointerAction.current = {
       type: 'drag',
       offsetX: event.clientX - position.x,
       offsetY: event.clientY - position.y,
+      // Where in the window it was grabbed (position is relative to the desktop
+      // canvas, which starts after the sidebar), for a dragged-out pop-out.
+      grabX: event.clientX - (windowRef.current?.getBoundingClientRect().left ?? position.x),
     };
   };
 

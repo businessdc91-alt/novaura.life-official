@@ -52,19 +52,31 @@ function serializableProps(props) {
   }
 }
 
+// Where the cursor sits in a new window's native title bar when it is dragged
+// out of the desktop.
+const TITLE_BAR_GRAB_Y = 14;
+
 /**
  * Opens `appId` in its own native window. `rect` is the in-desktop window's
  * bounding box in CSS pixels; the native window opens over the same spot on
  * screen. Resolves once the window exists.
+ *
+ * Dragged out of the desktop: `at` = { screenX, screenY, grabX } puts the new
+ * window under the cursor, and when `stillHeld()` is true once it exists, the
+ * window keeps following the mouse (native move) until the button is released.
  */
-export async function popOutApp(appId, { props = {}, title = appId, rect = null, size = null } = {}) {
+export async function popOutApp(appId, { props = {}, title = appId, rect = null, size = null, at = null, stillHeld = null } = {}) {
   const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
 
   const width = Math.round(rect?.width || size?.width || 900);
   const height = Math.round(rect?.height || size?.height || 620);
   const geometry = { width, height, minWidth: 360, minHeight: 260 };
-  if (rect) {
+  if (at) {
+    // Screen coordinates from pointer events are logical pixels, like Tauri's.
+    const grabX = Math.max(20, Math.min(width - 140, at.grabX ?? width / 2));
+    geometry.x = Math.round(at.screenX - grabX);
+    geometry.y = Math.round(at.screenY - TITLE_BAR_GRAB_Y);  } else if (rect) {
     try {
       const main = getCurrentWindow();
       const scale = await main.scaleFactor();
@@ -96,6 +108,11 @@ export async function popOutApp(appId, { props = {}, title = appId, rect = null,
     win.once('tauri://created', resolve);
     win.once('tauri://error', (e) => reject(new Error(String(e?.payload || 'Could not open the window'))));
   });
+  // Only while the button is still down: a native move started after release
+  // would leave the window stuck to the cursor until the next click.
+  if (stillHeld?.()) {
+    await win.startDragging().catch((err) => console.warn('[Popout] Could not continue the drag:', err));
+  }
   return label;
 }
 
