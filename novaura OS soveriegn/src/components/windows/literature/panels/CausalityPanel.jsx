@@ -2,19 +2,25 @@
 // Ported & Enhanced from WebOS into Sovereign OS.
 // Visualizes cause-and-effect plot connections and downstream ripples without external graphing dependencies.
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { storyTimeline } from '../engines/StoryTimeline.js';
 import { GitCommit, Zap, AlertTriangle, Plus, RefreshCw, ArrowRight, Eye, ShieldAlert, Sparkles } from 'lucide-react';
 
 export default function CausalityPanel({ activeDocContent = '', activeDocName = '' }) {
-  const [nodes, setNodes] = useState([
-    { id: 'beat-1', title: 'Stolen Artifact from Sanctuary', chapter: 'Chapter 1', type: 'trigger', x: 60, y: 80, consequences: ['beat-2', 'beat-3'] },
-    { id: 'beat-2', title: 'Council Discovers the Breach', chapter: 'Chapter 2', type: 'reaction', x: 260, y: 50, consequences: ['beat-4'] },
-    { id: 'beat-3', title: 'Assassin Dispatched on Trail', chapter: 'Chapter 2', type: 'threat', x: 260, y: 150, consequences: ['beat-4'] },
-    { id: 'beat-4', title: 'Ambush at Obsidian Pass', chapter: 'Chapter 4', type: 'climax', x: 480, y: 100, consequences: ['beat-5'] },
-    { id: 'beat-5', title: 'Secret Alliance Forged in Defeat', chapter: 'Chapter 6', type: 'resolution', x: 700, y: 100, consequences: [] },
-  ]);
+  // Beats are saved with the story bible (storyTimeline.causality).
+  const [nodes, setNodesState] = useState(() => [...storyTimeline.causality]);
+  useEffect(() => {
+    const sync = () => setNodesState([...storyTimeline.causality]);
+    sync();
+    window.addEventListener('novaura:timeline_updated', sync);
+    return () => window.removeEventListener('novaura:timeline_updated', sync);
+  }, []);
+  const setNodes = (update) => {
+    const next = typeof update === 'function' ? update(storyTimeline.causality) : update;
+    storyTimeline.setCausality(next);
+  };
 
-  const [selectedNodeId, setSelectedNodeId] = useState('beat-1');
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [newTitle, setNewTitle] = useState('');
   const [newChapter, setNewChapter] = useState('Chapter 1');
   const [newType, setNewType] = useState('reaction');
@@ -137,6 +143,11 @@ export default function CausalityPanel({ activeDocContent = '', activeDocName = 
 
       {/* SVG Dependency Graph Canvas */}
       <div style={{ flex: 1, position: 'relative', overflow: 'auto', backgroundColor: '#080812' }}>
+        {nodes.length === 0 && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.72rem' }}>
+            No plot beats yet. Add a beat, then link it to the beats it causes.
+          </div>
+        )}
         <svg style={{ width: '850px', height: '240px', display: 'block' }}>
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">

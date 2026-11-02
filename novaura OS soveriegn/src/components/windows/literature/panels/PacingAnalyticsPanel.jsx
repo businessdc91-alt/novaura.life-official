@@ -97,8 +97,13 @@ export default function PacingAnalyticsPanel({ activeDocContent }) {
               </div>
 
               {/* Sparkline / Bar Graph */}
+              {!stats.tensionCurve?.length ? (
+                <div style={{ fontSize: '0.66rem', color: '#94a3b8', lineHeight: 1.4 }}>
+                  No tension curve: {stats.aiNote || 'the AI analysis did not run.'}
+                </div>
+              ) : (
               <div style={{ height: '70px', display: 'flex', alignItems: 'flex-end', gap: '8px', padding: '0 4px', backgroundColor: '#090d16', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.04)' }}>
-                {(stats.tensionCurve || [30, 50, 75, 90, 60]).map((val, idx) => (
+                {stats.tensionCurve.map((val, idx) => (
                   <div key={idx} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
                     <span style={{ fontSize: '0.55rem', color: '#64748b', marginBottom: '2px' }}>{val}%</span>
                     <div
@@ -113,6 +118,7 @@ export default function PacingAnalyticsPanel({ activeDocContent }) {
                   </div>
                 ))}
               </div>
+              )}
             </div>
 
             {/* Editor Suggestions */}

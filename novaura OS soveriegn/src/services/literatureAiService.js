@@ -1,15 +1,20 @@
-// literatureAiService.js — Universal Sovereign Literary Intelligence Engine
-// Integrates Local Runtimes (Ollama :11434, LM Studio :1234), Dual Inference (Nova & Aura),
-// Native Cloud Frontier BYOK (Google Gemini, Vertex AI, Anthropic Claude, OpenAI, Moonshot Kimi, DeepSeek),
-// and the Sovereign Persistent RAG Memory Vault for authentic co-authorship.
+// literatureAiService.js — The Literature IDE's AI calls.
+//
+// Local first: by default ("auto") every request runs on a model on this
+// machine (LM Studio, then Ollama) through the native localModels helper, so
+// the manuscript never leaves the computer. A cloud model (bring-your-own key)
+// is used only when the author picks one in the Co-Author model menu; there is
+// no silent fallback from local to cloud.
 
 import { kernel } from '../kernel/NovaKernel.js';
 import { db } from '../database/sovereignDatabase.js';
-import { PROVIDERS, getProvider, providerChat, modelSetting } from './cloudProviders.js';
-import { dualInference } from './dualInferenceService.js';
+import { getProvider, providerChat, modelSetting, PROVIDERS } from './cloudProviders.js';
+import { LOCAL_RUNTIMES, discoverLocalModels, runLocalChat, toModelRef } from './localModels.js';
 import { buildContinuityContext, rememberMemory, detectPotentialMemories } from './sovereignRagService.js';
 
 const INFERENCE_CONFIG_KEY = 'novaura_literature_inference_config';
+const CHAT_HISTORY_TURNS = 12;
+const CHAT_TURN_CHARS = 4000;
 
 /**
  * Retrieve active literature inference configuration
@@ -20,7 +25,7 @@ export function getActiveInferenceConfig() {
     if (raw) return JSON.parse(raw);
   } catch {}
   return {
-    provider: 'auto', // 'auto' | 'ollama' | 'lmstudio' | 'gemini' | 'claude' | 'openai' | 'byok'
+    provider: 'auto', // 'auto' | 'lmstudio' | 'ollama' | a cloud provider id from cloudProviders.js
     model: '',
     temperature: 0.75,
   };
@@ -39,13 +44,11 @@ export function setActiveInferenceConfig(config) {
 }
 
 /**
- * Retrieve API key from Kernel cache, Dexie Vault, or environment
+ * Retrieve an API key (or saved setting) from the local vault.
  */
 export async function getVaultKey(name) {
-  if (kernel?.ai?.getKey) {
-    const k = kernel.ai.getKey(name);
-    if (k) return k;
-  }
+  const cached = kernel?.ai?.getKey?.(name);
+  if (cached) return cached;
   try {
     const rec = await db.vault.get(name);
     if (rec?.value) return rec.value;
@@ -53,48 +56,25 @@ export async function getVaultKey(name) {
     const match = all.find(r => r.key?.toLowerCase() === name.toLowerCase() || r.id?.toLowerCase() === name.toLowerCase());
     if (match?.value) return match.value;
   } catch {}
-  if (name === 'gemini') return import.meta.env.VITE_GEMINI_API_KEY || '';
-  if (name === 'openrouter') return import.meta.env.VITE_OPENROUTER_API_KEY || '';
   if (name === 'claude') return getVaultKey('anthropic');
   return '';
 }
 
 /**
- * Enumerate available providers and locally running or key-backed models
+ * Local models running on this machine, and cloud providers with a saved key.
  */
 export async function getAvailableInferenceRosters() {
-  const roster = {
-    local: [],
-    cloud: [],
-  };
+  const roster = { local: [], cloud: [] };
 
-  // 1. Probe Ollama
-  try {
-    const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1200) });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.models)) {
-        for (const m of data.models) {
-          roster.local.push({ provider: 'ollama', model: m.name, label: `Ollama: ${m.name}` });
-        }
-      }
+  const runtimes = await discoverLocalModels().catch(() => []);
+  for (const rt of runtimes) {
+    for (const ref of rt.models) {
+      const model = ref.slice(rt.runtime.length + 1);
+      const loaded = rt.loaded.includes(ref);
+      roster.local.push({ provider: rt.runtime, model, label: `${rt.label}: ${model}${loaded ? ' (loaded)' : ''}` });
     }
-  } catch {}
+  }
 
-  // 2. Probe LM Studio
-  try {
-    const res = await fetch('http://localhost:1234/v1/models', { signal: AbortSignal.timeout(1200) });
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.data)) {
-        for (const m of data.data) {
-          roster.local.push({ provider: 'lmstudio', model: m.id, label: `LM Studio: ${m.id}` });
-        }
-      }
-    }
-  } catch {}
-
-  // 3. Inspect Cloud Providers with active Vault keys
   for (const p of PROVIDERS) {
     const key = await getVaultKey(p.id);
     if (key) {
@@ -111,169 +91,95 @@ export async function getAvailableInferenceRosters() {
   return roster;
 }
 
+// The local model "auto" uses: a loaded one first (it answers fastest), LM
+// Studio before Ollama. Cached briefly so typing-speed features don't probe on
+// every call.
+let _localPick = { at: 0, ref: null, runtime: null };
+const LOCAL_PICK_TTL_MS = 30000;
+
+async function pickLocalModel(runtime = null) {
+  if (Date.now() - _localPick.at < LOCAL_PICK_TTL_MS && _localPick.runtime === runtime) return _localPick.ref;
+  const runtimes = (await discoverLocalModels().catch(() => []))
+    .filter(rt => rt.online && (!runtime || rt.runtime === runtime));
+  const ref = runtimes.flatMap(rt => rt.loaded)[0] || runtimes.flatMap(rt => rt.models)[0] || null;
+  _localPick = { at: Date.now(), ref, runtime };
+  return ref;
+}
+
+/** Whether a local model is available right now (cached, cheap to call often). */
+export async function hasLocalModel() {
+  return Boolean(await pickLocalModel());
+}
+
+// providerChat reads keys synchronously, so the ones it may need are loaded first.
+async function cloudKeyLookup(provider) {
+  const values = {};
+  for (const name of [provider, modelSetting(provider), 'byok_endpoint', 'bedrock_region']) {
+    values[name] = await getVaultKey(name);
+  }
+  return (name) => values[name] || '';
+}
+
 /**
- * Universal Multi-Tier Inference Dispatcher
- * Priority: Configured Choice -> Ollama -> LM Studio -> Dual Inference Aura -> Cloud Providers -> Kernel AI
+ * Run one request on the author's chosen model.
+ *
+ * queryUniversalInference(prompt, systemInstruction, options) or
+ * queryUniversalInference({ prompt, systemPrompt, ...options }).
+ * options: provider, model, temperature, maxTokens, history (earlier
+ * [{role, content}] turns), localOnly (never use a cloud model).
  */
 export async function queryUniversalInference(prompt, systemInstruction = 'You are a master creative literary co-author.', options = {}) {
+  if (prompt && typeof prompt === 'object') {
+    const { prompt: text, systemPrompt, systemInstruction: sys, ...rest } = prompt;
+    return queryUniversalInference(text, systemPrompt || sys || systemInstruction, rest);
+  }
+
   const config = getActiveInferenceConfig();
-  const targetProvider = options.provider || config.provider || 'auto';
+  let provider = options.provider || config.provider || 'auto';
+  let model = options.model ?? (options.provider ? '' : config.model);
+  if (options.localOnly && !LOCAL_RUNTIMES[provider]) {
+    provider = 'auto';
+    model = '';
+  }
   const temperature = options.temperature ?? config.temperature ?? 0.75;
   const maxTokens = options.maxTokens || 1024;
-
   const messages = [
     { role: 'system', content: systemInstruction },
-    { role: 'user', content: prompt }
+    ...(options.history || []),
+    { role: 'user', content: String(prompt || '') },
   ];
 
-  // Specific Cloud Provider requested or configured
-  if (targetProvider !== 'auto' && targetProvider !== 'ollama' && targetProvider !== 'lmstudio') {
-    const cloudKey = await getVaultKey(targetProvider);
-    if (cloudKey) {
-      try {
-        const text = await providerChat(targetProvider, messages, (name) => {
-          if (name === targetProvider) return cloudKey;
-          return localStorage.getItem(`novaura_${name}`) || '';
-        }, {
-          model: options.model || config.model,
-          temperature,
-          maxTokens,
-          jsonSchema: options.jsonSchema
-        });
-        if (text && text.trim()) return text.trim();
-      } catch (err) {
-        console.warn(`[LiteratureAI] Direct provider ${targetProvider} failed:`, err);
-        if (options.strictProvider) throw err;
-      }
+  if (provider === 'auto' || LOCAL_RUNTIMES[provider]) {
+    const runtime = provider === 'auto' ? null : provider;
+    const ref = model && runtime ? toModelRef(runtime, model) : await pickLocalModel(runtime);
+    if (!ref) {
+      const where = runtime ? LOCAL_RUNTIMES[runtime].label : 'LM Studio or Ollama';
+      throw new Error(`No local model is running. Start ${where} and load a model, or choose a cloud model in the Co-Author model menu.`);
     }
+    const text = await runLocalChat(ref, messages, { maxTokens, temperature, jsonSchema: options.jsonSchema });
+    if (!text) throw new Error('The local model returned an empty reply.');
+    return text;
   }
 
-  // Explicit Ollama requested
-  if (targetProvider === 'ollama') {
-    const out = await queryOllamaDirect(prompt, systemInstruction, options.model || config.model, temperature, maxTokens);
-    if (out) return out;
-  }
-
-  // Explicit LM Studio requested
-  if (targetProvider === 'lmstudio') {
-    const out = await queryLmStudioDirect(prompt, systemInstruction, options.model || config.model, temperature, maxTokens);
-    if (out) return out;
-  }
-
-  // AUTO FALLBACK CASCADE:
-  // 1. Try Ollama (:11434)
-  const ollamaRes = await queryOllamaDirect(prompt, systemInstruction, config.model, temperature, maxTokens);
-  if (ollamaRes) return ollamaRes;
-
-  // 2. Try LM Studio (:1234)
-  const lmRes = await queryLmStudioDirect(prompt, systemInstruction, config.model, temperature, maxTokens);
-  if (lmRes) return lmRes;
-
-  // 3. Try Dual Inference Aura Creative Engine
-  try {
-    const auraRes = await dualInference.queryAura(messages, { temperature, max_tokens: maxTokens });
-    if (auraRes && auraRes.trim()) return auraRes.trim();
-  } catch {}
-
-  // 4. Try Google Gemini BYOK
-  const geminiKey = await getVaultKey('gemini');
-  if (geminiKey) {
-    try {
-      const geminiModel = options.model || (await getVaultKey(modelSetting('gemini'))) || 'gemini-1.5-pro';
-      const text = await providerChat('gemini', messages, () => geminiKey, {
-        model: geminiModel,
-        temperature,
-        maxTokens,
-        jsonSchema: options.jsonSchema
-      });
-      if (text && text.trim()) return text.trim();
-    } catch (err) {
-      console.warn('[LiteratureAI] Gemini fallback failed:', err);
-    }
-  }
-
-  // 5. Try Anthropic Claude BYOK
-  const claudeKey = await getVaultKey('claude');
-  if (claudeKey) {
-    try {
-      const claudeModel = options.model || (await getVaultKey(modelSetting('claude'))) || 'claude-3-5-sonnet-20241022';
-      const text = await providerChat('claude', messages, () => claudeKey, {
-        model: claudeModel,
-        temperature,
-        maxTokens,
-        jsonSchema: options.jsonSchema
-      });
-      if (text && text.trim()) return text.trim();
-    } catch (err) {
-      console.warn('[LiteratureAI] Claude fallback failed:', err);
-    }
-  }
-
-  // 6. Try Kernel AI Universal Chat Subsystem
-  try {
-    if (kernel?.ai?.chat) {
-      const response = await kernel.ai.chat(messages, {
-        persona: 'cybeni',
-        temperature,
-        maxTokens,
-      });
-      if (response && response.trim()) return response.trim();
-    }
-  } catch {}
-
-  throw new Error('Inference Offline: All configured engines (Local Ollama :11434, LM Studio :1234, Gemini, Claude, and Kernel BYOK) are offline or missing API keys. Start your local model server or configure a key in Settings.');
+  // A cloud model the author chose explicitly.
+  const def = getProvider(provider);
+  if (!def) throw new Error(`Unknown model provider "${provider}".`);
+  const getKey = await cloudKeyLookup(provider);
+  if (!getKey(provider)) throw new Error(`No API key saved for ${def.label}. Add one in Settings, or choose a local model.`);
+  const text = await providerChat(provider, messages, getKey, { model: model || undefined, temperature, maxTokens, jsonSchema: options.jsonSchema });
+  if (!text || !text.trim()) throw new Error(`${def.label} returned an empty reply.`);
+  return text.trim();
 }
 
-async function queryOllamaDirect(prompt, systemInstruction, modelTag, temperature, maxTokens) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch('http://localhost:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelTag || 'default',
-        prompt: `${systemInstruction}\n\n${prompt}`,
-        stream: false,
-        options: { temperature: temperature || 0.75, max_tokens: maxTokens || 1024 }
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.response) return data.response.trim();
-    }
-  } catch {}
-  return null;
-}
-
-async function queryLmStudioDirect(prompt, systemInstruction, modelTag, temperature, maxTokens) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch('http://localhost:1234/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelTag || undefined,
-        messages: [
-          { role: 'system', content: systemInstruction },
-          { role: 'user', content: prompt }
-        ],
-        temperature: temperature || 0.7,
-        max_tokens: maxTokens || 1024
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (content) return content.trim();
-    }
-  } catch {}
-  return null;
+/** Pulls the first JSON object or array out of a model reply (fences, prose around it). */
+export function parseJsonReply(text) {
+  const raw = String(text || '').replace(/```(?:json)?/gi, '').trim();
+  const starts = [raw.indexOf('{'), raw.indexOf('[')].filter(i => i >= 0);
+  if (!starts.length) throw new Error('The model did not return JSON.');
+  const start = Math.min(...starts);
+  const end = Math.max(raw.lastIndexOf('}'), raw.lastIndexOf(']'));
+  if (end <= start) throw new Error('The model did not return JSON.');
+  return JSON.parse(raw.slice(start, end + 1));
 }
 
 // ── 1. Ghostwriter Inline Prediction ────────────────────────────────────────
@@ -284,8 +190,11 @@ export async function predictNextPhrase(precedingText) {
 
   const prompt = `Based on the following manuscript passage, write ONLY the next sentence (maximum 12-18 words) that continues the scene naturally. Do not include quotes, markdown, or pleasantries.\n\nPASSAGE:\n"${words}"`;
   
+  // Runs on every pause in typing, so it stays on this machine and is skipped
+  // when no local model is up.
+  if (!(await hasLocalModel())) return null;
   try {
-    const aiOutput = await queryUniversalInference(prompt, 'You are an intuitive literary ghostwriter predicting the author\'s next sentence.', { maxTokens: 60 });
+    const aiOutput = await queryUniversalInference(prompt, 'You are an intuitive literary ghostwriter predicting the author\'s next sentence.', { maxTokens: 60, localOnly: true });
     if (aiOutput) {
       return aiOutput.replace(/^["']|["']$/g, '').trim();
     }
@@ -352,16 +261,17 @@ GUIDELINES:
 - If writing prose, format clearly so the author can easily insert it into the manuscript.
 - Be concise, direct, and collaborative. Avoid robotic pleasantries.`;
 
-  const prompt = lastUserMsg;
-  const conversationMessages = [
-    { role: 'system', content: systemPrompt },
-    ...messages.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-    { role: 'user', content: prompt }
-  ];
+  // Earlier turns, so the co-author remembers the conversation.
+  const history = messages.slice(0, -1)
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+    .slice(-CHAT_HISTORY_TURNS)
+    .map(m => ({ role: m.role, content: String(m.content).slice(0, CHAT_TURN_CHARS) }));
+  while (history[0]?.role === 'assistant') history.shift();
 
-  const responseText = await queryUniversalInference(prompt, systemPrompt, {
+  const responseText = await queryUniversalInference(lastUserMsg, systemPrompt, {
     provider,
     model,
+    history,
     maxTokens: 1500,
   });
 
@@ -434,8 +344,7 @@ Return JSON with this exact shape:
   const aiOutput = await queryUniversalInference(prompt, 'You are an expert story consultant.', { maxTokens: 700 });
   if (aiOutput) {
     try {
-      const clean = aiOutput.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(clean);
+      const parsed = parseJsonReply(aiOutput);
       if (Array.isArray(parsed) && parsed.length >= 3) return parsed;
     } catch {}
   }
@@ -511,8 +420,7 @@ Output JSON in this format:
   const aiOutput = await queryUniversalInference(prompt, 'You are an award-winning novelist and master worldbuilder.', { maxTokens: 2000 });
   if (aiOutput) {
     try {
-      const clean = aiOutput.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(clean);
+      const parsed = parseJsonReply(aiOutput);
       if (parsed && parsed.title && parsed.chapter1Prose) return parsed;
     } catch {}
   }
@@ -555,8 +463,9 @@ export async function analyzePacingAndTension({ text }) {
       sentenceCount: 0,
       averageSentenceLength: 0,
       dialogueRatio: 0,
-      pacingScore: 'Moderate',
-      tensionCurve: [50, 50, 50],
+      pacingScore: 'Not enough text',
+      tensionCurve: [],
+      aiNote: 'add more prose first.',
       suggestions: ['Add more prose to evaluate narrative cadence.']
     };
   }
@@ -588,26 +497,31 @@ Return JSON:
   "suggestions": ["Suggestion 1", "Suggestion 2"]
 }`;
 
+  // Counted locally, so these are real even when the AI part fails.
+  const localPace = avgLen > 22 ? 'Slow / Descriptive' : avgLen < 11 ? 'Fast / Punchy' : 'Balanced';
   try {
     const res = await queryUniversalInference(prompt, 'You are an expert literary pacing editor.', { maxTokens: 400 });
-    const cleanJson = res.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleanJson);
+    const parsed = parseJsonReply(res);
+    const curve = (Array.isArray(parsed.tensionCurve) ? parsed.tensionCurve : [])
+      .map(Number).filter(Number.isFinite).map(v => Math.max(0, Math.min(100, Math.round(v)))).slice(0, 12);
     return {
       sentenceCount: sentences.length,
       averageSentenceLength: avgLen,
       dialogueRatio,
-      pacingScore: parsed.pacingSpeed || 'Balanced',
-      tensionCurve: Array.isArray(parsed.tensionCurve) ? parsed.tensionCurve : [40, 60, 80],
-      suggestions: parsed.suggestions || []
+      pacingScore: String(parsed.pacingSpeed || localPace).slice(0, 40),
+      tensionCurve: curve,
+      aiNote: curve.length ? '' : 'the model did not return one.',
+      suggestions: (Array.isArray(parsed.suggestions) ? parsed.suggestions : []).map(String).slice(0, 5),
     };
-  } catch {
+  } catch (err) {
     return {
       sentenceCount: sentences.length,
       averageSentenceLength: avgLen,
       dialogueRatio,
-      pacingScore: avgLen > 22 ? 'Slow / Descriptive' : avgLen < 11 ? 'Fast / Punchy' : 'Balanced',
-      tensionCurve: [35, 50, 75, 90, 65],
-      suggestions: ['Sentence length average is healthy. Ensure dialogue breaks up heavy descriptive passages.']
+      pacingScore: localPace,
+      tensionCurve: [],
+      aiNote: err.message || 'the AI analysis failed.',
+      suggestions: [],
     };
   }
 }
@@ -637,14 +551,23 @@ Return JSON:
 
   const res = await queryUniversalInference(prompt, 'You are a meticulous literary fact-checker and continuity supervisor.', { maxTokens: 500 });
   try {
-    const clean = res.replace(/```json|```/g, '').trim();
-    return JSON.parse(clean);
-  } catch {
+    const parsed = parseJsonReply(res);
+    const status = String(parsed.status || '').toUpperCase();
+    if (!['VERIFIED', 'QUESTIONABLE', 'CONTRADICTS_CANON'].includes(status)) throw new Error('unknown status');
+    const confidence = Number(parsed.confidence);
     return {
-      status: 'VERIFIED',
-      confidence: 85,
-      explanation: 'Plausible within narrative context.',
-      sources: ['Internal consistency audit', 'Standard literary conventions']
+      status,
+      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(100, Math.round(confidence))) : null,
+      explanation: String(parsed.explanation || '').slice(0, 600),
+      sources: (Array.isArray(parsed.sources) ? parsed.sources : []).map(String).slice(0, 4),
+    };
+  } catch {
+    // Never report a claim as checked when the answer couldn't be read.
+    return {
+      status: 'UNVERIFIED',
+      confidence: null,
+      explanation: 'The model\'s answer could not be read, so this claim was not checked. Try again or pick another model.',
+      sources: [],
     };
   }
 }

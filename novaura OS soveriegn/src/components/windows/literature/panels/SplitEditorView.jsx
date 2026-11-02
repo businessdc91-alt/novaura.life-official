@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import CodexPanel from './CodexPanel.jsx';
 import TimelinePanel from './TimelinePanel.jsx';
+import { sanitizeRichHtml } from '../../../../services/htmlSanitizer.js';
 
 export default function SplitEditorView({
   files,
@@ -120,7 +121,7 @@ export default function SplitEditorView({
             <div style={{ flex: 1, padding: '1.2rem', overflowY: 'auto', backgroundColor: '#0a0f1d', color: '#cbd5e1', fontSize: '0.84rem', lineHeight: '1.7', fontFamily: 'Georgia, serif' }}>
               {referenceDoc ? (
                 <div
-                  dangerouslySetInnerHTML={{ __html: referenceDoc.content || '<p>Empty reference document.</p>' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(referenceDoc.content || '<p>Empty reference document.</p>', { allowRemoteImages: false }) }}
                 />
               ) : (
                 <div style={{ color: '#64748b', textAlign: 'center', marginTop: '2rem' }}>No reference document selected.</div>

@@ -104,7 +104,14 @@ function scheduleVersionSnapshot(doc) {
  * Asynchronously hydrates the in-memory cache from Dexie IndexedDB.
  * Migrates any legacy localStorage records without deleting the legacy copy.
  */
-export async function initManuscriptStore() {
+let _hydration = null;
+
+export function initManuscriptStore() {
+  if (!_hydration) _hydration = hydrateManuscriptStore();
+  return _hydration;
+}
+
+async function hydrateManuscriptStore() {
   if (_cache.isHydrated) return _cache;
 
   try {
@@ -148,7 +155,10 @@ export async function initManuscriptStore() {
       }
     }
 
-    _cache.files = Array.isArray(files) ? files : [];
+    // Chapters received over the mesh used to be stored as the author's own
+    // chapters; they have their own "shared" section now.
+    _cache.files = (Array.isArray(files) ? files : [])
+      .map(f => (f.isMeshShared && f.type !== 'shared' ? { ...f, type: 'shared' } : f));
     _cache.activeFileId = state?.activeFileId || (_cache.files[0] ? _cache.files[0].id : null);
     _cache.openTabs = Array.isArray(state?.openTabs) ? state.openTabs.filter(id => _cache.files.some(f => f.id === id)) : [];
     
@@ -238,15 +248,20 @@ export function closeTab(id) {
  * Update HTML prose content of a document
  */
 export function updateDocumentContent(id, htmlContent) {
-  const file = _cache.files.find(f => f.id === id);
-  if (!file) return;
+  const current = _cache.files.find(f => f.id === id);
+  if (!current) return;
 
-  file.content = htmlContent;
-  file.lastModified = new Date().toISOString();
-  file.updatedAt = file.lastModified;
-  
+  // A new object (not edited in place), so React sees the change.
   const plain = htmlContent.replace(/<[^>]+>/g, ' ').trim();
-  file.wordCount = plain ? plain.split(/\s+/).filter(Boolean).length : 0;
+  const now = new Date().toISOString();
+  const file = {
+    ...current,
+    content: htmlContent,
+    lastModified: now,
+    updatedAt: now,
+    wordCount: plain ? plain.split(/\s+/).filter(Boolean).length : 0,
+  };
+  _cache.files = _cache.files.map(f => (f.id === id ? file : f));
 
   // Notify UI
   notifySubscribers();
@@ -286,7 +301,7 @@ export function createManuscriptFile(name, type = 'chapter', content = '') {
     content: initialContent,
   };
 
-  _cache.files.push(newDoc);
+  _cache.files = [..._cache.files, newDoc];
   _cache.activeFileId = newId;
   if (!_cache.openTabs.includes(newId)) {
     _cache.openTabs.push(newId);
@@ -407,11 +422,48 @@ export function exportManuscript(docId, format = 'html') {
 }
 
 /**
+ * Store a chapter another node shared (already validated by meshManuscripts.js).
+ * Keeps at most `maxPerSender` per sender and `maxTotal` overall, dropping the
+ * oldest. Returns true when stored.
+ */
+export async function receiveSharedManuscript(doc, { maxPerSender, maxTotal }) {
+  await initManuscriptStore();
+  const existing = _cache.files.find(f => f.id === doc.id);
+  if (existing && existing.type !== 'shared') return false; // never replaces the author's own files
+
+  let files = existing ? _cache.files.map(f => (f.id === doc.id ? doc : f)) : [..._cache.files, doc];
+  const byAge = (a, b) => String(a.sharedAt || '').localeCompare(String(b.sharedAt || ''));
+  const drop = new Set();
+  const fromSender = files.filter(f => f.type === 'shared' && f.authorId === doc.authorId).sort(byAge);
+  fromSender.slice(0, Math.max(0, fromSender.length - maxPerSender)).forEach(f => drop.add(f.id));
+  const shared = files.filter(f => f.type === 'shared' && !drop.has(f.id)).sort(byAge);
+  shared.slice(0, Math.max(0, shared.length - maxTotal)).forEach(f => drop.add(f.id));
+  drop.delete(doc.id);
+  files = files.filter(f => !drop.has(f.id));
+
+  _cache.files = files;
+  _cache.openTabs = _cache.openTabs.filter(id => !drop.has(id));
+  if (drop.has(_cache.activeFileId)) _cache.activeFileId = _cache.openTabs[0] || files[0]?.id || null;
+  notifySubscribers();
+
+  await db.manuscripts.put(doc);
+  if (drop.size) {
+    await db.manuscripts.bulkDelete([...drop]);
+    for (const id of drop) await db.manuscript_versions.where('docId').equals(id).delete();
+  }
+  return true;
+}
+
+/**
  * Publish / broadcast manuscript to physical P2P sovereign mesh
  */
 export async function publishDocumentToMesh(docId, note = '') {
   const doc = _cache.files.find(f => f.id === docId);
   if (!doc) throw new Error('Document not found');
+  const { SHARED_LIMITS } = await import('./meshManuscripts.js');
+  if ((doc.content || '').length > SHARED_LIMITS.maxContentChars) {
+    throw new Error('This chapter is too long to share in one piece. Split it into smaller chapters first.');
+  }
   const { publishManuscriptToMesh } = await import('./sovereignMesh.js');
   return publishManuscriptToMesh(doc, note);
 }

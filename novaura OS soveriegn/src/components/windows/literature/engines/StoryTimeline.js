@@ -5,9 +5,11 @@
  * - 15 Event Types with custom icons & visual metadata
  * - Character State tracking (Active, Injured, Deceased, Captive, Missing)
  * - Dynamic Relationship Evolution mapping
- * - Automatic event detection from prose
- * - Periodic consistency audit (every 3 chapters)
+ * - Keyword-based event detection from prose
+ * - Saved in the backed-up settings table (see LIMITS for the caps)
  */
+
+import { db } from '../../../../database/sovereignDatabase.js';
 
 export const EVENT_TYPES = {
   DEATH: { id: 'death', label: 'Death', icon: '💀', color: '#ef4444' },
@@ -35,50 +37,82 @@ export const CHARACTER_STATES = [
   { id: 'Missing', label: 'Missing / Presumed Lost', color: '#64748b' }
 ];
 
-const STORAGE_KEY = 'novaura_story_timeline_v2';
+// The story bible lives in the backed-up settings table. Older versions kept it
+// in localStorage, which is read once to migrate (the legacy copy is left).
+const LEGACY_STORAGE_KEY = 'novaura_story_timeline_v2';
+const SETTING_KEY = 'literature_story_bible';
+const SAVE_DELAY_MS = 400;
+const LIMITS = { characters: 500, settings: 300, timeline: 2000, relationships: 1000, plotThreads: 300, causality: 300 };
+const FIELDS = Object.keys(LIMITS);
 
 export class StoryTimeline {
   constructor() {
-    this.characters = [];
-    this.settings = [];
-    this.timeline = [];
-    this.relationships = [];
-    this.plotThreads = [];
+    for (const f of FIELDS) this[f] = [];
     this.lastAudit = null;
-    this.loadState();
+    this.hydrated = false;
+    this._saveTimer = null;
+    this._pendingSave = false;
+    this.ready = typeof window === 'undefined' ? Promise.resolve() : this._hydrate();
   }
 
-  loadState() {
+  async _hydrate() {
+    let data = null;
+    let migrated = false;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        this.characters = parsed.characters || [];
-        this.settings = parsed.settings || [];
-        this.timeline = parsed.timeline || [];
-        this.relationships = parsed.relationships || [];
-        this.plotThreads = parsed.plotThreads || [];
-        this.lastAudit = parsed.lastAudit || null;
-      }
+      data = await db.getSetting(SETTING_KEY);
     } catch (err) {
       console.warn('[StoryTimeline] Load note:', err);
     }
+    if (!data) {
+      try {
+        const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (raw) { data = JSON.parse(raw); migrated = true; }
+      } catch { /* storage unavailable or corrupt */ }
+    }
+    if (data && typeof data === 'object') {
+      // Keep anything added while loading.
+      for (const f of FIELDS) {
+        const stored = Array.isArray(data[f]) ? data[f] : [];
+        const ids = new Set(stored.map(x => x?.id));
+        this[f] = [...stored, ...this[f].filter(x => !ids.has(x?.id))];
+      }
+      this.lastAudit = data.lastAudit || null;
+    }
+    this.hydrated = true;
+    if (migrated || this._pendingSave) this._persist();
+    window.dispatchEvent(new CustomEvent('novaura:timeline_updated'));
+  }
+
+  /** Kept for callers; the data is in memory once loaded. */
+  loadState() {
+    return this.ready;
   }
 
   saveState() {
+    for (const f of FIELDS) {
+      if (this[f].length > LIMITS[f]) this[f] = this[f].slice(-LIMITS[f]);
+    }
+    window.dispatchEvent(new CustomEvent('novaura:timeline_updated'));
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => this._persist(), SAVE_DELAY_MS);
+  }
+
+  async _persist() {
+    if (!this.hydrated) { this._pendingSave = true; return; } // saved once loading finishes
+    const data = { lastAudit: this.lastAudit };
+    for (const f of FIELDS) data[f] = this[f];
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        characters: this.characters,
-        settings: this.settings,
-        timeline: this.timeline,
-        relationships: this.relationships,
-        plotThreads: this.plotThreads,
-        lastAudit: this.lastAudit,
-      }));
-      window.dispatchEvent(new CustomEvent('novaura:timeline_updated'));
+      await db.setSetting(SETTING_KEY, data);
     } catch (err) {
       console.warn('[StoryTimeline] Save error:', err);
+      window.dispatchEvent(new CustomEvent('novaura:timeline_save_failed', { detail: { message: err.message } }));
     }
+  }
+
+  /** Cause-and-effect beats for the causality map. */
+  setCausality(nodes) {
+    this.causality = Array.isArray(nodes) ? nodes : [];
+    this.saveState();
   }
 
   addCharacter(char) {

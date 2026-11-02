@@ -73,11 +73,15 @@ export class FactChecker {
       return this.verificationCache.get(cacheKey);
     }
 
-    // Check custom canon first
-    const canonMatch = this.customFacts.find(cf => 
-      cacheKey.toLowerCase().includes(cf.claim.toLowerCase()) || 
-      cf.claim.toLowerCase().includes(cacheKey.toLowerCase())
-    );
+    // Only a sentence that states a canon fact itself counts as verified by the
+    // canon. Sharing a name or a few words with one proves nothing, so
+    // everything else goes to the model, with the canon as context.
+    const norm = (t) => String(t).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    const canonMatch = this.customFacts.find(cf => norm(cf.claim) === norm(cacheKey));
+    if (!canonMatch && this.customFacts.length) {
+      const canonText = this.customFacts.map(cf => `- ${cf.claim}`).join('\n');
+      worldCanonString = worldCanonString ? `${worldCanonString}\n${canonText}` : canonText;
+    }
 
     if (canonMatch) {
       const result = {

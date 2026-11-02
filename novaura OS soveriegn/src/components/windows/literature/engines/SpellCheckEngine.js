@@ -10,6 +10,23 @@
  * - Story-specific custom dictionary (character names, locations, fantasy/sci-fi terms)
  */
 
+const MAX_ISSUES = 300;
+
+const ENTITIES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", apos: "'" };
+
+/** Chapter HTML as the text a reader sees (tags removed, common entities decoded). */
+export function htmlToPlainText(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(nbsp|amp|lt|gt|quot|#39|apos);/g, (_, e) => ENTITIES[e]);
+}
+
+/** Case-insensitive whole-word matcher for a word or phrase (any whitespace between words). */
+export function phraseRegex(phrase) {
+  const body = String(phrase).trim().split(/\s+/).map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+  return new RegExp(`(?<![\\w'-])${body}(?![\\w'-])`, 'gi');
+}
+
 export class SpellCheckEngine {
   constructor(options = {}) {
     this.customDictionary = new Set(options.customDictionary || [
@@ -61,63 +78,69 @@ export class SpellCheckEngine {
   }
 
   /**
-   * Fast, zero-latency synchronous rule-based analysis
+   * Fast, zero-latency synchronous rule-based analysis.
+   *
+   * Each word or phrase issue carries `occurrence`: which match of `text` in
+   * the chapter it is (0 = first, case-insensitive, whole words), so a fix can
+   * change exactly that one (see findPhrase). At most MAX_ISSUES are returned.
    */
   analyzeText(rawHtmlOrText) {
     if (!rawHtmlOrText) return [];
 
-    const plainText = rawHtmlOrText.replace(/<[^>]+>/g, ' ');
+    const plainText = htmlToPlainText(rawHtmlOrText);
+    const rules = SpellCheckEngine.STYLE_RULES;
     const suggestions = [];
+    const ignored = (text) => this.ignoredWords.has(String(text).toLowerCase().trim());
+    const push = (issue) => {
+      if (suggestions.length < MAX_ISSUES && !ignored(issue.text)) suggestions.push(issue);
+    };
 
     // 1. Passive Voice Check
     let match;
-    const passiveRegex = new RegExp(SpellCheckEngine.STYLE_RULES.passiveVoice.pattern);
+    const passiveRegex = new RegExp(rules.passiveVoice.pattern);
     while ((match = passiveRegex.exec(plainText)) !== null) {
-      suggestions.push({
+      push({
         id: `pv_${match.index}`,
         type: 'passive_voice',
         text: match[0],
         index: match.index,
         length: match[0].length,
-        message: SpellCheckEngine.STYLE_RULES.passiveVoice.message,
+        message: rules.passiveVoice.message,
         severity: 'warning',
         replacement: null
       });
     }
 
-    // 2. Weak Adverbs & Filter Words Check
-    const words = plainText.match(/\b[\w'-]+\b/g) || [];
-    let runningIndex = 0;
-
-    for (const w of words) {
-      const lower = w.toLowerCase();
-      const pos = plainText.indexOf(w, runningIndex);
-      runningIndex = pos >= 0 ? pos + w.length : runningIndex;
-
-      if (SpellCheckEngine.STYLE_RULES.weakAdverbs.words.includes(lower)) {
-        suggestions.push({
-          id: `wa_${pos}`,
-          type: 'weak_adverb',
-          text: w,
-          index: pos,
-          length: w.length,
-          message: `Consider cutting "${w}" or choosing a stronger descriptive word.`,
+    // 2. Weak adverbs, filter words and weak dialogue tags (single words and phrases).
+    //    Single words can simply be cut; phrases need rewording, so they are only flagged.
+    const phraseRules = [
+      ...rules.weakAdverbs.words.map(w => ({ w, type: 'weak_adverb', prefix: 'wa' })),
+      ...rules.filterWords.words.map(w => ({ w, type: 'filter_word', prefix: 'fw' })),
+      ...rules.dialogueTags.weakTags.map(w => ({ w, type: 'dialogue_tag', prefix: 'dt' })),
+    ];
+    for (const { w, type, prefix } of phraseRules) {
+      const re = phraseRegex(w);
+      let occurrence = 0;
+      while ((match = re.exec(plainText)) !== null) {
+        const text = match[0];
+        const single = !/\s/.test(w);
+        const message = type === 'weak_adverb'
+          ? `Consider cutting "${text}" or choosing a stronger descriptive word.`
+          : type === 'filter_word'
+            ? `Filter word "${text}" creates narrative distance between the reader and the action.`
+            : rules.dialogueTags.message;
+        push({
+          id: `${prefix}_${match.index}`,
+          type,
+          text,
+          index: match.index,
+          occurrence,
+          length: text.length,
+          message,
           severity: 'suggestion',
-          replacement: ''
+          replacement: single && type !== 'dialogue_tag' ? '' : null
         });
-      }
-
-      if (SpellCheckEngine.STYLE_RULES.filterWords.words.includes(lower)) {
-        suggestions.push({
-          id: `fw_${pos}`,
-          type: 'filter_word',
-          text: w,
-          index: pos,
-          length: w.length,
-          message: `Filter word "${w}" creates narrative distance between the reader and the action.`,
-          severity: 'suggestion',
-          replacement: ''
-        });
+        occurrence++;
       }
     }
 
@@ -126,8 +149,8 @@ export class SpellCheckEngine {
     let charOffset = 0;
     for (const s of sentences) {
       const sWords = s.trim().split(/\s+/).filter(Boolean);
-      if (sWords.length > SpellCheckEngine.STYLE_RULES.sentenceLength.maxLength) {
-        suggestions.push({
+      if (sWords.length > rules.sentenceLength.maxLength) {
+        push({
           id: `sl_${charOffset}`,
           type: 'sentence_length',
           text: s.slice(0, 60) + '...',
@@ -141,14 +164,15 @@ export class SpellCheckEngine {
       charOffset += s.length + 1;
     }
 
-    // 4. Repeated Words in Proximity Check (within 30 words)
+    // 4. Repeated Words in Proximity Check (within 25 words)
+    const words = plainText.match(/[\w'-]+/g) || [];
     const recentWords = [];
     for (let i = 0; i < words.length; i++) {
       const w = words[i].toLowerCase();
       if (w.length > 5 && !this.customDictionary.has(w) && !this.ignoredWords.has(w)) {
         const dupIdx = recentWords.findIndex(item => item.word === w);
         if (dupIdx !== -1 && (i - recentWords[dupIdx].pos) < 25) {
-          suggestions.push({
+          push({
             id: `rep_${i}`,
             type: 'repetition',
             text: words[i],
@@ -164,7 +188,7 @@ export class SpellCheckEngine {
       }
     }
 
-    return suggestions;
+    return suggestions.sort((x, y) => x.index - y.index);
   }
 }
 

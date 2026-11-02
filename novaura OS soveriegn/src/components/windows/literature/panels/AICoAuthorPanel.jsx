@@ -88,12 +88,11 @@ export default function AICoAuthorPanel({
     let newConfig = { ...modelConfig };
     if (val === 'auto') {
       newConfig = { provider: 'auto', model: '' };
-    } else if (val.startsWith('local:')) {
-      const [_, prov, mod] = val.split(':');
-      newConfig = { provider: prov, model: mod };
-    } else if (val.startsWith('cloud:')) {
-      const [_, prov, mod] = val.split(':');
-      newConfig = { provider: prov, model: mod };
+    } else if (val.startsWith('local:') || val.startsWith('cloud:')) {
+      // "local:<provider>:<model>"; Ollama model names contain colons themselves (llama3:8b).
+      const rest = val.slice(val.indexOf(':') + 1);
+      const cut = rest.indexOf(':');
+      newConfig = { provider: rest.slice(0, cut), model: rest.slice(cut + 1) };
     }
     setModelConfig(newConfig);
     setActiveInferenceConfig(newConfig);

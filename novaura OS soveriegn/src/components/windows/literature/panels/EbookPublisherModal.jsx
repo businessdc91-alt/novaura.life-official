@@ -7,7 +7,7 @@ import {
 export default function EbookPublisherModal({
   files,
   activeDoc,
-  authorName = 'Dillan Copeland',
+  authorName = '',
   onClose
 }) {
   const [format, setFormat] = useState('shunn'); // 'shunn' | 'epub' | 'html' | 'markdown'

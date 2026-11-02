@@ -19,8 +19,9 @@ import {
   rollbackManuscriptVersion, exportManuscript, publishDocumentToMesh
 } from '../../services/manuscriptStore.js';
 import { getPeerCount, getLocalIdentity } from '../../services/sovereignMesh.js';
-import { sanitizeRichHtml } from '../../services/htmlSanitizer.js';
+import { sanitizeRichHtml, escapeHtml } from '../../services/htmlSanitizer.js';
 import { predictNextPhrase } from '../../services/literatureAiService.js';
+import { phraseRegex } from './literature/engines/SpellCheckEngine.js';
 
 import ActivityBar from './literature/panels/ActivityBar.jsx';
 import CodexPanel from './literature/panels/CodexPanel.jsx';
@@ -68,6 +69,7 @@ export default function LiteratureIDEWindow({ onClose }) {
   // ── Editor Canvas & Prediction State ──
   const editorRef = useRef(null);
   const typingTimerRef = useRef(null);
+  const ghostSeqRef = useRef(0);
   const [ghostPrediction, setGhostPrediction] = useState('');
   const [selectedText, setSelectedText] = useState('');
   const [selectionPosition, setSelectionPosition] = useState(null);
@@ -130,12 +132,23 @@ export default function LiteratureIDEWindow({ onClose }) {
     setWordCount(active ? active.wordCount || 0 : 0);
   };
 
-  // Sync editor content when activeDoc changes
+  // Load the stored text into the editor when it changed anywhere else (Zen
+  // mode, a restored version, Monaco) or the editor element is new (coming back
+  // from Monaco remounts it). Text the editor wrote itself is left alone so the
+  // caret stays put. Runs after every render; the check is two comparisons.
   useEffect(() => {
-    if (editorRef.current && activeDoc) {
-      if (editorRef.current.innerHTML !== activeDoc.content) {
-        editorRef.current.innerHTML = sanitizeRichHtml(activeDoc.content || '');
-      }
+    const el = editorRef.current;
+    if (!el || !activeDoc) return;
+    const content = activeDoc.content || '';
+    if (el.dataset.docId !== activeDoc.id || el.__syncedContent !== content) {
+      el.innerHTML = sanitizeRichHtml(content);
+      el.__syncedContent = content;
+      el.dataset.docId = activeDoc.id;
+    }
+  });
+
+  useEffect(() => {
+    if (activeDoc) {
       setWordCount(activeDoc.wordCount || 0);
       setGhostPrediction('');
     }
@@ -145,18 +158,21 @@ export default function LiteratureIDEWindow({ onClose }) {
   const handleEditorInput = useCallback(() => {
     if (!editorRef.current || !activeDoc) return;
     const content = editorRef.current.innerHTML;
+    editorRef.current.__syncedContent = content;
     updateDocumentContent(activeDoc.id, content);
 
     const plain = editorRef.current.innerText || '';
     const words = plain.trim() ? plain.trim().split(/\s+/).filter(Boolean).length : 0;
     setWordCount(words);
 
-    // Debounced ghostwriter prediction
+    // Debounced ghostwriter prediction. A prediction that arrives after more
+    // typing is for old text and is dropped.
+    const seq = ++ghostSeqRef.current;
     setGhostPrediction('');
     clearTimeout(typingTimerRef.current);
     typingTimerRef.current = setTimeout(async () => {
       const prediction = await predictNextPhrase(plain);
-      if (prediction) setGhostPrediction(prediction);
+      if (prediction && seq === ghostSeqRef.current) setGhostPrediction(prediction);
     }, 1100);
   }, [activeDoc]);
 
@@ -233,7 +249,7 @@ export default function LiteratureIDEWindow({ onClose }) {
     if (!prose) return;
     if (editorRef.current) {
       editorRef.current.focus();
-      const html = prose.split('\n\n').map(p => `<p>${p.trim()}</p>`).join('');
+      const html = prose.split('\n\n').map(p => `<p>${escapeHtml(p.trim())}</p>`).join('');
       document.execCommand('insertHTML', false, sanitizeRichHtml(html));
       handleEditorInput();
     }
@@ -248,12 +264,40 @@ export default function LiteratureIDEWindow({ onClose }) {
     setSelectionPosition(null);
   };
 
-  const handleReplaceSpecificText = (targetText, replacementText) => {
-    if (!editorRef.current || !activeDoc) return;
-    const currentHtml = editorRef.current.innerHTML;
-    const updated = currentHtml.replace(targetText, replacementText || '');
-    editorRef.current.innerHTML = updated;
-    handleEditorInput();
+  // Applies a Grammar fix to exactly the flagged words: the issue's nth
+  // whole-word match in the editor's text, never a match inside another word
+  // or inside the HTML. Goes through the editor's undo history.
+  const handleReplaceSpecificText = (issue) => {
+    const el = editorRef.current;
+    if (!el || !activeDoc || !issue?.text) return;
+    const re = phraseRegex(issue.text);
+    let remaining = issue.occurrence ?? 0;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(node.data)) !== null) {
+        if (remaining-- > 0) continue;
+        let start = m.index;
+        let end = m.index + m[0].length;
+        const replacement = issue.replacement || '';
+        // Cutting a word also takes one neighbouring space, so no double space is left.
+        if (!replacement) {
+          if (node.data[end] === ' ') end++;
+          else if (node.data[start - 1] === ' ') start--;
+        }
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, end);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        el.focus();
+        document.execCommand(replacement ? 'insertText' : 'delete', false, replacement);
+        handleEditorInput();
+        return;
+      }
+    }
   };
 
   // ── 5. Import & Export ──
@@ -265,12 +309,14 @@ export default function LiteratureIDEWindow({ onClose }) {
       const content = event.target.result;
       const name = file.name || 'Imported Document.docx';
       let html = '';
+      // Imported files are untrusted: HTML is cleaned before it is stored, and
+      // text is escaped so it shows as written.
       if (file.name.endsWith('.html') || file.name.endsWith('.htm')) {
-        html = content;
+        html = sanitizeRichHtml(content, { allowRemoteImages: false });
       } else if (file.name.endsWith('.md')) {
-        html = content.split('\n\n').map(p => `<p>${p.trim()}</p>`).join('');
+        html = content.split(/\n\s*\n/).map(p => `<p>${escapeHtml(p.trim()).replace(/\n/g, '<br/>')}</p>`).join('');
       } else {
-        html = `<p>${content.replace(/\n/g, '<br/>')}</p>`;
+        html = `<p>${escapeHtml(content).replace(/\n/g, '<br/>')}</p>`;
       }
       const newDoc = createManuscriptFile(name, 'chapter', html);
       setActiveDocumentId(newDoc.id);
@@ -418,6 +464,42 @@ export default function LiteratureIDEWindow({ onClose }) {
                     );
                   })
                 )}
+
+                {[
+                  { type: 'bible', label: 'Notes & Lore', onAdd: handleCreateNewNote },
+                  { type: 'shared', label: 'Shared with you' },
+                ].map(section => {
+                  const sectionFiles = files.filter(f => f.type === section.type);
+                  if (!sectionFiles.length && !section.onAdd) return null;
+                  return (
+                    <div key={section.type} style={{ marginTop: '0.6rem' }}>
+                      <div style={{ padding: '0.3rem 0.8rem', fontSize: '0.66rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span>{section.label} ({sectionFiles.length})</span>
+                        {section.onAdd && (
+                          <button onClick={() => section.onAdd()} title={`New ${section.label} entry`} style={{ background: 'none', border: 'none', color: '#00f0ff', cursor: 'pointer', padding: '2px' }}>
+                            <Plus size={12} />
+                          </button>
+                        )}
+                      </div>
+                      {sectionFiles.map(file => {
+                        const isActive = activeDoc?.id === file.id;
+                        return (
+                          <div
+                            key={file.id}
+                            onClick={() => handleSelectFile(file.id)}
+                            title={file.author ? `Shared by ${file.author}` : file.name}
+                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0.8rem', cursor: 'pointer', backgroundColor: isActive ? 'rgba(0,240,255,0.1)' : 'transparent', borderLeft: isActive ? '2px solid #00f0ff' : '2px solid transparent', color: isActive ? '#00f0ff' : '#cbd5e1', fontSize: '0.76rem' }}
+                          >
+                            <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{file.name}</span>
+                            <button onClick={(e) => handleDeleteFile(file.id, e)} title="Delete file" style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '2px', flexShrink: 0 }}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -700,7 +782,7 @@ export default function LiteratureIDEWindow({ onClose }) {
         <EbookPublisherModal
           files={files}
           activeDoc={activeDoc}
-          authorName={getLocalIdentity().displayName || 'Dillan Copeland'}
+          authorName={getLocalIdentity()?.displayName || ''}
           onClose={() => setIsPublisherOpen(false)}
         />
       )}

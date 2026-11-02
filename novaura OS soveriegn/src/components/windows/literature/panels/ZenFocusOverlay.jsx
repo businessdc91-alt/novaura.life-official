@@ -4,6 +4,7 @@ import {
   Maximize2, Minimize2, Volume2, VolumeX, Play, Pause, RotateCcw,
   Sparkles, X, Activity, Target
 } from 'lucide-react';
+import { sanitizeRichHtml } from '../../../../services/htmlSanitizer.js';
 
 export default function ZenFocusOverlay({
   activeDoc,
@@ -33,10 +34,14 @@ export default function ZenFocusOverlay({
   useEffect(() => {
     if (editorRef.current && activeDocContent) {
       if (editorRef.current.innerHTML !== activeDocContent) {
-        editorRef.current.innerHTML = activeDocContent;
+        editorRef.current.innerHTML = sanitizeRichHtml(activeDocContent);
       }
     }
   }, []);
+
+  // The soundscape stops however the overlay closes (exit button, the activity
+  // bar toggle, closing the window).
+  useEffect(() => () => stopAudio(), []);
 
   // Sprint Timer Loop
   useEffect(() => {

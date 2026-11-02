@@ -112,7 +112,7 @@ export default function FactCheckPanel({ activeDocContent }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', marginTop: '0.2rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                       <span style={{ fontSize: '0.62rem', fontWeight: 700, color: statusColor, textTransform: 'uppercase' }}>
-                        ● {claim.status} ({claim.confidence || 90}% confidence)
+                        ● {claim.status}{Number.isFinite(claim.confidence) ? ` (${claim.confidence}% confidence)` : ''}
                       </span>
                     </div>
                     {claim.explanation && (

@@ -26,7 +26,7 @@ export default function GrammarPanel({ activeDocContent, onReplaceText, onAddToD
 
   const handleApplyFix = (issue) => {
     if (onReplaceText && issue.replacement !== null) {
-      onReplaceText(issue.text, issue.replacement);
+      onReplaceText(issue);
     }
     setIssues(prev => prev.filter(i => i.id !== issue.id));
   };

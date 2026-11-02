@@ -6,8 +6,8 @@
 import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { admitMeshListing } from './marketplaceListings.js';
+import { admitMeshManuscript } from './meshManuscripts.js';
 import { isPopoutWindow } from './popoutWindows.js';
-import { sanitizeRichHtml } from './htmlSanitizer.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
   FEEDBACK_INBOX_VAULT_KEY,
@@ -503,24 +503,17 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_LITERATURE_PUBLISH': {
-      const manuscript = payload?.manuscript || packet?.payload?.manuscript;
-      if (manuscript) {
-        const incomingDoc = {
-          id: 'mesh_' + (manuscript.id || generateId()),
-          name: `[Mesh] ${manuscript.name || 'Shared Chapter'}`,
-          type: manuscript.type || 'chapter',
-          content: sanitizeRichHtml(typeof manuscript.content === 'string' ? manuscript.content : '', { allowRemoteImages: false }),
-          wordCount: manuscript.wordCount || 0,
-          author: payload?.authorName || packet?.sender_name || 'Network Peer',
-          authorId: packet?.sender_id || 'remote_peer',
-          isMeshShared: true,
-          sharedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        db.manuscripts.put(incomingDoc).catch(() => {});
-        window.dispatchEvent(new CustomEvent('novaura:literature_received', { detail: incomingDoc }));
-        window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
-      }
+      // Signed senders only; size caps, id binding and per-sender limits in meshManuscripts.js.
+      const sender = verifiedSenderDid(packet);
+      if (!sender) break;
+      isPeerBlocked(sender)
+        .then(blocked => (blocked ? null : admitMeshManuscript(payload, sender)))
+        .then(incomingDoc => {
+          if (!incomingDoc) return;
+          window.dispatchEvent(new CustomEvent('novaura:literature_received', { detail: incomingDoc }));
+          window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+        })
+        .catch(err => console.warn('[SovereignMesh] Shared chapter not stored:', err));
       break;
     }
 
