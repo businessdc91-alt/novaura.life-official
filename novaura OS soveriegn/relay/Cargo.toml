@@ -18,6 +18,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["net", "sync", "rt-multi-thread", "time", "macros", "io-util"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+# TURN REST credentials (coturn use-auth-secret): base64(HMAC-SHA1(secret, username)).
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3

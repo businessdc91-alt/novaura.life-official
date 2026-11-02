@@ -866,6 +866,14 @@ The separate `novaura OS soveriegn/` project now has a locally hosted WebOS-styl
 - [ ] Note: no `<Toaster>` is mounted, so `sonner` toasts in ShellHUD, SovereignChatBar and NovaHub never show.
 - [x] Platform fee confirmed by the owner as 10% for Sovereign (2026-10-30); the guide's inference-network section states it.
 
+**Relay server + TURN for calls (2026-11-01):**
+- [x] Relay issues short-lived TURN logins (coturn REST scheme: `expiry:node` username, base64 HMAC-SHA1 password) on `MESH_TURN_REQUEST`, configured by `NOVAURA_TURN_SECRET` / `NOVAURA_TURN_URLS` (/ `NOVAURA_TURN_TTL_SECS`, default 24h). Never forwarded; peers cannot forge the reply (reserved sender ID). An accept error no longer stops the relay. Tests: 2 unit + 6-check end-to-end against the built relay.
+- [x] Node asks for TURN logins on connect and again at half their lifetime (`mesh.rs`), exposes them as `turn` in `mesh_get_status`, drops them when the relay changes. Calls use STUN plus that TURN server (`getIceServers()` in `sovereignCallService.js`), so calls between two carrier-NAT users (hotspot, 5G home) can connect.
+- [x] Relay address chosen in the Peering window is now saved (`%APPDATA%/novaura-sovereign/mesh_relay.txt`); it used to reset to `relay.novaura.life` on every restart.
+- [x] `relay/deploy/setup-server.sh` + README: one-command Ubuntu setup (Oracle Always Free or any VPS): builds the relay, installs coturn with private-network peers denied, systemd service, firewall, keeps the secret on re-runs.
+- [ ] Not yet run on a real server (only syntax-checked). Owner to create the Oracle instance; then run the script, set the relay in Peering, and test a call between two hotspot users.
+- [ ] Next: always-on market peer in the relay (stores listings, catches up nodes that were offline). Later: TURN over TLS on 443 for networks that block UDP/odd ports; encrypted save backups.
+
 **Repo housekeeping:** `Novaura-Desktop/` is a separate, unrelated program. Its 107 staged `src-tauri/target/` build files were unstaged and `**/src-tauri/target/` added to the root `.gitignore`. 942 Desktop build files were already committed in earlier history and are left for the owner to clean.
 
 **Environment gotcha:** this machine's shell has `NODE_ENV=production`, so a plain `npm install` silently skips devDependencies (vite, oxlint, @tauri-apps/cli). Use `npm install --include=dev`.

@@ -11,15 +11,32 @@
  */
 
 import { db } from '../database/sovereignDatabase.js';
-import { getLocalIdentity } from './sovereignMesh.js';
+import { getLocalIdentity, getPhysicalMeshStatus } from './sovereignMesh.js';
 
 // Public STUN servers for peer-to-peer NAT traversal across the global internet
-const ICE_SERVERS = [
+const STUN_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:stun.services.mozilla.com' },
 ];
+
+/**
+ * STUN plus the relay's TURN server when it offers one. STUN alone fails when
+ * both callers sit behind carrier NAT (hotspots, 5G home internet); TURN then
+ * carries the still-encrypted media.
+ */
+export async function getIceServers() {
+  try {
+    const turn = (await getPhysicalMeshStatus())?.turn;
+    if (turn?.urls?.length && turn.expires_at_ms > Date.now() + 60_000) {
+      return [...STUN_SERVERS, { urls: turn.urls, username: turn.username, credential: turn.credential }];
+    }
+  } catch {
+    // No relay status available: STUN only.
+  }
+  return STUN_SERVERS;
+}
 
 export const CallState = {
   IDLE: 'IDLE',
@@ -219,7 +236,7 @@ class SovereignCallService extends EventTarget {
       await this._acquireMedia(isVideo);
 
       // 2. Create WebRTC PeerConnection
-      this._createPeerConnection();
+      await this._createPeerConnection();
 
       // 3. Create Offer
       const offer = await this.peerConnection.createOffer({
@@ -270,7 +287,7 @@ class SovereignCallService extends EventTarget {
       await this._acquireMedia(withVideo);
 
       // 2. Create PeerConnection
-      this._createPeerConnection();
+      await this._createPeerConnection();
 
       // 3. Set Remote Description from incoming offer
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(this.currentCall.pendingOffer));
@@ -358,8 +375,8 @@ class SovereignCallService extends EventTarget {
     }
   }
 
-  _createPeerConnection() {
-    this.peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  async _createPeerConnection() {
+    this.peerConnection = new RTCPeerConnection({ iceServers: await getIceServers() });
 
     // Attach local audio & video tracks
     if (this.localStream) {

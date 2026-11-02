@@ -7,9 +7,13 @@
 // - Socket-derived WAN IP enforcement (anti-reflection & peer poisoning defense)
 // - Strict sender ID ownership & anti-spoofing enforcement
 // - Zero-knowledge forwarding for E2EE envelopes
+// - Short-lived TURN credentials for calls, when a TURN server shares this relay's secret
 
+use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -27,6 +31,7 @@ pub const RATE_LIMIT_BURST: u32 = 30;                // Max burst packet allowan
 pub const RATE_LIMIT_REFILL_PER_SEC: f64 = 15.0;     // Token refill rate per second
 pub const CLIENT_QUEUE_CAPACITY: usize = 128;        // Bounded outbound mpsc capacity
 pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;        // Outbound socket write timeout
+pub const DEFAULT_TURN_TTL_SECS: u64 = 86_400;       // TURN credential lifetime
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RelayPacket {
@@ -86,6 +91,61 @@ struct RelayState {
 }
 
 type SharedState = Arc<Mutex<RelayState>>;
+
+/// TURN server sharing a secret with this relay (coturn `use-auth-secret`).
+/// Configured from the environment; without it the relay hands out no TURN
+/// credentials and calls fall back to STUN only.
+struct TurnConfig {
+    secret: String,
+    urls: Vec<String>,
+    ttl_secs: u64,
+}
+
+impl TurnConfig {
+    fn from_env() -> Option<Self> {
+        let secret = std::env::var("NOVAURA_TURN_SECRET").ok()?.trim().to_string();
+        let urls: Vec<String> = std::env::var("NOVAURA_TURN_URLS")
+            .ok()?
+            .split(',')
+            .map(|u| u.trim().to_string())
+            .filter(|u| u.starts_with("turn:") || u.starts_with("turns:"))
+            .collect();
+        if secret.is_empty() || urls.is_empty() {
+            return None;
+        }
+        let ttl_secs = std::env::var("NOVAURA_TURN_TTL_SECS")
+            .ok()
+            .and_then(|t| t.trim().parse::<u64>().ok())
+            .filter(|&t| t >= 600)
+            .unwrap_or(DEFAULT_TURN_TTL_SECS);
+        Some(Self { secret, urls, ttl_secs })
+    }
+}
+
+/// TURN REST API credentials: the username carries its own expiry, and the
+/// password is base64(HMAC-SHA1(secret, username)), which coturn recomputes.
+fn turn_credential(secret: &str, username: &str) -> String {
+    let mut mac = Hmac::<Sha1>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(username.as_bytes());
+    base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+}
+
+fn turn_payload(cfg: &TurnConfig, node_id: &str, now_secs: u64) -> serde_json::Value {
+    let expires = now_secs + cfg.ttl_secs;
+    let user: String = node_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(48)
+        .collect();
+    let username = format!("{}:{}", expires, if user.is_empty() { "nova" } else { &user });
+    serde_json::json!({
+        "urls": cfg.urls,
+        "credential": turn_credential(&cfg.secret, &username),
+        "username": username,
+        "ttl_secs": cfg.ttl_secs,
+        "expires_at_ms": expires * 1000,
+    })
+}
 
 fn current_timestamp_ms() -> u64 {
     SystemTime::now()
@@ -227,15 +287,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Socket-Derived WAN IPs • Anti-Spoofing • In-Memory Roster Only    ");
     println!("═════════════════════════════════════════════════════════════════════");
 
+    let turn: Arc<Option<TurnConfig>> = Arc::new(TurnConfig::from_env());
+    match turn.as_ref() {
+        Some(cfg) => println!("  TURN credentials: {} (valid {}h)", cfg.urls.join(", "), cfg.ttl_secs / 3600),
+        None => println!("  TURN credentials: off (set NOVAURA_TURN_SECRET and NOVAURA_TURN_URLS)"),
+    }
+
     let shared_state: SharedState = Arc::new(Mutex::new(RelayState {
         sessions: HashMap::new(),
         ip_counts: HashMap::new(),
     }));
 
     loop {
-        let (stream, peer_addr) = listener.accept().await?;
+        // A failed accept (e.g. out of file descriptors) must not stop the relay.
+        let (stream, peer_addr) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                eprintln!("[Relay Warning] accept failed: {}", e);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+        };
         let peer_ip = peer_addr.ip();
         let state_clone = Arc::clone(&shared_state);
+        let turn = Arc::clone(&turn);
 
         // 1. Connection Limits & Concurrency Preflight
         {
@@ -483,7 +558,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // 5. Route Regular Packets
+                // 5. TURN credentials for this registered node. Answered by the relay
+                //    itself and never forwarded.
+                if packet.packet_type == "MESH_TURN_REQUEST" {
+                    let registered_id = {
+                        let state = state_clone.lock().await;
+                        state.sessions.get(&peer_addr).and_then(|s| s.node_id.clone())
+                    };
+                    if let (Some(cfg), Some(node_id)) = (turn.as_ref().as_ref(), registered_id) {
+                        let now_ms = current_timestamp_ms();
+                        let reply = RelayPacket {
+                            id: format!("turn_{}", now_ms),
+                            sender_id: "relay_supervisor".to_string(),
+                            sender_name: "NovAura Universe Relay".to_string(),
+                            sender_pubkey: None,
+                            recipient_id: Some(node_id.clone()),
+                            packet_type: "MESH_TURN_CREDENTIALS".to_string(),
+                            payload: turn_payload(cfg, &node_id, now_ms / 1000),
+                            signature: None,
+                            timestamp_ms: now_ms,
+                        };
+                        if let Ok(reply_json) = serde_json::to_string(&reply) {
+                            let _ = tx.try_send(format!("{}\n", reply_json));
+                        }
+                    }
+                    line.clear();
+                    continue;
+                }
+
+                // 6. Route Regular Packets
                 let mut target_senders: Vec<mpsc::Sender<String>> = Vec::new();
                 let out_line = format!("{}\n", trimmed);
 
@@ -543,7 +646,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 line.clear();
             }
 
-            // 6. Client Disconnect Cleanup & Roster Notification
+            // 7. Client Disconnect Cleanup & Roster Notification
             let (departed_id, departed_room, peers_to_notify) = {
                 let mut state = state_clone.lock().await;
                 // Decrement IP count
@@ -597,5 +700,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("[Relay] Anonymous connection closed for {}", peer_addr);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_credential_matches_rest_api_formula() {
+        // From Python: base64(hmac.new(b"north-star", b"1700000000:NODE-ab12", sha1).digest())
+        assert_eq!(turn_credential("north-star", "1700000000:NODE-ab12"), "SmCOayHLNUv1XsiELbORw/2rmEU=");
+    }
+
+    #[test]
+    fn turn_payload_carries_expiry_and_clean_user() {
+        let cfg = TurnConfig {
+            secret: "north-star".to_string(),
+            urls: vec!["turn:203.0.113.7:3478?transport=udp".to_string()],
+            ttl_secs: 3600,
+        };
+        let p = turn_payload(&cfg, "NODE-ab12:<x>", 1_699_996_400);
+        assert_eq!(p["username"], "1700000000:NODE-ab12x");
+        assert_eq!(p["expires_at_ms"], 1_700_000_000_000u64);
+        assert_eq!(p["credential"], turn_credential("north-star", "1700000000:NODE-ab12x"));
+        assert_eq!(p["urls"][0], "turn:203.0.113.7:3478?transport=udp");
     }
 }

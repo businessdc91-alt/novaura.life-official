@@ -18,6 +18,29 @@ use tokio::sync::{mpsc, RwLock};
 pub const DEFAULT_UDP_BEACON_PORT: u16 = 43888;
 pub const DEFAULT_TCP_LISTEN_PORT: u16 = 43889;
 pub const DEFAULT_PUBLIC_RELAY: &str = "relay.novaura.life:43889";
+
+/// The relay chosen in the Peering window, kept across restarts. An empty file
+/// means the user turned the relay off; no file means the default relay.
+fn relay_setting_path() -> std::path::PathBuf {
+    crate::get_app_data_dir().join("mesh_relay.txt")
+}
+
+fn load_relay_setting() -> Option<String> {
+    match std::fs::read_to_string(relay_setting_path()) {
+        Ok(saved) => Some(saved.trim().to_string()).filter(|s| !s.is_empty()),
+        Err(_) => Some(DEFAULT_PUBLIC_RELAY.to_string()),
+    }
+}
+
+fn save_relay_setting(relay_address: &Option<String>) {
+    let path = relay_setting_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&path, relay_address.as_deref().unwrap_or("").trim()) {
+        log::warn!("[SovereignMesh] Could not save the relay setting: {}", e);
+    }
+}
 pub const MAX_PACKET_BYTES: usize = 256 * 1024; // 256 KB memory exhaustion ceiling
 pub const MAX_PEERS_PER_ROOM: usize = 100;
 pub const MAX_CONCURRENT_SOCKETS_PER_IP: usize = 8;
@@ -275,6 +298,55 @@ pub struct MeshStatus {
     pub relay_address: Option<String>,
     pub relay_connected: bool,
     pub invite_code: String,
+    /// TURN server credentials from the relay ({ urls, username, credential,
+    /// expires_at_ms }), when it runs one. Calls use them when no direct path exists.
+    pub turn: Option<serde_json::Value>,
+}
+
+/// Short-lived TURN credentials the relay issued to this node.
+struct TurnGrant {
+    payload: serde_json::Value,
+    expires_ms: u64,
+    ttl_ms: u64,
+}
+
+impl TurnGrant {
+    /// Accepts only well-formed TURN credentials, so a bad relay reply cannot
+    /// hand the call stack arbitrary ICE servers.
+    fn from_payload(payload: &serde_json::Value) -> Option<Self> {
+        let urls: Vec<String> = payload
+            .get("urls")?
+            .as_array()?
+            .iter()
+            .filter_map(|u| u.as_str())
+            .filter(|u| (u.starts_with("turn:") || u.starts_with("turns:")) && u.len() < 256)
+            .take(8)
+            .map(str::to_string)
+            .collect();
+        let username = payload.get("username")?.as_str()?;
+        let credential = payload.get("credential")?.as_str()?;
+        let expires_ms = payload.get("expires_at_ms")?.as_u64()?;
+        let ttl_ms = payload.get("ttl_secs").and_then(|t| t.as_u64()).unwrap_or(86_400) * 1000;
+        if urls.is_empty() || username.len() > 128 || credential.len() > 128 || expires_ms <= current_timestamp_ms() {
+            return None;
+        }
+        Some(Self {
+            payload: serde_json::json!({
+                "urls": urls,
+                "username": username,
+                "credential": credential,
+                "expires_at_ms": expires_ms,
+            }),
+            expires_ms,
+            ttl_ms,
+        })
+    }
+
+    /// Ask again once half the lifetime has passed, so a new call always gets
+    /// credentials that outlast it by hours.
+    fn needs_refresh(&self) -> bool {
+        current_timestamp_ms() + self.ttl_ms / 2 >= self.expires_ms
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -303,6 +375,7 @@ struct MeshInner {
     /// must travel through this tunnel rather than a fresh connection.
     pub relay_tx: Option<mpsc::Sender<String>>,
     pub active_connections_per_ip: HashMap<IpAddr, usize>,
+    turn: Option<TurnGrant>,
 }
 
 #[derive(Clone)]
@@ -329,10 +402,11 @@ impl MeshManager {
             wan_ip: "0.0.0.0".to_string(),
             peers: HashMap::new(),
             seen_packet_ids: HashSet::new(),
-            relay_address: Some(DEFAULT_PUBLIC_RELAY.to_string()),
+            relay_address: load_relay_setting(),
             relay_connected: false,
             relay_tx: None,
             active_connections_per_ip: HashMap::new(),
+            turn: None,
         };
 
         Self {
@@ -651,6 +725,24 @@ impl MeshManager {
             let _ = writer.write_all(format!("{}\n", reg_json).as_bytes()).await;
         }
 
+        // Ask for TURN credentials now and again before they run out. Relays
+        // without a TURN server ignore this; older relays drop it, because no
+        // node can register as "relay_supervisor".
+        let turn_request = serde_json::to_string(&MeshPacket {
+            id: String::new(),
+            sender_id: handshake.sender_id.clone(),
+            sender_name: handshake.sender_name.clone(),
+            sender_pubkey: None,
+            recipient_id: Some("relay_supervisor".to_string()),
+            packet_type: "MESH_TURN_REQUEST".to_string(),
+            payload: serde_json::json!({}),
+            signature: None,
+            timestamp_ms: 0,
+        })
+        .map(|j| format!("{}\n", j))
+        .unwrap_or_default();
+        let mut turn_check = tokio::time::interval(tokio::time::Duration::from_secs(600));
+
         // 2. Read incoming packets routed from other WAN nodes with bounded buffer
         let mut buf_reader = BufReader::new(reader);
         let mut line = String::new();
@@ -667,7 +759,18 @@ impl MeshManager {
                             let trimmed = line.trim();
                             if !trimmed.is_empty() {
                                 if let Ok(packet) = serde_json::from_str::<MeshPacket>(trimmed) {
-                                    self.process_incoming_packet(packet, Some(relay_addr.to_string())).await;
+                                    if packet.packet_type == "MESH_TURN_CREDENTIALS" {
+                                        // Only the relay itself may issue these; it never forwards
+                                        // client packets claiming its reserved sender ID.
+                                        if packet.sender_id == "relay_supervisor" {
+                                            if let Some(grant) = TurnGrant::from_payload(&packet.payload) {
+                                                log::info!("[SovereignMesh] TURN credentials received from relay");
+                                                self.inner.write().await.turn = Some(grant);
+                                            }
+                                        }
+                                    } else {
+                                        self.process_incoming_packet(packet, Some(relay_addr.to_string())).await;
+                                    }
                                 }
                             }
                             line.clear();
@@ -684,6 +787,16 @@ impl MeshManager {
                             }
                         }
                         None => break,
+                    }
+                }
+                _ = turn_check.tick() => {
+                    // The first tick fires at once, which sends the initial request.
+                    let wanted = {
+                        let state = self.inner.read().await;
+                        state.turn.as_ref().map_or(true, |t| t.needs_refresh())
+                    };
+                    if wanted && !turn_request.is_empty() && writer.write_all(turn_request.as_bytes()).await.is_err() {
+                        break;
                     }
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
@@ -1123,9 +1236,13 @@ impl MeshManager {
     }
 
     pub async fn set_relay(&self, relay_address: Option<String>) -> Result<bool, String> {
+        let relay_address = relay_address.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+        save_relay_setting(&relay_address);
         let mut state = self.inner.write().await;
         state.relay_address = relay_address;
         state.relay_connected = false;
+        // TURN credentials belong to the old relay's TURN server.
+        state.turn = None;
         // Dropping the tunnel handle closes the current tunnel so the supervisor
         // reconnects to the new address.
         state.relay_tx = None;
@@ -1161,6 +1278,11 @@ impl MeshManager {
             relay_address: state.relay_address.clone(),
             relay_connected: state.relay_connected,
             invite_code,
+            turn: state
+                .turn
+                .as_ref()
+                .filter(|t| t.expires_ms > current_timestamp_ms() + 60_000)
+                .map(|t| t.payload.clone()),
         }
     }
 
