@@ -93,7 +93,7 @@ export function PlayerBar({ track, queue, onSelect }) {
           <Cover blobId={track.coverBlobId} title={track.title} className="w-11 h-11 rounded-md shrink-0" />
           <div className="w-44 min-w-0">
             <div className="text-[13px] font-semibold text-white truncate">{track.title}</div>
-            <div className="text-[11px] text-white/50 truncate">{track.spec?.genre} · {track.spec?.era}{track.spec?.mode === 'loop' ? ' · loop' : ''}</div>
+            <div className="text-[11px] text-white/50 truncate">{track.imported ? ([track.artist, track.album].filter(Boolean).join(' · ') || 'Imported') : `${track.spec?.genre} · ${track.spec?.era}`}{track.spec?.mode === 'loop' ? ' · loop' : ''}</div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => step(-1)} className="text-white/60 hover:text-white"><SkipBack className="w-4 h-4" /></button>

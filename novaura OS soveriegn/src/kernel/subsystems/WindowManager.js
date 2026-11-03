@@ -101,7 +101,7 @@ class WindowManager {
 
   minimize(id) {
     this._setState(id, 'minimized');
-    this._kernel.ipc.emit('window:minimized', { id });
+    this._kernel?.ipc.emit('window:minimized', { id });
   }
 
   restore(id) {
@@ -118,7 +118,7 @@ class WindowManager {
     win.state = win.state === 'maximized' ? 'normal' : 'maximized';
     this._windows.set(id, win);
     this._notify();
-    this._kernel.ipc.emit('window:maximized', { id, state: win.state });
+    this._kernel?.ipc.emit('window:maximized', { id, state: win.state });
   }
 
   updateProps(id, props) {

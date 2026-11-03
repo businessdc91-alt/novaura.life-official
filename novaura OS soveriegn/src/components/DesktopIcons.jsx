@@ -18,6 +18,7 @@ import {
   moveItem, zipItem, extractZip, downloadFile, createShortcut, readShortcut, isShortcut, uploadFiles,
 } from '../services/fileStorageService.js';
 import { openVaultItem, openShortcutTarget, openInFiles, shortcutTargetFor, parentOf } from '../services/desktopActions.js';
+import { openWithOptions, defaultOpen } from '../services/openWith.js';
 
 const GRID_GAP_X = 20;
 const GRID_GAP_Y = 16;
@@ -199,7 +200,12 @@ export default function DesktopIcons({ openApp, openWindows = [], unreadMail = 0
   const openItem = useCallback((item) => {
     if (item.kind === 'app') openApp(item.app.id);
     else if (item.kind === 'shortcut') openShortcutTarget(item.target);
-    else openVaultItem(item.doc);
+    else {
+      // A file opens in the app made for it (Media Deck, Literature, Cybeni); anything else is shown in Files.
+      const action = item.doc?.type === 'file' ? defaultOpen(item.doc) : null;
+      if (action) action.run();
+      else openVaultItem(item.doc);
+    }
   }, [openApp]);
 
   // ── Placement ─────────────────────────────────────────────────────────────
@@ -357,6 +363,11 @@ export default function DesktopIcons({ openApp, openWindows = [], unreadMail = 0
   const itemEntries = (item) => {
     const where = L.placementOf(layout, item.ref);
     const entries = [{ label: item.kind === 'app' ? 'Launch' : 'Open', icon: ExternalLink, onClick: () => openItem(item) }];
+    if (item.doc?.type === 'file') {
+      // "Open" above is the first of these; the rest are the other apps that can take the file.
+      const others = openWithOptions(item.doc).filter(o => o.id !== 'download' && o.id !== 'extract');
+      for (const opt of defaultOpen(item.doc) ? others.slice(1) : others) entries.push({ label: opt.label, icon: FolderOpen, onClick: () => run(opt.run) });
+    }
     if (item.kind === 'folder' || item.kind === 'file') {
       entries.push({ label: 'Compress to .zip', icon: Archive, onClick: () => run(() => zipItem(item.doc.id), 'Compressed to .zip') });
     }

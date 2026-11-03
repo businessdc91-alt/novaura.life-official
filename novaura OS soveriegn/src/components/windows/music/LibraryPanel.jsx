@@ -88,7 +88,7 @@ function TrackCard({ track, albums, onPlay, playing, say, onEdit }) {
         <div className="flex items-start gap-1">
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold text-white truncate">{track.title}</div>
-            <div className="text-[11px] text-white/45 truncate">{track.imported ? 'Imported' : `${track.spec?.genre} · ${track.spec?.era}`}{track.spec?.mode && track.spec.mode !== 'song' ? ` · ${track.spec.mode === 'loop' ? 'loop' : track.spec.mode}` : ''}</div>
+            <div className="text-[11px] text-white/45 truncate">{track.imported ? ([track.artist, track.album].filter(Boolean).join(' · ') || 'Imported') : `${track.spec?.genre} · ${track.spec?.era}`}{track.spec?.mode && track.spec.mode !== 'song' ? ` · ${track.spec.mode === 'loop' ? 'loop' : track.spec.mode}` : ''}</div>
           </div>
           <button onClick={() => updateTrack(track.id, { liked: track.liked ? 0 : 1 })} className={track.liked ? 'text-fuchsia-400' : 'text-white/30 hover:text-white/70'}><Heart className={`w-4 h-4 ${track.liked ? 'fill-current' : ''}`} /></button>
           <div className="relative">
@@ -128,7 +128,7 @@ export default function LibraryPanel({ tracks, albums, current, onPlay, say, onE
     if (filter === 'liked' && !t.liked) return false;
     if (filter === 'imported' && !t.imported) return false;
     if (['song', 'instrumental', 'acapella', 'loop'].includes(filter) && (t.imported || t.spec?.mode !== filter)) return false;
-    if (query && !`${t.title} ${t.spec?.genre} ${t.spec?.description}`.toLowerCase().includes(query.toLowerCase())) return false;
+    if (query && !`${t.title} ${t.artist || ''} ${t.album || ''} ${t.spec?.genre} ${t.spec?.description}`.toLowerCase().includes(query.toLowerCase())) return false;
     return true;
   }), [tracks, filter, query, publishedOnly]);
 

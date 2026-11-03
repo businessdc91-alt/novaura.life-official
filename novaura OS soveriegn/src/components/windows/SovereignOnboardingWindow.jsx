@@ -152,8 +152,8 @@ export default function SovereignOnboardingWindow() {
       appId: 'media_deck',
       appLabel: 'Launch Nova Media Deck',
       conventionalProblem: 'Switching between Spotify and YouTube tabs while coding creates distraction, battery drain, and ad interruptions.',
-      outOfTheBoxDifferentiator: 'Drag and drop your local audio and video files directly into an on-device library. Watch real-time audio spectrum frequency bars dance on the Web Audio API visualizer, pop tutorial videos out into native floating Picture-in-Picture (PiP) while you code, and generate complete song lyrics with the local Suno AI studio.',
-      interactiveChallenge: 'Launch Nova Media Deck, test the Suno AI Lyricist tab to generate a synthwave or cyberpunk track, and try popping a video into Picture-in-Picture.',
+      outOfTheBoxDifferentiator: 'Drag your own music and videos, or a whole folder, into an on-device library that keeps titles, artists and cover art, next to an album of NovAura originals. Watch real-time audio spectrum frequency bars dance on the Web Audio API visualizer, pop tutorial videos out into native floating Picture-in-Picture (PiP) while you code, and hand off to Music Studio when you want to make a new song.',
+      interactiveChallenge: 'Launch Nova Media Deck, play a NovAura Original, drop a folder of your own music onto the window, and try popping a video into Picture-in-Picture.',
     },
     {
       id: 'mission_5',
@@ -1366,8 +1366,8 @@ export default function SovereignOnboardingWindow() {
                 },
                 {
                   id: 'media_deck',
-                  name: 'Nova Media Deck & Suno Studio',
-                  desc: 'Universal local media player, Web Audio API frequency visualizer, native Picture-in-Picture (PiP) video, and Suno AI neural lyricist.',
+                  name: 'Nova Media Deck',
+                  desc: 'Local music and video player: your library, NovAura Originals, a Web Audio spectrum visualizer and native Picture-in-Picture (PiP) video.',
                   icon: Music,
                   color: '#ec4899',
                 },

@@ -10,9 +10,10 @@ import {
   downloadFile, renameItem, getStorageUsage, saveFile,
   getCloudConnectorStatus, connectGoogleDrive, disconnectGoogleDrive,
   searchGoogleDriveFiles, importGoogleDriveFile,
-  zipItem, extractZip, createShortcut, isShortcut, readShortcut, DESKTOP_PATH
+  zipItem, extractZip, createShortcut, isShortcut, readShortcut, DESKTOP_PATH, contentToBytes
 } from '../../services/fileStorageService.js';
 import { openShortcutTarget, shortcutTargetFor } from '../../services/desktopActions.js';
+import { openWithOptions, defaultOpen, fileKind } from '../../services/openWith.js';
 
 function getFileIcon(name) {
   const ext = (name || '').split('.').pop()?.toLowerCase();
@@ -32,6 +33,26 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+const OPEN_WITH_ICONS = { media_deck: Music, literature: FileText, cybeni: FileCode, extract: PackageOpen, download: Download };
+
+// Uploaded images are stored as data: URLs or raw bytes; either can be shown.
+function ImagePreview({ doc }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (typeof doc.content === 'string' && doc.content.startsWith('data:image/')) { setUrl(doc.content); return undefined; }
+    let made = null;
+    let live = true;
+    contentToBytes(doc.content).then((bytes) => {
+      if (!live) return;
+      made = URL.createObjectURL(new Blob([bytes], { type: doc.mimeType || 'image/png' }));
+      setUrl(made);
+    }).catch(() => {});
+    return () => { live = false; if (made) URL.revokeObjectURL(made); };
+  }, [doc.id, doc.content, doc.mimeType]);
+  if (!url) return null;
+  return <img src={url} alt="" className="mt-4 w-full max-h-48 object-contain rounded border border-slate-800 bg-slate-950" draggable={false} />;
+}
+
 export default function FilesWindow({ props: windowProps } = {}) {
   const [currentPath, setCurrentPath] = useState(windowProps?.path || '/');
   const [pendingSelect, setPendingSelect] = useState(windowProps?.select || null);
@@ -46,6 +67,7 @@ export default function FilesWindow({ props: windowProps } = {}) {
   const [renameValue, setRenameValue] = useState('');
   const [selectedItem, setSelectedItem] = useState(null);
   const [filePreview, setFilePreview] = useState(null);
+  const [dropActive, setDropActive] = useState(false);
 
   // Cloud connector state
   const [activeTab, setActiveTab] = useState('local'); // 'local' | 'gdrive'
@@ -128,7 +150,12 @@ export default function FilesWindow({ props: windowProps } = {}) {
       const target = readShortcut(item);
       if (target?.kind === 'folder') { setCurrentPath(target.path); setSelectedItem(null); setFilePreview(null); }
       else openShortcutTarget(target);
-    } else runAction(() => downloadFile(item));
+    } else {
+      // Double-click opens the file in the app made for it; anything else is shown in the inspector.
+      const action = defaultOpen(item, { inFiles: true });
+      if (action) runAction(action.run);
+      else handleItemSelect(item);
+    }
   };
 
   const handleFolderClick = (folder) => {
@@ -377,8 +404,22 @@ export default function FilesWindow({ props: windowProps } = {}) {
         {/* View Switcher: Local Files vs Google Drive Connector */}
         {activeTab === 'local' ? (
           <div className="flex-1 flex overflow-hidden">
-            {/* File List Grid / Table */}
-            <div className="flex-1 overflow-y-auto p-4">
+            {/* File List Grid / Table. Files dragged in from Windows are copied into this folder. */}
+            <div
+              className={`flex-1 overflow-y-auto p-4 ${dropActive ? 'ring-2 ring-inset ring-cyan-500/70 bg-cyan-950/20' : ''}`}
+              onDragOver={(e) => {
+                const types = [...(e.dataTransfer?.types || [])];
+                if (types.includes('Files') && !types.includes('application/x-novaura-doc')) { e.preventDefault(); setDropActive(true); }
+              }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropActive(false); }}
+              onDrop={(e) => {
+                const files = [...(e.dataTransfer?.files || [])].filter(f => f.size > 0 || f.type);
+                if (!files.length) return;
+                e.preventDefault();
+                setDropActive(false);
+                runAction(() => uploadFiles(files, currentPath), `Copied ${files.length} ${files.length === 1 ? 'file' : 'files'} here`);
+              }}
+            >
               {showNewFolder && (
                 <form onSubmit={handleCreateFolder} className="mb-4 flex items-center gap-2 p-2 bg-slate-900 border border-cyan-500/50 rounded-lg max-w-sm">
                   <FolderPlus className="w-4 h-4 text-amber-400 shrink-0" />
@@ -530,59 +571,76 @@ export default function FilesWindow({ props: windowProps } = {}) {
               )}
             </div>
 
-            {/* Right: File Preview Inspector */}
-            {filePreview && (
-              <div className="w-72 bg-slate-900/50 border-l border-slate-800 p-4 flex flex-col shrink-0">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                  <span className="text-xs font-semibold text-slate-300">File Inspector</span>
-                  <button onClick={() => setFilePreview(null)} className="text-slate-500 hover:text-slate-300">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
+            {/* Right: File Inspector. It stays in place when nothing is selected, so the
+                first click of a double-click never reflows the grid under the second. */}
+            <div className="w-72 bg-slate-900/50 border-l border-slate-800 p-4 flex flex-col shrink-0">
+              {filePreview ? (
+                <>
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <span className="text-xs font-semibold text-slate-300">File Inspector</span>
+                    <button onClick={() => setFilePreview(null)} className="text-slate-500 hover:text-slate-300">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
 
-                <div className="my-4 text-center">
-                  <div className="w-16 h-16 mx-auto bg-slate-800/80 rounded-xl flex items-center justify-center mb-2 border border-slate-700">
-                    {React.createElement(getFileIcon(filePreview.name), { className: "w-8 h-8 text-cyan-400" })}
+                  <div className="my-4 text-center">
+                    <div className="w-16 h-16 mx-auto bg-slate-800/80 rounded-xl flex items-center justify-center mb-2 border border-slate-700">
+                      {React.createElement(getFileIcon(filePreview.name), { className: "w-8 h-8 text-cyan-400" })}
+                    </div>
+                    <h4 className="text-xs font-medium text-slate-100 truncate px-2">{filePreview.name}</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">{formatBytes(filePreview.size)}</p>
                   </div>
-                  <h4 className="text-xs font-medium text-slate-100 truncate px-2">{filePreview.name}</h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">{formatBytes(filePreview.size)}</p>
-                </div>
 
-                <div className="space-y-2 text-xs border-t border-slate-800 pt-3">
-                  <div className="flex justify-between text-slate-400">
-                    <span>Path</span>
-                    <span className="text-slate-200 truncate max-w-[140px]">{filePreview.path}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>Type</span>
-                    <span className="text-slate-200">{filePreview.mimeType || 'text/plain'}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>Updated</span>
-                    <span className="text-slate-200">{new Date(filePreview.updated_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-
-                {/* Content preview if string */}
-                {typeof filePreview.content === 'string' && (
-                  <div className="mt-4 flex-1 flex flex-col overflow-hidden">
-                    <span className="text-[11px] text-slate-400 mb-1">Preview</span>
-                    <div className="flex-1 bg-slate-950 p-2 rounded border border-slate-800 overflow-y-auto font-mono text-[11px] text-slate-300">
-                      {filePreview.content.slice(0, 1500)}
-                      {filePreview.content.length > 1500 && '... [truncated]'}
+                  <div className="space-y-2 text-xs border-t border-slate-800 pt-3">
+                    <div className="flex justify-between text-slate-400">
+                      <span>Path</span>
+                      <span className="text-slate-200 truncate max-w-[140px]">{filePreview.path}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Type</span>
+                      <span className="text-slate-200">{filePreview.mimeType || 'text/plain'}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Updated</span>
+                      <span className="text-slate-200">{new Date(filePreview.updated_at).toLocaleDateString()}</span>
                     </div>
                   </div>
-                )}
 
-                <button
-                  onClick={() => runAction(() => downloadFile(filePreview))}
-                  className="mt-4 w-full flex items-center justify-center gap-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download File</span>
-                </button>
-              </div>
-            )}
+                  {fileKind(filePreview) === 'image' && <ImagePreview doc={filePreview} />}
+
+                  {/* Content preview for text (binary uploads are stored as data: URLs) */}
+                  {typeof filePreview.content === 'string' && !filePreview.content.startsWith('data:') && (
+                    <div className="mt-4 flex-1 flex flex-col overflow-hidden">
+                      <span className="text-[11px] text-slate-400 mb-1">Preview</span>
+                      <div className="flex-1 bg-slate-950 p-2 rounded border border-slate-800 overflow-y-auto font-mono text-[11px] text-slate-300">
+                        {filePreview.content.slice(0, 1500)}
+                        {filePreview.content.length > 1500 && '... [truncated]'}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 space-y-1.5">
+                    {openWithOptions(filePreview, { inFiles: true }).map((opt, i) => (
+                      <button
+                        key={opt.id}
+                        onClick={() => runAction(opt.run, opt.id === 'extract' ? 'Extracted into a new folder' : null)}
+                        className={`w-full flex items-center justify-center gap-2 py-2 border rounded-lg text-xs font-medium transition-colors ${i === 0 && opt.id !== 'download'
+                          ? 'bg-cyan-700 hover:bg-cyan-600 border-cyan-600 text-white'
+                          : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'}`}
+                      >
+                        {React.createElement(opt.id === 'media_deck' && fileKind(filePreview) === 'video' ? Film : OPEN_WITH_ICONS[opt.id] || FolderOpen, { className: 'w-3.5 h-3.5' })}
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-500 text-xs px-4">
+                  <File className="w-8 h-8 mb-2 text-slate-600" />
+                  Select a file to see its details and the apps that can open it.
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           /* Google Drive On-Demand Connector Tab */

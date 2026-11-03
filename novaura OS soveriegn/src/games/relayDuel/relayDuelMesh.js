@@ -10,7 +10,7 @@
 // closed. Incoming packets are re-dispatched as `novaura:relay_duel_received`
 // (the window bridge forwards that name to popped-out windows).
 
-import { registerMeshHandler, sendDirectMeshPacket, verifiedSenderDid, getLocalIdentity, dispatchMeshToast } from '../../services/sovereignMesh.js';
+import { registerMeshHandler, sendDirectMeshPacket, verifiedSenderDid, getLocalIdentity } from '../../services/sovereignMesh.js';
 import { CHARACTERS } from './engine.js';
 
 export const PACKET_TYPE = 'MESH_GAME_RELAY_DUEL';
@@ -88,7 +88,7 @@ function onPacket(payload, packet) {
     const isNew = !pendingInvites.has(data.gameId);
     pendingInvites.set(data.gameId, { ...data, from, did, receivedAt: Date.now() });
     if (isNew) {
-      dispatchMeshToast({ type: 'peer', title: 'Relay Duel challenge', message: `${data.name} challenged you. Open Relay Duel to accept.` });
+      window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: { type: 'peer', title: 'Relay Duel challenge', message: `${data.name} challenged you.`, appId: 'relay_duel' } }));
     }
   }
   window.dispatchEvent(new CustomEvent('novaura:relay_duel_received', { detail: { ...data, from, did } }));

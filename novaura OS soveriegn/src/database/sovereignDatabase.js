@@ -9,7 +9,7 @@ import Dexie from 'dexie';
 // Tables included in backups and the encrypted disk mirror. Add new user-data
 // tables here, or they will not survive a reinstall. Left out on purpose: caches
 // (inference_hosts) and bulky regenerable history (cybeni_checkpoints).
-const BACKUP_TABLES = [
+export const BACKUP_TABLES = [
   'identities', 'settings', 'workspaces', 'documents', 'chat_history', 'mailbox', 'social_posts', 'vault',
   'sentinel_audit', 'card_decks', 'contacts', 'call_logs', 'hosted_sites',
   'manuscripts', 'manuscript_state', 'memories', 'enclave_records', 'workflow_chains',

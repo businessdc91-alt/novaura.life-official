@@ -1,0 +1,93 @@
+{
+  "album": "NovAura Originals",
+  "tracks": [
+    {
+      "id": "original_anthem-for-the-catalyst",
+      "file": "anthem-for-the-catalyst.mp3",
+      "cover": "anthem-for-the-catalyst.jpg",
+      "title": "Anthem for the Catalyst",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 264.1,
+      "size": 6274836,
+      "sourceName": "Anthem for the Catalyst.mp3"
+    },
+    {
+      "id": "original_clockwork-constellations",
+      "file": "clockwork-constellations.mp3",
+      "cover": "clockwork-constellations.jpg",
+      "title": "Clockwork Constellations",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 247.2,
+      "size": 5932170,
+      "sourceName": "Clockwork Constellations.mp3"
+    },
+    {
+      "id": "original_copper-sparks-and-quantum-hearts",
+      "file": "copper-sparks-and-quantum-hearts.mp3",
+      "cover": "copper-sparks-and-quantum-hearts.jpg",
+      "title": "Copper Sparks & Quantum Hearts",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 294.1,
+      "size": 7345376,
+      "sourceName": "Copper Sparks & Quantum Hearts.mp3"
+    },
+    {
+      "id": "original_crimson-circuit-carnival",
+      "file": "crimson-circuit-carnival.mp3",
+      "cover": "crimson-circuit-carnival.jpg",
+      "title": "Crimson Circuit Carnival",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 256.2,
+      "size": 5975244,
+      "sourceName": "Crimson Circuit Carnival.mp3"
+    },
+    {
+      "id": "original_gypsy-crown-of-glass",
+      "file": "gypsy-crown-of-glass.mp3",
+      "cover": "gypsy-crown-of-glass.jpg",
+      "title": "Gypsy Crown of Glass",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 222.4,
+      "size": 5200029,
+      "sourceName": "Gypsy Crown of Glass.mp3"
+    },
+    {
+      "id": "original_neon-petals-superflow",
+      "file": "neon-petals-superflow.mp3",
+      "cover": "neon-petals-superflow.jpg",
+      "title": "Neon Petals superflow",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 255,
+      "size": 6329319,
+      "sourceName": "Neon Petals superflow.mp3"
+    },
+    {
+      "id": "original_steam-sparks-and-screens",
+      "file": "steam-sparks-and-screens.mp3",
+      "cover": "steam-sparks-and-screens.jpg",
+      "title": "Steam, Sparks, and Screens",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 286.2,
+      "size": 6673965,
+      "sourceName": "Steam, Sparks, and Screens.mp3"
+    },
+    {
+      "id": "original_vibe-in-the-static",
+      "file": "vibe-in-the-static.mp3",
+      "cover": "vibe-in-the-static.jpg",
+      "title": "Vibe in the Static",
+      "artist": "lostitonce420",
+      "album": "NovAura Originals",
+      "seconds": 245.4,
+      "size": 5674242,
+      "sourceName": "Vibe in the Static.mp3"
+    }
+  ]
+}

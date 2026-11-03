@@ -8,7 +8,7 @@
 // Incoming packets are re-dispatched as `novaura:holochess_received` (the
 // window bridge forwards that name to popped-out windows).
 
-import { registerMeshHandler, sendDirectMeshPacket, verifiedSenderDid, getLocalIdentity, dispatchMeshToast } from './sovereignMesh.js';
+import { registerMeshHandler, sendDirectMeshPacket, verifiedSenderDid, getLocalIdentity } from './sovereignMesh.js';
 import { cleanChessPacket } from './holoChessService.js';
 
 export const PACKET_TYPE = 'MESH_GAME_HOLOCHESS';
@@ -43,7 +43,7 @@ function onPacket(payload, packet) {
     const isNew = !pendingInvites.has(data.gameId);
     pendingInvites.set(data.gameId, { ...data, from, did, receivedAt: Date.now() });
     if (isNew) {
-      dispatchMeshToast({ type: 'peer', title: 'HoloChess challenge', message: `${data.name} challenged you. Open HoloChess 3D to accept.` });
+      window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: { type: 'peer', title: 'HoloChess challenge', message: `${data.name} challenged you.`, appId: 'holochess' } }));
     }
   }
   window.dispatchEvent(new CustomEvent('novaura:holochess_received', { detail: { ...data, from, did } }));

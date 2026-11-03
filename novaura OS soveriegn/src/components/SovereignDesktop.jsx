@@ -21,6 +21,7 @@ import '../services/forge/userApps';
 import '../services/meshArchiveSync';
 import '../games/relayDuel/relayDuelMesh'; // Relay Duel challenges arrive while the game is closed
 import '../services/holoChessMesh'; // and HoloChess challenges too
+import { recordNotification, isDoNotDisturb, markRead } from '../services/notificationCenter';
 import { isTauriApp, popOutApp } from '../services/popoutWindows';
 import { callService, CallState } from '../services/sovereignCallService';
 import { Phone, PhoneCall, PhoneOff, Video, ChevronUp, ChevronDown, Sparkles } from 'lucide-react';
@@ -236,16 +237,11 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
     return () => window.removeEventListener('novaura-open-window', handleOpenWindowCustom);
   }, [openApp]);
 
-  // Swarm Mesh Notification Toasts listener
+  // Notification toasts. Every one is also kept behind the tray bell; Do Not Disturb keeps them there only.
   useEffect(() => {
     const handleMeshToast = (e) => {
-      const toast = {
-        id: `toast_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        type: e.detail?.type || 'info',
-        title: e.detail?.title || 'Swarm Event',
-        message: e.detail?.message || '',
-        action: e.detail?.action,
-      };
+      const toast = recordNotification(e.detail || {});
+      if (isDoNotDisturb()) return;
       setMeshToasts(prev => [...prev.slice(-3), toast]);
       setTimeout(() => {
         setMeshToasts(prev => prev.filter(t => t.id !== toast.id));
@@ -539,6 +535,18 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
                 </button>
               </div>
               <p className="text-slate-300 text-[11px] leading-relaxed">{toast.message}</p>
+              {toast.appId && getAppById(toast.appId) && (
+                <button
+                  onClick={() => {
+                    openApp(toast.appId, toast.props || {}, { toggle: false });
+                    markRead(toast.id);
+                    setMeshToasts(prev => prev.filter(t => t.id !== toast.id));
+                  }}
+                  className="mt-1 px-2 py-0.5 rounded-md bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/40 text-cyan-100 text-[11px] font-semibold"
+                >
+                  Open {getAppById(toast.appId).label}
+                </button>
+              )}
             </div>
           ))}
         </div>

@@ -20,6 +20,8 @@ import {
 } from '../../services/manuscriptStore.js';
 import { getPeerCount, getLocalIdentity } from '../../services/sovereignMesh.js';
 import { sanitizeRichHtml, escapeHtml } from '../../services/htmlSanitizer.js';
+import { db } from '../../database/sovereignDatabase.js';
+import { contentToBytes } from '../../services/fileStorageService.js';
 import { predictNextPhrase } from '../../services/literatureAiService.js';
 import { phraseRegex } from './literature/engines/SpellCheckEngine.js';
 
@@ -40,7 +42,7 @@ import AICoAuthorPanel from './literature/panels/AICoAuthorPanel.jsx';
 import EbookPublisherModal from './literature/panels/EbookPublisherModal.jsx';
 import ZenFocusOverlay from './literature/panels/ZenFocusOverlay.jsx';
 
-export default function LiteratureIDEWindow({ onClose }) {
+export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
   // ── Workspace & File Tree State ──
   const [files, setFiles] = useState([]);
   const [activeDoc, setActiveDoc] = useState(null);
@@ -301,30 +303,59 @@ export default function LiteratureIDEWindow({ onClose }) {
   };
 
   // ── 5. Import & Export ──
+  // Imported files are untrusted: HTML is cleaned before it is stored, and
+  // text is escaped so it shows as written.
+  const importText = (name, content) => {
+    let html = '';
+    if (/\.html?$/i.test(name)) {
+      html = sanitizeRichHtml(content, { allowRemoteImages: false });
+    } else if (/\.(md|markdown)$/i.test(name)) {
+      html = content.split(/\n\s*\n/).map(p => `<p>${escapeHtml(p.trim()).replace(/\n/g, '<br/>')}</p>`).join('');
+    } else {
+      html = `<p>${escapeHtml(content).replace(/\n/g, '<br/>')}</p>`;
+    }
+    const newDoc = createManuscriptFile(name, 'chapter', html);
+    setActiveDocumentId(newDoc.id);
+    refreshWorkspace();
+  };
+
   const handleImportFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target.result;
-      const name = file.name || 'Imported Document.docx';
-      let html = '';
-      // Imported files are untrusted: HTML is cleaned before it is stored, and
-      // text is escaped so it shows as written.
-      if (file.name.endsWith('.html') || file.name.endsWith('.htm')) {
-        html = sanitizeRichHtml(content, { allowRemoteImages: false });
-      } else if (file.name.endsWith('.md')) {
-        html = content.split(/\n\s*\n/).map(p => `<p>${escapeHtml(p.trim()).replace(/\n/g, '<br/>')}</p>`).join('');
-      } else {
-        html = `<p>${escapeHtml(content).replace(/\n/g, '<br/>')}</p>`;
-      }
-      const newDoc = createManuscriptFile(name, 'chapter', html);
-      setActiveDocumentId(newDoc.id);
-      refreshWorkspace();
-    };
+    reader.onload = (event) => importText(file.name || 'Imported Document.txt', event.target.result);
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  // A file handed over from Files ("Open in Literature IDE") is imported as a new chapter.
+  const lastImportRef = useRef(null);
+  const importVaultFile = async (fileId, openId) => {
+    if (openId && lastImportRef.current === openId) return;
+    lastImportRef.current = openId || null;
+    try {
+      const doc = await db.documents.get(fileId);
+      if (!doc || doc.type !== 'file') return;
+      const text = typeof doc.content === 'string' && !doc.content.startsWith('data:')
+        ? doc.content
+        : new TextDecoder().decode(await contentToBytes(doc.content));
+      importText(doc.name, text);
+    } catch (err) {
+      console.warn('[Literature] Could not open the file:', err);
+    }
+  };
+  const importVaultFileRef = useRef(importVaultFile);
+  useEffect(() => { importVaultFileRef.current = importVaultFile; });
+  useEffect(() => {
+    if (windowProps?.importFileId) importVaultFileRef.current(windowProps.importFileId, windowProps.openId);
+  }, [windowProps?.importFileId, windowProps?.openId]);
+  useEffect(() => {
+    const onContext = (e) => {
+      if (e.detail?.appId === 'literature' && e.detail.props?.importFileId) importVaultFileRef.current(e.detail.props.importFileId, e.detail.props.openId);
+    };
+    window.addEventListener('novaura:app_context', onContext);
+    return () => window.removeEventListener('novaura:app_context', onContext);
+  }, []);
 
   const handleExportFormat = (fmt) => {
     if (!activeDoc) return;

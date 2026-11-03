@@ -8,6 +8,7 @@ import { useKernel } from '../kernel/useKernel.js';
 import { getAppById } from '../config/appRegistry.js';
 import { getPeerCount } from '../services/sovereignMesh.js';
 import { getEngineStatus, subscribeEngineStatus } from '../services/engines/comfyEngine.js';
+import NotificationBell from './NotificationBell.jsx';
 
 const ENGINE_LABELS = { starting: 'AI STARTING', loading: 'AI LOADING', ready: 'AI READY', error: 'AI ENGINE' };
 
@@ -182,6 +183,9 @@ export default function SystemBar({
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
           <span className="text-[10px] font-mono">ENFORCED</span>
         </button>
+
+        {/* Notification history (the bell) */}
+        <NotificationBell openApp={openApp} />
 
         {/* Unread Mail */}
         <button

@@ -1,13 +1,14 @@
 import CloudKeysPanel from './settings/CloudKeysPanel.jsx';
+import BackupPanel from './settings/BackupPanel.jsx';
 import React, { useState, useEffect } from 'react';
 import {
-  Settings, Key, Cpu, HardDrive, ShieldCheck, Download, Upload,
+  Settings, Key, Cpu, HardDrive, ShieldCheck, Download,
   RefreshCw, Check, Sparkles, Database, Palette, AlertCircle,
   Gauge, Network, Lock, Layers, Zap, CheckCircle2, AlertTriangle, Server,
   Bug, LifeBuoy, ClipboardCopy, RotateCcw, FileText, Send, MessageSquare
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
-import { db, exportDatabaseBackup, importDatabaseBackup, resetDatabaseToFactory } from '../../database/sovereignDatabase.js';
+import { db, resetDatabaseToFactory } from '../../database/sovereignDatabase.js';
 import { getNativeSystemInfo, probeLocalAi } from '../../services/nativeService.js';
 import { submitBetaFeedback, syncPendingFeedback, countPendingFeedback } from '../../services/betaFeedbackService.js';
 import { evaluateHostHardware, HARDWARE_TIERS } from '../../services/hardwareSpecService.js';
@@ -189,31 +190,6 @@ export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
       console.error(err);
     } finally {
       setProbingLocal(false);
-    }
-  };
-
-  const handleExportBackup = async () => {
-    const jsonStr = await exportDatabaseBackup();
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `sovereign_db_backup_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImportBackup = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      await importDatabaseBackup(text);
-      alert('Database restored successfully! Refreshing telemetry...');
-      loadDbStats();
-      loadKeys();
-    } catch (err) {
-      alert('Restore failed: ' + err.message);
     }
   };
 
@@ -899,44 +875,7 @@ ${betaForm.description || 'No steps provided.'}
           </div>
         )}
 
-        {activeTab === 'backup' && (
-          <div className="max-w-2xl space-y-6">
-            <div>
-              <h2 className="text-base font-semibold text-slate-100 mb-1">Local Database Backup & Restore</h2>
-              <p className="text-xs text-slate-400">
-                Export your full private database (files, chat history, mail, social feed, and saved API keys) as a single portable JSON file. The backup is not encrypted and contains your API keys and node identity, so store it somewhere private.
-              </p>
-            </div>
-
-            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-semibold text-slate-200">Export Snapshot</h4>
-                  <p className="text-[11px] text-slate-400">Save a complete local backup of all Sovereign OS data.</p>
-                </div>
-                <button
-                  onClick={handleExportBackup}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export Database</span>
-                </button>
-              </div>
-
-              <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-semibold text-slate-200">Restore Snapshot</h4>
-                  <p className="text-[11px] text-slate-400">Restore a previously saved database backup file.</p>
-                </div>
-                <label className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium cursor-pointer transition-colors border border-slate-700">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Import Backup</span>
-                  <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
-                </label>
-              </div>
-            </div>
-          </div>
-        )}
+        {activeTab === 'backup' && <BackupPanel />}
 
         {activeTab === 'beta' && (
           <div className="max-w-4xl space-y-6">
