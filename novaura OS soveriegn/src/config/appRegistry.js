@@ -50,7 +50,8 @@ const DiscoveryForgeWindow = lazy(() => import('../components/windows/DiscoveryF
 const UserAppWindow = lazy(() => import('../components/windows/UserAppWindow.jsx'));
 const FounderOfficeSuiteWindow = lazy(() => import('../components/windows/FounderOfficeSuiteWindow.jsx'));
 const HoloChessWindow = lazy(() => import('../components/windows/HoloChessWindow.jsx'));
-import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair } from 'lucide-react';
+const GreetingCardWindow = lazy(() => import('../components/windows/GreetingCardWindow.jsx'));
+import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift } from 'lucide-react';
 
 
 
@@ -395,7 +396,7 @@ export const APP_REGISTRY = [
     category: 'media',
     icon: Music,
     color: '#ec4899',
-    title: 'Nova Media Deck & Sovereign Theater (Visualizer, PiP & Suno Music)',
+    title: 'Nova Media Deck: Music, Video & NovAura Originals',
     component: NovaMediaDeckWindow,
     defaultSize: { width: 1060, height: 680 },
   },
@@ -499,6 +500,16 @@ export const APP_REGISTRY = [
     component: FounderOfficeSuiteWindow,
     defaultSize: { width: 1200, height: 740 },
     hidden: true,
+  },
+  {
+    id: 'greeting_cards',
+    label: 'Greeting Studio',
+    category: 'creator',
+    icon: Gift,
+    color: '#ec4899',
+    title: 'Sovereign Greeting Studio — Animated Cards & Mesh Delivery',
+    component: GreetingCardWindow,
+    defaultSize: { width: 1100, height: 720 },
   },
 ];
 
@@ -617,6 +628,9 @@ export function getAppById(id) {
   }
   if (id === 'nova_search' || id === 'search' || id === 'find' || id === 'p2p_search' || id === 'mesh_search' || id === 'discovery') {
     return APP_MAP.get('nova_search');
+  }
+  if (id === 'greeting' || id === 'card' || id === 'cards' || id === 'birthday' || id === 'greeting_cards' || id === 'greetings') {
+    return APP_MAP.get('greeting_cards');
   }
   return APP_MAP.get(id);
 }

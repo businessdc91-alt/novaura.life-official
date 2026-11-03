@@ -1675,6 +1675,7 @@ pub fn run() {
             get_native_hardware_spec,
             preview::cybeni_preview_publish,
             preview::cybeni_preview_clear,
+            preview::site_preview_publish,
             engines::engine_install_comfyui,
             engines::engine_install_status,
             engines::engine_comfy_start,

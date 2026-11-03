@@ -1042,6 +1042,7 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_STORIES_RESPONSE',
   'MESH_FOLLOW',
   'MESH_REPOST',
+  'MESH_GREETING_CARD',
 ]);
 
 export function broadcastMeshPacket(type, payload) {

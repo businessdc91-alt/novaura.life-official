@@ -8,108 +8,108 @@ import {
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { useKernel } from '../../kernel/useKernel.js';
-import { saveFile } from '../../services/fileStorageService.js';
+import { saveFile, triggerDownload } from '../../services/fileStorageService.js';
 import { publishHostedSite, getLocalIdentity } from '../../services/sovereignMesh.js';
 import { generateAuthEmbedSnippet } from '../../services/novaAuthClient.js';
 
-const TEMPLATES = [
-  {
-    id: 'landing',
-    name: 'Sovereign SaaS Landing',
-    description: 'High-conversion hero, features grid, pricing tier, and CTA.',
-    html: `<div class="hero">
-  <h1>Decentralized Computing for the Sovereign Era</h1>
-  <p>Own your data, operate local AI, and command an unkillable workstation.</p>
-  <button class="btn-primary">Launch Console</button>
-</div>
-<section class="features">
-  <div class="card"><h3>Zero Cloud Host</h3><p>Your database stays on your hardware.</p></div>
-  <div class="card"><h3>Dual Companions</h3><p>Aura & Nova orchestrate your OS.</p></div>
-  <div class="card"><h3>Real Code Engine</h3><p>Cybeni IDE writes and validates production code.</p></div>
-</section>`,
-    css: `body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0a0a0f; color: #f1f5f9; margin: 0; padding: 40px 20px; text-align: center; }
-.hero { max-width: 800px; margin: 0 auto 60px; }
-h1 { font-size: 2.75rem; background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-p { color: #94a3b8; font-size: 1.15rem; line-height: 1.6; }
-.btn-primary { background: linear-gradient(135deg, #0284c7, #4f46e5); color: white; border: none; padding: 12px 28px; font-size: 1rem; font-weight: 600; border-radius: 8px; cursor: pointer; transition: transform 0.2s; }
-.btn-primary:hover { transform: scale(1.05); }
-.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; max-width: 900px; margin: 0 auto; }
-.card { background: #13131e; border: 1px solid #1e293b; padding: 24px; border-radius: 12px; text-align: left; }
-.card h3 { color: #38bdf8; margin-top: 0; }
-.card p { color: #64748b; font-size: 0.95rem; margin-bottom: 0; }`,
-    js: `document.querySelector('.btn-primary')?.addEventListener('click', () => { alert('Sovereign console engaged!'); });`,
-  },
-  {
-    id: 'portfolio',
-    name: 'Architect Portfolio',
-    description: 'Clean minimalist dark showcase for engineers and creators.',
-    html: `<header>
-  <h2>Elena Vance</h2>
-  <p>Autonomous Systems Architect & Creative Technologist</p>
-</header>
-<main class="gallery">
-  <div class="project-card"><h4>Aether Mesh</h4><p>P2P distributed compute layer.</p></div>
-  <div class="project-card"><h4>Ghostwriter IDE</h4><p>Semantic literary synthesis engine.</p></div>
-</main>`,
-    css: `body { background: #030712; color: #f9fafb; font-family: monospace; padding: 40px; margin: 0; }
-header { border-bottom: 1px solid #1f2937; padding-bottom: 24px; margin-bottom: 32px; }
-h2 { font-size: 2rem; color: #34d399; margin: 0 0 8px; }
-.gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-.project-card { border: 1px solid #374151; padding: 20px; border-radius: 6px; background: #111827; }
-.project-card h4 { margin: 0 0 8px; color: #60a5fa; }`,
-    js: ``,
-  },
-];
+import { MULTIPAGE_TEMPLATES, LIVING_BACKGROUNDS } from '../../services/templates/websiteTemplates.js';
+import { tagEditable, applyBuilderEdit, EDIT_BRIDGE_SCRIPT } from '../../services/templates/builderEditBridge.js';
+import { loadSiteIntoFrame, clearSitePreview, newSiteSession } from '../../services/sitePreview.js';
 
 export default function WebsiteBuilderWindow() {
   const { kernel } = useKernel();
-  const [activeTab, setActiveTab] = useState('preview'); // 'preview' | 'code' | 'templates'
+  const [activeTab, setActiveTab] = useState('templates'); // 'preview' | 'code' | 'templates'
   const [device, setDevice] = useState('desktop'); // 'desktop' | 'tablet' | 'mobile'
-  const [html, setHtml] = useState(TEMPLATES[0].html);
-  const [css, setCss] = useState(TEMPLATES[0].css);
-  const [js, setJs] = useState(TEMPLATES[0].js);
+  const [activeTemplateId, setActiveTemplateId] = useState(MULTIPAGE_TEMPLATES[0].id);
+  const [activeBgId, setActiveBgId] = useState(MULTIPAGE_TEMPLATES[0].backgroundId || 'aurora');
+  const [templateFilter, setTemplateFilter] = useState('all');
+  const [html, setHtml] = useState(MULTIPAGE_TEMPLATES[0].html);
+  const [css, setCss] = useState(MULTIPAGE_TEMPLATES[0].css);
+  const [js, setJs] = useState(MULTIPAGE_TEMPLATES[0].js);
   const [prompt, setPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
 
   // 1-Click Decentralized Mesh Deployment State
   const [showDeployModal, setShowDeployModal] = useState(false);
-  const [deployDomain, setDeployDomain] = useState('mysite.nova');
-  const [deployTitle, setDeployTitle] = useState('My Sovereign Website');
+  const [deployDomain, setDeployDomain] = useState('chronicle.nova');
+  const [deployTitle, setDeployTitle] = useState('Sovereign Chronicle');
   const [deployOwner, setDeployOwner] = useState('operator');
   const [deployFaction, setDeployFaction] = useState('nova'); // 'nova' | 'aura'
-  const [deployFavicon, setDeployFavicon] = useState('🌐');
-  const [deployCategory, setDeployCategory] = useState('Infrastructure & Tools');
+  const [deployFavicon, setDeployFavicon] = useState('📰');
+  const [deployCategory, setDeployCategory] = useState('Media & Publishing');
   const [injectAuthSdk, setInjectAuthSdk] = useState(true);
   const [deploying, setDeploying] = useState(false);
   const [deployResult, setDeployResult] = useState(null);
   const [deployError, setDeployError] = useState('');
 
   const iframeRef = useRef(null);
+  const htmlRef = useRef(html);
+  const keepPreview = useRef(false);
+  useEffect(() => { htmlRef.current = html; }, [html]);
 
-  const getCombinedDoc = () => `<!DOCTYPE html>
+  // The page as saved and published; the preview adds the edit bridge (see builderEditBridge.js).
+  const getCombinedDoc = ({ preview = false } = {}) => {
+    const bg = LIVING_BACKGROUNDS[activeBgId];
+    const bgCss = bg ? bg.css : '';
+    return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>${css}</style>
+  <style>
+${bgCss}
+${css}
+  </style>
 </head>
 <body>
-  ${html}
-  <script>${js}<\/script>
+${preview ? tagEditable(html) : html}
+<script>${js}<\/script>
+${preview ? EDIT_BRIDGE_SCRIPT : ''}
 </body>
 </html>`;
+  };
 
+  const previewSession = useRef(newSiteSession());
+  useEffect(() => () => { clearSitePreview(previewSession.current); }, []);
   useEffect(() => {
     if (activeTab === 'preview' && iframeRef.current) {
-      iframeRef.current.srcdoc = getCombinedDoc();
+      // An edit that came from the preview is already on screen; reloading would lose the caret.
+      if (keepPreview.current) { keepPreview.current = false; return; }
+      loadSiteIntoFrame(iframeRef.current, getCombinedDoc({ preview: true }), { session: previewSession.current })
+        .catch(err => setSaveNotice(`Preview failed: ${err?.message || err}`));
     }
-  }, [html, css, js, activeTab]);
+  }, [html, css, js, activeBgId, activeTab]);
+
+  // Text typed and photos dropped in the preview are written back into the page source.
+  useEffect(() => {
+    const onMessage = (e) => {
+      if (e.source !== iframeRef.current?.contentWindow || !e.data?.novauraBuilderEdit) return;
+      const { key, html: inner } = e.data;
+      if (typeof key !== 'string' || typeof inner !== 'string' || inner.length > 600_000) return;
+      const next = applyBuilderEdit(htmlRef.current, key, inner);
+      if (next === htmlRef.current) return;
+      keepPreview.current = true;
+      htmlRef.current = next;
+      setHtml(next);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
 
   const handleApplyTemplate = (tpl) => {
+    setActiveTemplateId(tpl.id);
     setHtml(tpl.html);
     setCss(tpl.css);
     setJs(tpl.js);
+    if (tpl.backgroundId) {
+      setActiveBgId(tpl.backgroundId);
+    }
+    const cleanTitle = tpl.name.split('—')[0].trim();
+    setDeployTitle(cleanTitle);
+    if (tpl.favicon) setDeployFavicon(tpl.favicon);
+    if (tpl.category) setDeployCategory(tpl.category);
+    setDeployDomain(`${tpl.id}.nova`);
     setActiveTab('preview');
   };
 
@@ -151,14 +151,7 @@ Respond with JSON only:
   };
 
   const handleDownload = () => {
-    const fullHtml = getCombinedDoc();
-    const blob = new Blob([fullHtml], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'index.html';
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerDownload('index.html', new Blob([getCombinedDoc()], { type: 'text/html' }));
   };
 
   const handleOpenDeployModal = () => {
@@ -246,29 +239,50 @@ Respond with JSON only:
         {/* Responsive buttons & actions */}
         <div className="flex items-center gap-2">
           {activeTab === 'preview' && (
-            <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 mr-2">
-              <button
-                onClick={() => setDevice('desktop')}
-                className={`p-1.5 rounded ${device === 'desktop' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500'}`}
-                title="Desktop View"
-              >
-                <Monitor className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => setDevice('tablet')}
-                className={`p-1.5 rounded ${device === 'tablet' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500'}`}
-                title="Tablet View"
-              >
-                <Tablet className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => setDevice('mobile')}
-                className={`p-1.5 rounded ${device === 'mobile' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500'}`}
-                title="Mobile View"
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            <>
+              {/* Living Background Selector */}
+              <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 text-xs">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span className="text-slate-400 text-[11px] hidden sm:inline">Living BG:</span>
+                <select
+                  value={activeBgId}
+                  onChange={(e) => setActiveBgId(e.target.value)}
+                  className="bg-transparent border-none text-cyan-300 font-semibold outline-none text-xs cursor-pointer"
+                >
+                  {Object.values(LIVING_BACKGROUNDS).map(bg => (
+                    <option key={bg.id} value={bg.id} className="bg-slate-900 text-slate-100">
+                      {bg.name}
+                    </option>
+                  ))}
+                  <option value="none" className="bg-slate-900 text-slate-100">Minimal (None)</option>
+                </select>
+              </div>
+
+              {/* Viewport Resizing */}
+              <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 mr-2">
+                <button
+                  onClick={() => setDevice('desktop')}
+                  className={`p-1.5 rounded ${device === 'desktop' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500'}`}
+                  title="Desktop View"
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setDevice('tablet')}
+                  className={`p-1.5 rounded ${device === 'tablet' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500'}`}
+                  title="Tablet View"
+                >
+                  <Tablet className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setDevice('mobile')}
+                  className={`p-1.5 rounded ${device === 'mobile' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500'}`}
+                  title="Mobile View"
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </>
           )}
 
           <button
@@ -309,6 +323,22 @@ Respond with JSON only:
       <div className="flex-1 flex overflow-hidden">
         {activeTab === 'preview' && (
           <div className="flex-1 flex flex-col bg-slate-900/40 overflow-hidden">
+            {/* Interactive hint ribbon */}
+            <div className="px-4 py-1.5 bg-cyan-950/40 border-b border-cyan-500/20 text-[11px] text-cyan-300/90 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                <span>
+                  <b>Full Multi-Page Design Active:</b> Click navigation links inside the preview to switch pages • Double click text to edit • Drag & drop images into photo placeholders!
+                </span>
+              </div>
+              <button
+                onClick={() => setActiveTab('templates')}
+                className="text-[10px] uppercase font-bold text-cyan-400 hover:text-cyan-200 underline cursor-pointer"
+              >
+                Browse All Templates →
+              </button>
+            </div>
+
             {/* AI Prompt Header */}
             <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center gap-2 shrink-0">
               <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
@@ -323,7 +353,7 @@ Respond with JSON only:
               <button
                 onClick={handleAIGenerate}
                 disabled={generating}
-                className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-all shrink-0"
+                className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-all shrink-0 cursor-pointer"
               >
                 {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                 <span>Generate</span>
@@ -331,15 +361,18 @@ Respond with JSON only:
             </div>
 
             {/* Viewport Frame */}
-            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden bg-slate-950/60">
               <div
-                className={`h-full bg-white rounded-xl shadow-2xl overflow-hidden transition-all duration-300 border border-slate-700 ${
+                className={`h-full bg-black rounded-xl shadow-2xl overflow-hidden transition-all duration-300 border border-slate-800 ${
                   device === 'desktop' ? 'w-full' : device === 'tablet' ? 'w-[768px]' : 'w-[375px]'
                 }`}
               >
                 <iframe
                   ref={iframeRef}
                   title="Website Preview"
+                  // No allow-same-origin: the page's scripts must not reach the OS (keys, IndexedDB, native calls).
+                  // loadSiteIntoFrame serves it from the isolated preview origin so its scripts can run.
+                  sandbox="allow-scripts allow-forms allow-modals allow-popups"
                   className="w-full h-full border-none"
                 />
               </div>
@@ -351,8 +384,9 @@ Respond with JSON only:
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex-1 grid grid-cols-2 divide-x divide-slate-800">
               <div className="flex flex-col overflow-hidden">
-                <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] font-mono text-cyan-400">
-                  HTML Structure
+                <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] font-mono text-cyan-400 flex items-center justify-between">
+                  <span>HTML Structure & Content</span>
+                  <span className="text-[10px] text-slate-500">Edit elements directly</span>
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <Editor
@@ -367,8 +401,9 @@ Respond with JSON only:
               </div>
 
               <div className="flex flex-col overflow-hidden">
-                <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] font-mono text-blue-400">
-                  CSS Styling
+                <div className="px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] font-mono text-blue-400 flex items-center justify-between">
+                  <span>CSS Styles & Animations</span>
+                  <span className="text-[10px] text-slate-500">Living BG included</span>
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <Editor
@@ -386,27 +421,153 @@ Respond with JSON only:
         )}
 
         {activeTab === 'templates' && (
-          <div className="flex-1 p-6 overflow-y-auto">
-            <div className="max-w-3xl mx-auto space-y-4">
-              <h3 className="text-sm font-semibold text-slate-100">Starter Design Templates</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {TEMPLATES.map(tpl => (
-                  <div
-                    key={tpl.id}
-                    className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3 hover:border-cyan-500/50 transition-colors"
+          <div className="flex-1 p-6 overflow-y-auto bg-slate-950">
+            <div className="max-w-5xl mx-auto space-y-8">
+              {/* Header Hero */}
+              <div className="text-center max-w-2xl mx-auto space-y-2">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-bold uppercase tracking-wider">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Sovereign Website Architecture</span>
+                </div>
+                <h2 className="text-2xl font-bold text-white">Full-Featured Prebuilt Multi-Page Templates</h2>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Every template is a complete, functioning decentralized website with tabbed navigation, live forms, calculators, drag & drop image dropzones, and living backgrounds. Click any template to customize and publish to the mesh.
+                </p>
+              </div>
+
+              {/* Category Filter Pills */}
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {[
+                  { id: 'all', label: 'All Templates (7)' },
+                  { id: 'Media & Publishing', label: 'Tech Blog' },
+                  { id: 'Community & Social', label: 'Forum' },
+                  { id: 'Real-Time Messaging', label: 'Chatroom' },
+                  { id: 'Portfolio & Creative', label: 'Portfolio' },
+                  { id: 'Local Business & Trades', label: 'Landscaping' },
+                  { id: 'Enterprise & SaaS', label: 'Corporate Company' },
+                  { id: 'Documentation & Knowledge', label: 'Wiki Docs' },
+                ].map(cat => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setTemplateFilter(cat.id)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                      templateFilter === cat.id
+                        ? 'bg-cyan-500 text-slate-950 font-bold shadow-lg shadow-cyan-500/25'
+                        : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
                   >
-                    <div>
-                      <h4 className="text-sm font-semibold text-cyan-300">{tpl.name}</h4>
-                      <p className="text-xs text-slate-400 mt-1">{tpl.description}</p>
-                    </div>
-                    <button
-                      onClick={() => handleApplyTemplate(tpl)}
-                      className="w-full py-2 bg-slate-800 hover:bg-cyan-600 hover:text-white rounded-lg text-xs font-medium text-slate-200 transition-colors"
-                    >
-                      Use Template
-                    </button>
-                  </div>
+                    {cat.label}
+                  </button>
                 ))}
+              </div>
+
+              {/* Templates Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {MULTIPAGE_TEMPLATES.filter(tpl => templateFilter === 'all' || tpl.category === templateFilter).map(tpl => {
+                  const isActive = activeTemplateId === tpl.id;
+                  const bg = LIVING_BACKGROUNDS[tpl.backgroundId] || LIVING_BACKGROUNDS.aurora;
+                  return (
+                    <div
+                      key={tpl.id}
+                      className={`p-5 rounded-2xl border transition-all flex flex-col justify-between ${
+                        isActive
+                          ? 'bg-slate-900/90 border-cyan-500 shadow-xl shadow-cyan-500/10'
+                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      <div className="space-y-3">
+                        {/* Header Badges */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-2xl">{tpl.favicon}</span>
+                            <div>
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 font-mono">
+                                {tpl.category}
+                              </span>
+                              <h4 className="text-base font-bold text-white leading-tight">
+                                {tpl.name.split('—')[0]}
+                              </h4>
+                            </div>
+                          </div>
+                          <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-semibold border border-slate-700">
+                            {tpl.badge}
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          {tpl.description}
+                        </p>
+
+                        {/* Feature Points */}
+                        <div className="flex items-center gap-3 text-[11px] text-slate-400 pt-1">
+                          <span className="flex items-center gap-1 text-slate-300">
+                            <Layers className="w-3 h-3 text-cyan-400" /> Multi-Page Tabs
+                          </span>
+                          <span className="flex items-center gap-1 text-slate-300">
+                            <Sparkles className="w-3 h-3 text-purple-400" /> {bg.name.split(' ')[0]} BG
+                          </span>
+                          <span className="flex items-center gap-1 text-emerald-400">
+                            <Check className="w-3 h-3" /> Drag & Drop Ready
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="pt-5 flex items-center gap-3">
+                        <button
+                          onClick={() => handleApplyTemplate(tpl)}
+                          className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                            isActive
+                              ? 'bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/20'
+                              : 'bg-slate-800 hover:bg-cyan-600 text-slate-200 hover:text-white'
+                          }`}
+                        >
+                          <Rocket className="w-3.5 h-3.5" />
+                          <span>{isActive ? 'Current Active Design' : 'Use This Template'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Living Atmospheric Backgrounds Showcase */}
+              <div className="pt-8 border-t border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-cyan-400" />
+                      <span>Living Atmospheric Backgrounds</span>
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      High-performance procedural CSS & Canvas living backgrounds that breathe life into any template.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {Object.values(LIVING_BACKGROUNDS).map(bg => {
+                    const isSelected = activeBgId === bg.id;
+                    return (
+                      <div
+                        key={bg.id}
+                        onClick={() => setActiveBgId(bg.id)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-slate-900 border-cyan-400 shadow-md shadow-cyan-500/20'
+                            : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-bold text-white">{bg.name}</span>
+                          {isSelected && <span className="text-[10px] text-cyan-400 font-mono font-bold">Active</span>}
+                        </div>
+                        <p className="text-[11px] text-slate-400 line-clamp-2">
+                          {bg.description}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

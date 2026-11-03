@@ -10,7 +10,8 @@ const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 // Toasts raised by older code carry no app to open; these titles map to one.
 const APP_FOR_TITLE = [
   [/^New follower|^Peer Joined/i, 'novasocial'],
-  [/^Beta report|^Greeting Card|Card Received/i, 'novamail'],
+  [/^Beta report/i, 'novamail'],
+  [/Greeting Card|Card Received/i, 'greeting_cards'],
   [/P2P (File )?Transfer|File Delivered/i, 'files'],
   [/^AI access|Swarm Inference/i, 'ailounge'],
   [/P2P Creation/i, 'marketplace'],

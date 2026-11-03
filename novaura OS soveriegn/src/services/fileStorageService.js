@@ -355,7 +355,8 @@ export async function contentToBytes(content) {
   return new TextEncoder().encode(text);
 }
 
-function triggerDownload(name, blob) {
+/** Save a Blob to the user's Downloads folder. The link outlives the click, or WebView2 drops the download. */
+export function triggerDownload(name, blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

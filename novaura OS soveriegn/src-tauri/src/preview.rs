@@ -9,6 +9,12 @@
 //! the app. Verified in the running app: an invoke from the preview had no effect.
 //!
 //! Files live in memory only, keyed by session, and are replaced on every build.
+//!
+//! Single-page sites (the Website Builder preview, and sites opened in the
+//! Browser) are served here too through `site_preview_publish`: the OS window's
+//! CSP carries script hashes, which switch off 'unsafe-inline' in srcdoc frames,
+//! so their inline scripts would never run there. A site that came over the
+//! mesh gets SITE_CSP_STRICT: scripts run, but nothing leaves the machine.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -39,6 +45,16 @@ frame-src 'self' blob: data: https:; \
 form-action 'self' https:; \
 object-src 'none'; base-uri 'self'";
 
+/// For pages from other people: inline script and style only, no network at all
+/// (no beacons, no fetches, no remote images or fonts, no form posts).
+const SITE_CSP_STRICT: &str = "default-src 'none'; \
+script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+img-src data: blob:; font-src data:; media-src data: blob:; \
+connect-src 'none'; frame-src 'none'; form-action 'none'; \
+object-src 'none'; base-uri 'none'";
+
+const MAX_SITE_BYTES: usize = 4 * 1024 * 1024;
+
 struct PreviewFile {
     mime: String,
     body: Vec<u8>,
@@ -47,6 +63,21 @@ struct PreviewFile {
 struct Session {
     files: HashMap<String, PreviewFile>,
     updated: u64,
+    csp: &'static str,
+}
+
+fn insert_session(session: String, entry: Session) -> Result<(), String> {
+    let mut sessions = store().lock().map_err(|_| "Preview store poisoned".to_string())?;
+    sessions.insert(session, entry);
+    // Keep memory bounded: drop the least recently updated sessions.
+    while sessions.len() > MAX_SESSIONS {
+        if let Some(oldest) = sessions.iter().min_by_key(|(_, s)| s.updated).map(|(k, _)| k.clone()) {
+            sessions.remove(&oldest);
+        } else {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn store() -> &'static Mutex<HashMap<String, Session>> {
@@ -118,18 +149,23 @@ pub fn cybeni_preview_publish(session: String, files: Vec<PreviewFileIn>) -> Res
         map.insert(path, PreviewFile { mime, body: f.content.into_bytes() });
     }
     let count = map.len();
-
-    let mut sessions = store().lock().map_err(|_| "Preview store poisoned".to_string())?;
-    sessions.insert(session, Session { files: map, updated: now_ms() });
-    // Keep memory bounded: drop the least recently updated sessions.
-    while sessions.len() > MAX_SESSIONS {
-        if let Some(oldest) = sessions.iter().min_by_key(|(_, s)| s.updated).map(|(k, _)| k.clone()) {
-            sessions.remove(&oldest);
-        } else {
-            break;
-        }
-    }
+    insert_session(session, Session { files: map, updated: now_ms(), csp: PREVIEW_CSP })?;
     Ok(count)
+}
+
+/// Serve one HTML page as `<session>/index.html`. `strict` is for pages that
+/// came from other people (see SITE_CSP_STRICT).
+#[tauri::command]
+pub fn site_preview_publish(session: String, html: String, strict: bool) -> Result<(), String> {
+    if !valid_session(&session) {
+        return Err("Invalid preview session id".into());
+    }
+    if html.len() > MAX_SITE_BYTES {
+        return Err("Site is too large to preview (4 MB limit)".into());
+    }
+    let mut files = HashMap::with_capacity(1);
+    files.insert("index.html".to_string(), PreviewFile { mime: "text/html; charset=utf-8".into(), body: html.into_bytes() });
+    insert_session(session, Session { files, updated: now_ms(), csp: if strict { SITE_CSP_STRICT } else { PREVIEW_CSP } })
 }
 
 #[tauri::command]
@@ -160,10 +196,14 @@ fn percent_decode(input: &str) -> String {
 }
 
 fn respond(status: StatusCode, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> {
+    respond_with(status, mime, body, PREVIEW_CSP)
+}
+
+fn respond_with(status: StatusCode, mime: &str, body: Vec<u8>, csp: &str) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, mime)
-        .header(header::CONTENT_SECURITY_POLICY, PREVIEW_CSP)
+        .header(header::CONTENT_SECURITY_POLICY, csp)
         .header(header::CACHE_CONTROL, "no-store")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header("X-Content-Type-Options", "nosniff")
@@ -197,7 +237,7 @@ pub fn handle(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         if last.contains('.') { None } else { sess.files.get("index.html") }
     });
     match file {
-        Some(f) => respond(StatusCode::OK, &f.mime, f.body.clone()),
+        Some(f) => respond_with(StatusCode::OK, &f.mime, f.body.clone(), sess.csp),
         None => respond(StatusCode::NOT_FOUND, "text/plain", format!("Not found in project: {path}").into_bytes()),
     }
 }

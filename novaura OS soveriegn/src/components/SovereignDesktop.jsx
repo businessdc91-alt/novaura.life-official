@@ -21,6 +21,7 @@ import '../services/forge/userApps';
 import '../services/meshArchiveSync';
 import '../games/relayDuel/relayDuelMesh'; // Relay Duel challenges arrive while the game is closed
 import '../services/holoChessMesh'; // and HoloChess challenges too
+import '../services/greetingCardMesh'; // and greeting cards
 import { recordNotification, isDoNotDisturb, markRead } from '../services/notificationCenter';
 import { isTauriApp, popOutApp } from '../services/popoutWindows';
 import { callService, CallState } from '../services/sovereignCallService';

@@ -11,6 +11,7 @@ import { torOnion, VERIFIED_ONION_SERVICES } from '../../services/torOnionServic
 import SovereignAuthModal from '../modals/SovereignAuthModal.jsx';
 import { getAuthorizedApps, revokeAppAccess } from '../../services/decentralizedAuthService.js';
 import MeshRegistryView from './browser/MeshRegistryView.jsx';
+import { loadSiteIntoFrame, clearSitePreview, newSiteSession } from '../../services/sitePreview.js';
 
 const BOOKMARKS = [
   { title: 'Genesis Hub (.nova)', url: 'nova://genesis.nova', isNova: true, faction: 'nova', favicon: '🌐' },
@@ -639,6 +640,19 @@ export default function BrowserWindow() {
   const [novaPageData, setNovaPageData] = useState(null);
   // The frame showing the active tab; sign-in requests are only taken from it.
   const pageFrameRef = useRef(null);
+
+  // Mesh sites are served from the isolated preview origin (srcdoc frames cannot run inline
+  // scripts under the OS's CSP). Sites from other people get the no-network policy.
+  const siteSession = useRef(newSiteSession());
+  useEffect(() => () => { clearSitePreview(siteSession.current); }, []);
+  useEffect(() => {
+    if (!novaPageData?.htmlContent || !pageFrameRef.current) return;
+    loadSiteIntoFrame(pageFrameRef.current, novaPageData.htmlContent, {
+      session: siteSession.current,
+      strict: Boolean(novaPageData.receivedFromMesh),
+      popups: false,
+    }).catch(err => console.warn('[Browser] Could not show the site:', err));
+  }, [novaPageData]);
 
   // Decentralized Site Studio & Manifest Modals
   const [showSiteStudio, setShowSiteStudio] = useState(false);
@@ -1352,15 +1366,14 @@ export default function BrowserWindow() {
               </div>
               <iframe
                 ref={pageFrameRef}
-                srcDoc={novaPageData.htmlContent}
                 title={novaPageData.title}
                 className="w-full flex-1 border-none bg-slate-950"
                 // No allow-same-origin: without it the page gets an opaque origin and cannot
-                // reach the OS's DOM, Tauri IPC, IndexedDB vault or localStorage.
+                // reach the OS's DOM, Tauri IPC, IndexedDB vault or localStorage. The page itself
+                // is loaded by the effect above (sitePreview.js), so its scripts can run; pages
+                // that arrived over the mesh get a no-network policy there.
                 sandbox="allow-scripts allow-forms allow-modals"
                 referrerPolicy="no-referrer"
-                // Pages that arrived over the mesh are untrusted: no network at all.
-                csp={novaPageData.receivedFromMesh ? "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'" : undefined}
               />
             </div>
           )
