@@ -2,8 +2,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Cpu, HardDrive, Download, Play, Square, CheckCircle2, Loader2, AlertTriangle, ChevronDown, ChevronRight, ShieldCheck, X, RefreshCw } from 'lucide-react';
 import {
   MODEL_CATALOG, getEngineConfig, setEngineConfig, recommendBackend, hardware, installComfy, installStatus,
-  startComfy, stopComfy, probeComfy, comfyProcessStatus, installedModels, isModelInstalled, downloadModel, cancelDownload,
+  stopComfy, probeComfy, installedModels, isModelInstalled, downloadModel, cancelDownload,
+  applyStopOnExit, getEngineStatus, subscribeEngineStatus,
 } from '../../../services/engines/comfyEngine.js';
+import { startEngineAndLoad, loadDefaultModel, modelLabel } from '../../../services/engines/engineAutostart.js';
+import { isImageCheckpoint } from '../../../services/engines/checkpoints.js';
 
 const BACKENDS = {
   cu126: 'NVIDIA (CUDA 12.6, older cards and drivers)',
@@ -31,6 +34,9 @@ export default function EngineSetup({ purpose, onReady }) {
   const [error, setError] = useState('');
   const [showLog, setShowLog] = useState(false);
   const [busy, setBusy] = useState('');
+  const [engine, setEngine] = useState(getEngineStatus);
+
+  useEffect(() => subscribeEngineStatus(setEngine), []);
 
   const refresh = useCallback(async () => {
     const cfg = await getEngineConfig();
@@ -87,24 +93,42 @@ export default function EngineSetup({ purpose, onReady }) {
     }
   };
 
+  // Starting also loads the default model, as at launch.
   const doStart = async () => {
     setError('');
     setBusy('start');
     try {
-      await startComfy();
-      for (let i = 0; i < 90 && !(await probeComfy()); i++) await new Promise(r => setTimeout(r, 2000));
-      const up = Boolean(await probeComfy());
-      if (!up) {
-        const st = await comfyProcessStatus();
-        setError(`The engine did not come up. ${(st.log_tail || '').trim().split('\n').slice(-2).join(' ')}`);
-      }
-      await refresh();
+      await startEngineAndLoad();
     } catch (err) {
       setError(err.message || String(err));
     } finally {
+      await refresh();
       setBusy('');
     }
   };
+
+  const saveConfig = async (patch) => {
+    const next = await setEngineConfig(patch);
+    setConfig(next);
+    return next;
+  };
+
+  const doLoad = () => {
+    setError('');
+    loadDefaultModel().catch(err => setError(err.message || String(err)));
+  };
+
+  const chooseDefault = async (defaultModel) => {
+    await saveConfig({ defaultModel });
+    if (running) doLoad();
+  };
+
+  const toggleStopOnExit = async (stopOnExit) => {
+    await saveConfig({ stopOnExit });
+    applyStopOnExit().catch(() => {});
+  };
+
+  const imageCheckpoints = models.filter(m => m.folder === 'checkpoints' && isImageCheckpoint(m.file));
 
   const doStop = async () => {
     setBusy('stop');
@@ -198,6 +222,44 @@ export default function EngineSetup({ purpose, onReady }) {
               )}
               <button onClick={refresh} title="Refresh" className="p-1.5 rounded-lg border border-slate-700 text-slate-400"><RefreshCw className="w-3.5 h-3.5" /></button>
               <button onClick={() => { setEngineConfig({}); doInstall(); }} title="Update ComfyUI to the latest release" className="ml-auto text-[11px] text-slate-500 hover:text-slate-300">Update / reinstall</button>
+            </div>
+
+            {/* Startup */}
+            <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
+              <label className="flex items-center gap-2 text-[12px] cursor-pointer">
+                <input type="checkbox" checked={config?.autoStart !== false} onChange={e => saveConfig({ autoStart: e.target.checked })} className="accent-cyan-500" />
+                Start the engine when Sovereign opens and load the default model
+              </label>
+              <label className="flex items-center gap-2 text-[12px] cursor-pointer">
+                <input type="checkbox" checked={config?.stopOnExit !== false} onChange={e => toggleStopOnExit(e.target.checked)} className="accent-cyan-500" />
+                Stop the engine when Sovereign closes (frees the graphics card)
+              </label>
+              <label className="flex items-center gap-2 text-[12px] cursor-pointer" title="ComfyUI's dynamic VRAM loader fails on some PCs. Sovereign switches this on by itself if that happens.">
+                <input type="checkbox" checked={Boolean(config?.classicLoading)} onChange={e => saveConfig({ classicLoading: e.target.checked })} className="accent-cyan-500" />
+                Standard model loading (turns on by itself if a model fails to load; applies from the next start)
+              </label>
+              <div className="flex items-center gap-2">
+                <label htmlFor="engine-default-model" className="text-[11px] text-slate-400 shrink-0">Default model</label>
+                <select id="engine-default-model" value={config?.defaultModel || ''} onChange={e => chooseDefault(e.target.value)} className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[12px]">
+                  <option value="">Automatic (best installed image model)</option>
+                  {imageCheckpoints.map(m => <option key={m.file} value={m.file}>{modelLabel(m.file)}</option>)}
+                  {config?.defaultModel && !imageCheckpoints.some(m => m.file === config.defaultModel) && (
+                    <option value={config.defaultModel}>{modelLabel(config.defaultModel)} (not found)</option>
+                  )}
+                </select>
+                <button onClick={doLoad} disabled={!running || engine.phase === 'loading'} title="Load the default model now" className="shrink-0 px-2.5 py-1 rounded-md border border-slate-700 text-[11px] text-slate-300 hover:border-cyan-600 disabled:opacity-40">Load now</button>
+              </div>
+              <div className="text-[11px] flex items-center gap-1.5">
+                {engine.phase === 'loading' || engine.phase === 'starting' ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-300" /><span className="text-cyan-200">{engine.message}</span></>
+                ) : engine.phase === 'ready' && engine.model ? (
+                  <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" /><span className="text-emerald-200">{modelLabel(engine.model)} is loaded. Image tools start right away.</span></>
+                ) : engine.phase === 'error' ? (
+                  <><AlertTriangle className="w-3.5 h-3.5 text-amber-300" /><span className="text-amber-200">{engine.message}</span></>
+                ) : (
+                  <span className="text-slate-500">{running ? 'No model loaded yet. It loads on the first image, or now with Load now.' : 'The default model loads when the engine starts.'}</span>
+                )}
+              </div>
             </div>
           </div>
         )}

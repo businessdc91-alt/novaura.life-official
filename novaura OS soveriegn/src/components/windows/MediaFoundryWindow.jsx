@@ -21,6 +21,8 @@ import {
   synthesizeProceduralAudioTrack, synthesizeSpeechLocal, saveAudioToVault, loadAudioFromVault
 } from '../../services/mediaFoundryService.js';
 import { detectHostComputeHardware } from '../../services/neuralHypervisorService.js';
+import { getEngineConfig } from '../../services/engines/comfyEngine.js';
+import { chooseImageCheckpoint } from '../../services/engines/checkpoints.js';
 
 export default function MediaFoundryWindow({ windowId, props, onClose }) {
   const [activeTab, setActiveTab] = useState('comfy'); // 'comfy' | 'studio' | 'models' | 'hacks' | 'vault'
@@ -171,7 +173,9 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
         const ckpts = await getComfyUIObjectInfo(endpoint);
         setAvailableCheckpoints(ckpts);
         if (ckpts.length > 0 && !selectedCheckpoint) {
-          setSelectedCheckpoint(ckpts[0]);
+          // The AI Engines default model (already loaded at startup), else an image model: names sort the music checkpoints first.
+          const { defaultModel } = await getEngineConfig();
+          setSelectedCheckpoint(chooseImageCheckpoint(ckpts, defaultModel) || ckpts[0]);
         }
       }
     } catch (err) {

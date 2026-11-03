@@ -254,6 +254,19 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
     return () => window.removeEventListener('novaura:mesh_toast', handleMeshToast);
   }, []);
 
+  // Start the local AI engine and load its default model once the desktop has
+  // drawn (AI Engines > Startup). Runs once per launch; a no-op until installed.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      import('../services/engines/engineAutostart.js')
+        .then(({ autostartEngine }) => autostartEngine({
+          notify: (detail) => window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: { type: 'info', ...detail } })),
+        }))
+        .catch((err) => console.warn('[Desktop] AI engine auto-start failed:', err));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
+
   const handleAnswerIncomingCall = async (video = true) => {
     try {
       await callService.answerCall(video);

@@ -1,19 +1,16 @@
 // imageGen.js — Album covers and app icons with a local SDXL model in ComfyUI,
 // plus background removal so icons sit cleanly on any surface.
 
-import { ensureComfyRunning, availableOptions, runWorkflow, fetchOutput, MODEL_CATALOG } from './comfyEngine.js';
+import {
+  ensureComfyRunning, availableOptions, runWorkflow, fetchOutput, getEngineConfig, needsClassicLoading, restartWithClassicLoading, MODEL_CATALOG,
+} from './comfyEngine.js';
+import { chooseImageCheckpoint } from './checkpoints.js';
 
-const IMAGE_MODEL_PREFERENCE = [/sd_xl_base/i, /sdxl/i, /juggernaut/i, /dreamshaper/i, /realvis/i, /\.safetensors$/i];
-const NOT_IMAGE = /ace_step|acestep|stable_audio|audio/i;
-
-/** The best installed image checkpoint, or null (then offer MODEL_CATALOG's SDXL). */
+/** The default image model (AI Engines), else the best installed one, else null (then offer MODEL_CATALOG's SDXL). */
 export async function pickImageModel() {
-  const names = (await availableOptions('CheckpointLoaderSimple', 'ckpt_name')).filter(n => !NOT_IMAGE.test(n));
-  for (const re of IMAGE_MODEL_PREFERENCE) {
-    const hit = names.find(n => re.test(n));
-    if (hit) return hit;
-  }
-  return null;
+  const names = await availableOptions('CheckpointLoaderSimple', 'ckpt_name');
+  const { defaultModel } = await getEngineConfig();
+  return chooseImageCheckpoint(names, defaultModel);
 }
 
 export const SDXL_ENTRY = MODEL_CATALOG.find(m => m.id === 'sdxl-base');
@@ -39,7 +36,16 @@ export async function generateImage({ prompt, negative, width, height, steps, on
     err.code = 'NO_IMAGE_MODEL';
     throw err;
   }
-  const outputs = await runWorkflow(buildImageWorkflow({ prompt, negative, checkpoint, width, height, steps, prefix }), { onProgress });
+  const job = () => runWorkflow(buildImageWorkflow({ prompt, negative, checkpoint, width, height, steps, prefix }), { onProgress });
+  let outputs;
+  try {
+    outputs = await job();
+  } catch (err) {
+    if (!(await needsClassicLoading(err))) throw err;
+    onProgress?.({ status: 'Model loading failed. Restarting the engine with standard loading…' });
+    await restartWithClassicLoading();
+    outputs = await job();
+  }
   const image = outputs.find(o => o.kind === 'image');
   if (!image) throw new Error('The image model produced no image.');
   return fetchOutput(image);

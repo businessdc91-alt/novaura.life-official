@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   Wifi, ShieldCheck, Mail, Bell, Search, Sparkles, User,
-  Power, Layers, Clock, Cpu, Palette, X, Minus, Globe
+  Power, Layers, Clock, Cpu, Palette, X, Minus, Globe, Loader2
 } from 'lucide-react';
 import logoImg from '../assets/novaura-logo.png';
 import { useKernel } from '../kernel/useKernel.js';
 import { getAppById } from '../config/appRegistry.js';
 import { getPeerCount } from '../services/sovereignMesh.js';
+import { getEngineStatus, subscribeEngineStatus } from '../services/engines/comfyEngine.js';
+
+const ENGINE_LABELS = { starting: 'AI STARTING', loading: 'AI LOADING', ready: 'AI READY', error: 'AI ENGINE' };
 
 export default function SystemBar({
   identity,
@@ -25,6 +28,9 @@ export default function SystemBar({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActive, setSearchActive] = useState(false);
   const [peerCount, setPeerCount] = useState(0);
+  const [engine, setEngine] = useState(getEngineStatus);
+
+  useEffect(() => subscribeEngineStatus(setEngine), []);
 
   useEffect(() => {
     const updatePeers = () => setPeerCount(getPeerCount());
@@ -190,6 +196,22 @@ export default function SystemBar({
             </span>
           )}
         </button>
+
+        {/* Local AI engine (ComfyUI): starting, loading the default model, ready */}
+        {engine.phase !== 'idle' && (
+          <button
+            onClick={() => openApp('ai_engines')}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded-md hover:bg-slate-800 text-[11px] font-mono transition-colors cursor-pointer"
+            title={engine.message || 'Local AI engine'}
+          >
+            {engine.phase === 'starting' || engine.phase === 'loading'
+              ? <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+              : <Cpu className={`w-3.5 h-3.5 ${engine.phase === 'error' ? 'text-amber-400' : 'text-emerald-400'}`} />}
+            <span className={engine.phase === 'error' ? 'text-amber-300' : engine.phase === 'ready' ? 'text-emerald-300' : 'text-cyan-300'}>
+              {ENGINE_LABELS[engine.phase]}
+            </span>
+          </button>
+        )}
 
         {/* Sovereign Mesh Network Tray Indicator */}
         <button

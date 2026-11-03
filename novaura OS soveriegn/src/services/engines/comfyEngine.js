@@ -5,6 +5,7 @@
 // downloads models from a verified catalog. Everything runs on the user's PC.
 
 import { db } from '../../database/sovereignDatabase.js';
+import { isDynamicVramFailure } from './checkpoints.js';
 
 const CONFIG_KEY = 'ai_engine_config';
 export const COMFY_URL = 'http://127.0.0.1:8188';
@@ -60,8 +61,11 @@ export function modelFileName(entry) {
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
+// autoStart: start the engine when the desktop opens and load defaultModel
+// ('' picks the best installed image model). stopOnExit: stop it when Sovereign closes.
+// classicLoading: start ComfyUI with --disable-dynamic-vram (see isDynamicVramFailure).
 export async function getEngineConfig() {
-  return { installDir: '', torchVariant: '', ...(await db.getSetting(CONFIG_KEY, {}).catch(() => ({}))) };
+  return { installDir: '', torchVariant: '', autoStart: true, stopOnExit: true, defaultModel: '', classicLoading: false, ...(await db.getSetting(CONFIG_KEY, {}).catch(() => ({}))) };
 }
 
 export async function setEngineConfig(patch) {
@@ -105,16 +109,59 @@ export function installStatus(installDir) {
   return invoke('engine_install_status', { installDir });
 }
 
+/** Tell the native side whether to stop the engine when Sovereign exits. */
+export async function applyStopOnExit() {
+  const { installDir, stopOnExit } = await getEngineConfig();
+  if (installDir) await invoke('engine_comfy_stop_on_exit', { installDir, enabled: stopOnExit !== false });
+}
+
 export async function startComfy() {
-  const { installDir, torchVariant } = await getEngineConfig();
+  const { installDir, torchVariant, classicLoading } = await getEngineConfig();
   if (!installDir) throw new Error('Install the engine first.');
+  await applyStopOnExit().catch(() => {});
   const extra = torchVariant === 'cpu' ? ['--cpu'] : torchVariant === 'directml' ? ['--directml'] : [];
+  if (classicLoading) extra.push('--disable-dynamic-vram');
   return invoke('engine_comfy_start', { installDir, extra });
+}
+
+/** True when err is the dynamic VRAM failure and the classic loader is not in use yet. */
+export async function needsClassicLoading(err) {
+  return isDynamicVramFailure(err?.message) && !(await getEngineConfig()).classicLoading;
+}
+
+/** Switch to the classic loader for good and restart the engine with it. */
+export async function restartWithClassicLoading() {
+  const { installDir } = await setEngineConfig({ classicLoading: true });
+  await invoke('engine_comfy_stop', { installDir });
+  for (let i = 0; i < 20 && (await probeComfy(500)); i++) await new Promise(r => setTimeout(r, 500));
+  await ensureComfyRunning({ markReady: false });
 }
 
 export async function stopComfy() {
   const { installDir } = await getEngineConfig();
-  return installDir ? invoke('engine_comfy_stop', { installDir }) : false;
+  const stopped = installDir ? await invoke('engine_comfy_stop', { installDir }) : false;
+  setEngineStatus({ phase: 'idle' });
+  return stopped;
+}
+
+// ── Engine status (the system bar shows it) ────────────────────────────────
+
+let _status = { phase: 'idle', model: null, message: '' };
+const _statusListeners = new Set();
+
+/** { phase: 'idle' | 'starting' | 'loading' | 'ready' | 'error', model, message } */
+export function getEngineStatus() {
+  return _status;
+}
+
+export function subscribeEngineStatus(fn) {
+  _statusListeners.add(fn);
+  return () => { _statusListeners.delete(fn); };
+}
+
+export function setEngineStatus(next) {
+  _status = { phase: 'idle', model: null, message: '', ...next };
+  for (const fn of _statusListeners) fn(_status);
 }
 
 export async function comfyProcessStatus() {
@@ -132,22 +179,38 @@ export async function probeComfy(timeoutMs = 2500) {
   }
 }
 
-/** Start ComfyUI if needed and wait until it answers. */
-export async function ensureComfyRunning({ timeoutMs = 180000, onStatus } = {}) {
-  if (await probeComfy()) return true;
-  onStatus?.('Starting the local AI engine…');
-  await startComfy();
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    await new Promise(r => setTimeout(r, 2000));
-    if (await probeComfy()) return true;
-    const proc = await comfyProcessStatus().catch(() => null);
-    if (proc && !proc.alive) {
-      const last = (proc.log_tail || '').trim().split('\n').slice(-3).join(' ');
-      throw new Error(`The AI engine stopped while starting. ${last}`);
-    }
+/**
+ * Start ComfyUI if needed and wait until it answers. markReady: false leaves the
+ * status at 'starting' for a caller that loads a model next.
+ */
+export async function ensureComfyRunning({ timeoutMs = 180000, onStatus, markReady = true } = {}) {
+  const running = { phase: 'ready', message: 'The local AI engine is running.' };
+  if (await probeComfy()) {
+    if (markReady && (_status.phase === 'idle' || _status.phase === 'error')) setEngineStatus(running);
+    return true;
   }
-  throw new Error('The AI engine did not start within 3 minutes.');
+  onStatus?.('Starting the local AI engine…');
+  setEngineStatus({ phase: 'starting', message: 'Starting the local AI engine…' });
+  try {
+    await startComfy();
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      await new Promise(r => setTimeout(r, 2000));
+      if (await probeComfy()) {
+        if (markReady) setEngineStatus(running);
+        return true;
+      }
+      const proc = await comfyProcessStatus().catch(() => null);
+      if (proc && !proc.alive) {
+        const last = (proc.log_tail || '').trim().split('\n').slice(-3).join(' ');
+        throw new Error(`The AI engine stopped while starting. ${last}`);
+      }
+    }
+    throw new Error('The AI engine did not start within 3 minutes.');
+  } catch (err) {
+    setEngineStatus({ phase: 'error', message: err.message || String(err) });
+    throw err;
+  }
 }
 
 // ── Models ─────────────────────────────────────────────────────────────────

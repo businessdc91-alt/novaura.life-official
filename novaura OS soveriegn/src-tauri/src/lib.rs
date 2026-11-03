@@ -1679,6 +1679,7 @@ pub fn run() {
             engines::engine_install_status,
             engines::engine_comfy_start,
             engines::engine_comfy_stop,
+            engines::engine_comfy_stop_on_exit,
             engines::engine_comfy_status,
             engines::engine_download_model,
             engines::engine_download_status,
@@ -1689,8 +1690,13 @@ pub fn run() {
             forge::forge_fetch_text,
             forge::forge_install_desktop_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                engines::shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

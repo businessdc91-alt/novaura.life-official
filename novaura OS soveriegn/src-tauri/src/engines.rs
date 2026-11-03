@@ -49,6 +49,8 @@ struct Download {
 struct State {
     installs: HashMap<String, Child>,
     downloads: HashMap<String, Download>,
+    /// The install whose engine is stopped when Sovereign exits (see `shutdown`).
+    stop_on_exit: Option<PathBuf>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -197,7 +199,7 @@ pub fn engine_comfy_start(install_dir: String, extra: Option<Vec<String>>) -> Re
         "--enable-cors-header".into(), APP_ORIGIN.into(),
     ];
     // Only known-safe switches may be added from the app.
-    const ALLOWED: [&str; 7] = ["--cpu", "--directml", "--lowvram", "--normalvram", "--highvram", "--force-fp32", "--disable-smart-memory"];
+    const ALLOWED: [&str; 8] = ["--cpu", "--directml", "--lowvram", "--normalvram", "--highvram", "--force-fp32", "--disable-smart-memory", "--disable-dynamic-vram"];
     for flag in extra.unwrap_or_default() {
         if ALLOWED.contains(&flag.as_str()) {
             args.push(flag);
@@ -220,19 +222,43 @@ pub fn engine_comfy_start(install_dir: String, extra: Option<Vec<String>>) -> Re
     Ok(pid)
 }
 
+fn stop_engine(dir: &Path) -> bool {
+    let Some(pid) = read_pid(dir) else { return false };
+    let ok = pid_alive(pid) && {
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        hide_window(&mut cmd).status().map(|s| s.success()).unwrap_or(false)
+    };
+    let _ = fs::remove_file(dir.join("comfyui.pid"));
+    ok
+}
+
 #[tauri::command]
 pub fn engine_comfy_stop(install_dir: String) -> Result<bool, String> {
     let dir = validate_install_dir(&install_dir)?;
-    let Some(pid) = read_pid(&dir) else { return Ok(false) };
-    if !pid_alive(pid) {
-        let _ = fs::remove_file(dir.join("comfyui.pid"));
-        return Ok(false);
+    Ok(stop_engine(&dir))
+}
+
+/// Whether the engine in this install stops when Sovereign exits.
+#[tauri::command]
+pub fn engine_comfy_stop_on_exit(install_dir: String, enabled: bool) -> Result<(), String> {
+    let dir = validate_install_dir(&install_dir)?;
+    let mut st = state().lock().map_err(|_| "Engine state unavailable")?;
+    st.stop_on_exit = enabled.then_some(dir);
+    Ok(())
+}
+
+/// Runs as Sovereign exits. Downloads are cancelled (they resume from their
+/// .part files next time; left running, a second curl would write the same
+/// file), and the engine is stopped if the user chose that.
+pub fn shutdown() {
+    let Ok(mut st) = state().lock() else { return };
+    for (_, mut d) in st.downloads.drain() {
+        let _ = d.child.kill();
     }
-    let mut cmd = Command::new("taskkill");
-    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-    let ok = hide_window(&mut cmd).status().map(|s| s.success()).unwrap_or(false);
-    let _ = fs::remove_file(dir.join("comfyui.pid"));
-    Ok(ok)
+    if let Some(dir) = st.stop_on_exit.take() {
+        stop_engine(&dir);
+    }
 }
 
 #[tauri::command]
