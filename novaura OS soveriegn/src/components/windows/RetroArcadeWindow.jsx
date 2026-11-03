@@ -4,6 +4,7 @@ import {
   Globe, Shield, Swords, Layers, Download, Check, Crown
 } from 'lucide-react';
 import { db } from '../../database/sovereignDatabase.js';
+import { openWindow } from '../../services/desktopActions.js';
 
 // ==========================================
 // G-TOONS / C-TOONS REPLICA DATA & CARDS
@@ -316,6 +317,15 @@ export default function RetroArcadeWindow() {
             }`}
           >
             Dots & Boxes
+          </button>
+          <div className="h-4 w-[1px] bg-slate-700 mx-1" />
+          <button
+            onClick={() => openWindow('holochess')}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-md font-bold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-md shadow-cyan-500/20 transition-all border border-cyan-400/30 animate-pulse"
+            title="Launch Dedicated 3D Holographic Chess Arena"
+          >
+            <Crown className="w-3.5 h-3.5 text-yellow-300" />
+            <span>HoloChess 3D</span>
           </button>
         </div>
       </div>

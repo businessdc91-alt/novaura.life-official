@@ -49,6 +49,7 @@ const AIEnginesWindow = lazy(() => import('../components/windows/AIEnginesWindow
 const DiscoveryForgeWindow = lazy(() => import('../components/windows/DiscoveryForgeWindow.jsx'));
 const UserAppWindow = lazy(() => import('../components/windows/UserAppWindow.jsx'));
 const FounderOfficeSuiteWindow = lazy(() => import('../components/windows/FounderOfficeSuiteWindow.jsx'));
+const HoloChessWindow = lazy(() => import('../components/windows/HoloChessWindow.jsx'));
 import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair } from 'lucide-react';
 
 
@@ -427,6 +428,16 @@ export const APP_REGISTRY = [
     title: 'Nova Retro Arcade & G-Toons Clash Arena',
     component: RetroArcadeWindow,
     defaultSize: { width: 1040, height: 680 },
+  },
+  {
+    id: 'holochess',
+    label: 'HoloChess 3D',
+    category: 'games',
+    icon: Crown,
+    color: '#00f0ff',
+    title: 'HoloChess 3D — Holographic Neural & P2P Chess Matrix',
+    component: HoloChessWindow,
+    defaultSize: { width: 1120, height: 720 },
   },
   {
     id: 'relay_duel',

@@ -32,6 +32,7 @@
     "sonner": "^2.0.8",
     "sucrase": "^3.35.0",
     "tailwind-merge": "^3.7.0",
+    "three": "^0.187.0",
     "yjs": "^13.6.33"
   },
   "devDependencies": {
