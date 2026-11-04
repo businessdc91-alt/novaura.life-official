@@ -261,6 +261,12 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
           notify: (detail) => window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: { type: 'info', ...detail } })),
         }))
         .catch((err) => console.warn('[Desktop] AI engine auto-start failed:', err));
+      // The built-in AI (llama.cpp + Gemma 4), when it is set up and set to start with the desktop.
+      import('../services/engines/builtinAi.js')
+        .then(({ autostartBuiltinAi }) => autostartBuiltinAi({
+          notify: (detail) => window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: { type: 'info', ...detail } })),
+        }))
+        .catch((err) => console.warn('[Desktop] Built-in AI auto-start failed:', err));
     }, 1500);
     return () => clearTimeout(t);
   }, []);

@@ -1,12 +1,15 @@
-// localModels.js — Models running on this machine (Ollama / LM Studio).
+// localModels.js — Models running on this machine (LM Studio, the built-in AI, Ollama).
 // Every call goes through queryLocalAi, which only ever talks to 127.0.0.1,
 // so nothing here can reach a cloud endpoint or another machine.
 
 import { probeLocalAi, queryLocalAi } from './nativeService.js';
 
-// LM Studio is the preferred runtime, so it is listed (and picked) first.
+// LM Studio is the preferred runtime, so it is listed (and picked) first. The
+// built-in AI is llama.cpp run by Sovereign itself (engines/builtinAi.js); the
+// native bridge adds its API key, so it is queried like any OpenAI-style server.
 export const LOCAL_RUNTIMES = {
   lmstudio: { label: 'LM Studio', port: 1234, tagsPath: '/v1/models' },
+  novaura: { label: 'Built-in AI', port: 39281, tagsPath: '/v1/models' },
   ollama: { label: 'Ollama', port: 11434, tagsPath: '/api/tags' },
 };
 
@@ -53,10 +56,16 @@ export async function discoverLocalModels() {
           names = rows.map(m => m.id);
           loaded = rows.filter(m => m.state === 'loaded').map(m => m.id);
         }
-      } else {
+      } else if (runtime === 'ollama') {
         // Ollama lists models currently in memory at /api/ps.
         const res = await queryLocalAi(cfg.port, '/api/ps', 'GET');
         loaded = (Array.isArray(res?.models) ? res.models : []).map(m => m.name || m.model).filter(Boolean);
+      } else {
+        // The built-in server lists every model in its folder, each with its load state.
+        const res = await queryLocalAi(cfg.port, '/models', 'GET');
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        if (rows.length) names = rows.map(m => m.id);
+        loaded = rows.filter(m => m.status?.value === 'loaded').map(m => m.id);
       }
     } catch { /* older runtime without load info: list installed models only */ }
 
@@ -151,7 +160,7 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
   });
   const text = res?.choices?.[0]?.message?.content;
   if (typeof text === 'string') return cleanCompletion(text);
-  const message = String(res?.error?.message || res?.error || `LM Studio did not return a reply. Is "${parsed.model}" loaded?`);
+  const message = String(res?.error?.message || res?.error || `${cfg.label} did not return a reply. Is "${parsed.model}" loaded?`);
   if (/insufficient system resources|requires approximately/i.test(message)) {
     throw new Error(`${message} The memory estimate is driven mostly by the model's context length. In LM Studio, open the model's settings and lower its context length (32,768 is plenty for Cybeni), then try again.`);
   }

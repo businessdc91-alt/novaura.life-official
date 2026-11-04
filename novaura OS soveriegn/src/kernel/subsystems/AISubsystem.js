@@ -94,16 +94,17 @@ export class AISubsystem {
   // ─── Persona Routing ───────────────────────────────────────────────────────
 
   getPersonaProviderChain(persona = 'default') {
+    // The built-in AI (llama.cpp run by Sovereign) comes after the user's own runtimes.
     const localChain = this._settings.defaultProvider === 'lmstudio'
-      ? ['lmstudio', 'ollama']
-      : ['ollama', 'lmstudio'];
+      ? ['lmstudio', 'ollama', 'builtin']
+      : ['ollama', 'lmstudio', 'builtin'];
 
     switch (persona.toLowerCase()) {
       case 'nova':
         return [...localChain, 'byok', 'openrouter'];
       case 'aura':
         // Aura defaults to LM Studio for deep creative synthesis & high-context GGUF reasoning
-        return ['lmstudio', 'ollama', 'byok', 'openrouter', 'claude'];
+        return ['lmstudio', 'ollama', 'builtin', 'byok', 'openrouter', 'claude'];
       case 'cybeni':
         return [...localChain, 'byok', 'claude', 'openrouter'];
       default:
@@ -152,7 +153,13 @@ export class AISubsystem {
     for (const provider of chain) {
       try {
         let result = '';
-        if (provider === 'ollama' || provider === 'lmstudio' || provider === 'webgpu' || provider === 'local') {
+        if (provider === 'builtin') {
+          const { builtinChat, builtinStatus } = await import('../../services/engines/builtinAi.js');
+          // Only when it is set up; a fresh install with no model skips straight to the next provider.
+          if (!(await builtinStatus()).installDir) throw new Error('The built-in AI is not set up.');
+          result = await builtinChat(effectiveMessages, options);
+          if (options.onToken) options.onToken(result);
+        } else if (provider === 'ollama' || provider === 'lmstudio' || provider === 'webgpu' || provider === 'local') {
           // Route to LocalModelSubsystem
           if (this._kernel?.localModel?.isReady || provider === 'webgpu') {
             result = await this._kernel.localModel.chat(effectiveMessages, {

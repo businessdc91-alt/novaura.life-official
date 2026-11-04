@@ -33,6 +33,7 @@ tauri-plugin-process = "2"
 tokio = { version = "1", features = ["net", "sync", "rt", "time", "macros", "io-util"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

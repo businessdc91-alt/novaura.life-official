@@ -51,7 +51,8 @@ const UserAppWindow = lazy(() => import('../components/windows/UserAppWindow.jsx
 const FounderOfficeSuiteWindow = lazy(() => import('../components/windows/FounderOfficeSuiteWindow.jsx'));
 const HoloChessWindow = lazy(() => import('../components/windows/HoloChessWindow.jsx'));
 const GreetingCardWindow = lazy(() => import('../components/windows/GreetingCardWindow.jsx'));
-import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift } from 'lucide-react';
+const ModelBenchmarkWindow = lazy(() => import('../components/windows/ModelBenchmarkWindow.jsx'));
+import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy } from 'lucide-react';
 
 
 
@@ -476,7 +477,7 @@ export const APP_REGISTRY = [
     category: 'system',
     icon: Cpu,
     color: '#22d3ee',
-    title: 'AI Engines — Local Image & Music Models',
+    title: 'AI Engines: Built-in AI, Image & Music',
     component: AIEnginesWindow,
     defaultSize: { width: 760, height: 640 },
   },
@@ -510,6 +511,16 @@ export const APP_REGISTRY = [
     title: 'Sovereign Greeting Studio — Animated Cards & Mesh Delivery',
     component: GreetingCardWindow,
     defaultSize: { width: 1100, height: 720 },
+  },
+  {
+    id: 'model_benchmarks',
+    label: 'AI Benchmarks',
+    category: 'system',
+    icon: Trophy,
+    color: '#38bdf8',
+    title: 'AI Benchmarks: Open Models, Frontier Models and This PC',
+    component: ModelBenchmarkWindow,
+    defaultSize: { width: 1180, height: 740 },
   },
 ];
 
@@ -631,6 +642,9 @@ export function getAppById(id) {
   }
   if (id === 'greeting' || id === 'card' || id === 'cards' || id === 'birthday' || id === 'greeting_cards' || id === 'greetings') {
     return APP_MAP.get('greeting_cards');
+  }
+  if (id === 'benchmarks' || id === 'benchmark' || id === 'leaderboard' || id === 'model_benchmarks') {
+    return APP_MAP.get('model_benchmarks');
   }
   return APP_MAP.get(id);
 }

@@ -30,7 +30,7 @@ const APP_ORIGIN: &str = "http://tauri.localhost";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-fn hide_window(cmd: &mut Command) -> &mut Command {
+pub(crate) fn hide_window(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -60,7 +60,7 @@ fn state() -> &'static Mutex<State> {
 
 /// An absolute Windows path such as `E:\NovauraAI\ComfyUI`, with no characters a
 /// shell could interpret.
-fn validate_install_dir(dir: &str) -> Result<PathBuf, String> {
+pub(crate) fn validate_install_dir(dir: &str) -> Result<PathBuf, String> {
     let d = dir.trim();
     let bytes = d.as_bytes();
     let drive_ok = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/');
@@ -76,7 +76,7 @@ fn validate_install_dir(dir: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(d))
 }
 
-fn tail(path: &Path, max: usize) -> String {
+pub(crate) fn tail(path: &Path, max: usize) -> String {
     let text = fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     let start = text.len().saturating_sub(max);
     let mut s = start;
@@ -293,7 +293,7 @@ fn model_target(dir: &Path, rel: &str) -> Result<PathBuf, String> {
 
 /// curl 7.71+ can retry after any failure (a lost connection included); the
 /// curl in older Windows 10 builds rejects the flag, so it is only added when supported.
-fn curl_retries_all_errors() -> bool {
+pub(crate) fn curl_retries_all_errors() -> bool {
     static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SUPPORTED.get_or_init(|| {
         let mut cmd = Command::new("curl.exe");

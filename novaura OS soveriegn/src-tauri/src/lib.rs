@@ -1,5 +1,6 @@
 pub mod cloud;
 pub mod engines;
+pub mod llm;
 pub mod forge;
 pub mod mesh;
 pub mod preview;
@@ -1317,8 +1318,8 @@ async fn probe_local_ai(port: u16, path: String) -> Result<LocalAiProbeResult, S
 
     let target_path = if path.starts_with('/') { path } else { format!("/{}", path) };
     let req = format!(
-        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: application/json\r\nUser-Agent: NovAura-Sovereign-Kernel\r\nConnection: close\r\n\r\n",
-        target_path, port
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: application/json\r\nUser-Agent: NovAura-Sovereign-Kernel\r\n{}Connection: close\r\n\r\n",
+        target_path, port, llm::auth_header(port)
     );
 
     if stream.write_all(req.as_bytes()).await.is_err() {
@@ -1432,8 +1433,8 @@ async fn query_local_ai_raw(
     let body_bytes = body_str.as_bytes();
 
     let req = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccept: application/json\r\nUser-Agent: NovAura-Sovereign-Kernel\r\nConnection: close\r\n\r\n{}",
-        method_upper, target_path, port, body_bytes.len(), body_str
+        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccept: application/json\r\nUser-Agent: NovAura-Sovereign-Kernel\r\n{}Connection: close\r\n\r\n{}",
+        method_upper, target_path, port, body_bytes.len(), llm::auth_header(port), body_str
     );
 
     stream.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
@@ -1676,6 +1677,17 @@ pub fn run() {
             preview::cybeni_preview_publish,
             preview::cybeni_preview_clear,
             preview::site_preview_publish,
+            llm::llm_catalog,
+            llm::llm_install,
+            llm::llm_install_status,
+            llm::llm_download_hf,
+            llm::llm_list_models,
+            llm::llm_open_models_folder,
+            llm::llm_cancel_install,
+            llm::llm_remove_model,
+            llm::llm_start,
+            llm::llm_stop,
+            llm::llm_status,
             engines::engine_install_comfyui,
             engines::engine_install_status,
             engines::engine_comfy_start,
@@ -1696,6 +1708,7 @@ pub fn run() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 engines::shutdown();
+                llm::shutdown();
             }
         });
 }
