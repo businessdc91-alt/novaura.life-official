@@ -9,7 +9,7 @@ import {
   sendGreetingCardOverMesh, getSentGreetingCards, getReceivedGreetingCards,
   generateStandaloneCardHtml
 } from '../../services/greetingCardService.js';
-import { getConnectedPeers, getLocalIdentity } from '../../services/sovereignMesh.js';
+import { getConnectedPeers, getLocalIdentity, getContacts } from '../../services/sovereignMesh.js';
 import { useKernel } from '../../kernel/useKernel.js';
 import { triggerDownload } from '../../services/fileStorageService.js';
 
@@ -27,7 +27,7 @@ export default function GreetingCardWindow() {
   const [message, setMessage] = useState(
     'Wishing you radiant joy, peak cognitive clarity, and unstoppable momentum in the year ahead. May your sovereign node thrive!'
   );
-  const [recipientName, setRecipientName] = useState('Sarah');
+  const [recipientName, setRecipientName] = useState('');
   const [recipientPeerId, setRecipientPeerId] = useState('');
   
   // Interactive 3D Preview State
@@ -39,6 +39,7 @@ export default function GreetingCardWindow() {
 
   // Mesh & History State
   const [onlinePeers, setOnlinePeers] = useState([]);
+  const [savedContacts, setSavedContacts] = useState([]);
   const [receivedCards, setReceivedCards] = useState([]);
   const [sentCards, setSentCards] = useState([]);
   const [selectedInboxCard, setSelectedInboxCard] = useState(null);
@@ -47,13 +48,17 @@ export default function GreetingCardWindow() {
   const localId = getLocalIdentity();
   const activeTheme = CARD_THEMES[themeId] || CARD_THEMES.gold_luxury;
 
-  // Sync mesh peers and card history
+  // Sync mesh peers, contacts, and card history
   useEffect(() => {
     setOnlinePeers(getConnectedPeers());
     setReceivedCards(getReceivedGreetingCards());
     setSentCards(getSentGreetingCards());
+    getContacts().then(c => setSavedContacts(c || []));
 
-    const onPeerUpdate = () => setOnlinePeers(getConnectedPeers());
+    const onPeerUpdate = () => {
+      setOnlinePeers(getConnectedPeers());
+      getContacts().then(c => setSavedContacts(c || []));
+    };
     const onCardReceived = (e) => {
       setReceivedCards(getReceivedGreetingCards());
       setSendSuccess(`New card arrived from ${e.detail?.senderName || 'Peer'}!`);
@@ -169,14 +174,18 @@ export default function GreetingCardWindow() {
         coverEmoji,
         title,
         message,
-        recipientName,
+        recipientName: recipientName.trim() || (recipientPeerId === 'broadcast' ? 'Swarm Mesh' : 'Peer'),
+        // Everyone online only when Broadcast was chosen; a typed name alone reaches no one.
         recipientPeerId: recipientPeerId || null,
         senderName: localId?.handle || 'operator'
       };
 
       await sendGreetingCardOverMesh(cardPayload);
       setSentCards(getSentGreetingCards());
-      setSendSuccess(`Card sent to ${recipientName || 'your peer'} over the mesh.`);
+      const destLabel = (!recipientPeerId || recipientPeerId === 'broadcast')
+        ? 'the entire sovereign mesh swarm'
+        : (recipientName || 'your peer');
+      setSendSuccess(`Card dispatched to ${destLabel}!`);
       setTimeout(() => setSendSuccess(''), 4000);
 
       // Play celebration sound when sending
@@ -404,37 +413,88 @@ export default function GreetingCardWindow() {
                 </div>
               </div>
 
-              {/* Recipient Details & Quick Peer Selector */}
+              {/* Recipient Details & Quick Peer / Contact Selector */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-slate-300">Recipient Name / Node</label>
-                  {onlinePeers.length > 0 && (
-                    <span className="text-[10px] text-emerald-400 font-mono">
-                      {onlinePeers.length} Peers Online
-                    </span>
-                  )}
+                  <label className="text-xs font-semibold text-slate-300">Recipient / Target Peer</label>
+                  <div className="flex items-center gap-2">
+                    {onlinePeers.length > 0 && (
+                      <span className="text-[10px] text-emerald-400 font-mono">
+                        {onlinePeers.length} Online
+                      </span>
+                    )}
+                    {savedContacts.length > 0 && (
+                      <span className="text-[10px] text-cyan-400 font-mono">
+                        {savedContacts.length} Contacts
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <input
-                  type="text"
-                  value={recipientName}
-                  onChange={(e) => setRecipientName(e.target.value)}
-                  placeholder="Recipient Name (e.g., Sarah or @handle)..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 outline-none focus:border-pink-500"
-                />
 
-                {onlinePeers.length > 0 && (
-                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1">
-                    <span className="text-[10px] text-slate-500 shrink-0">Mesh Peers:</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={recipientName}
+                    onChange={(e) => {
+                      setRecipientName(e.target.value);
+                      if (recipientPeerId === 'broadcast') setRecipientPeerId('');
+                    }}
+                    placeholder="Recipient Name (e.g., Ada or @handle)..."
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 outline-none focus:border-pink-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecipientName('Swarm Mesh');
+                      setRecipientPeerId('broadcast');
+                    }}
+                    className={`px-2.5 py-2 rounded-xl text-[10px] font-bold border transition-colors cursor-pointer shrink-0 ${
+                      recipientPeerId === 'broadcast'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-200'
+                    }`}
+                    title="Broadcast to all nodes on your local/global mesh network"
+                  >
+                    ✨ Swarm
+                  </button>
+                </div>
+
+                {/* Quick Selection Tray for Online Peers & Saved WoT Contacts */}
+                {(onlinePeers.length > 0 || savedContacts.length > 0) && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 pb-0.5 no-scrollbar">
                     {onlinePeers.map(p => (
                       <button
                         key={p.id}
+                        type="button"
                         onClick={() => {
                           setRecipientName(p.name || p.id.slice(0, 8));
                           setRecipientPeerId(p.id);
                         }}
-                        className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-[10px] text-cyan-300 hover:border-cyan-500 shrink-0 cursor-pointer"
+                        className={`px-2 py-0.5 rounded-full border text-[10px] shrink-0 cursor-pointer flex items-center gap-1 ${
+                          recipientPeerId === p.id
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/60 font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-emerald-400/90 hover:border-emerald-500/40'
+                        }`}
                       >
-                        @{p.name || p.id.slice(0, 6)}
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        <span>@{p.name || p.id.slice(0, 6)}</span>
+                      </button>
+                    ))}
+                    {savedContacts.map(c => (
+                      <button
+                        key={c.id || c.nodeId}
+                        type="button"
+                        onClick={() => {
+                          setRecipientName(c.name || c.handle || c.id?.slice(0, 8));
+                          setRecipientPeerId(c.nodeId || c.id);
+                        }}
+                        className={`px-2 py-0.5 rounded-full border text-[10px] shrink-0 cursor-pointer ${
+                          recipientPeerId === (c.nodeId || c.id)
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 font-semibold'
+                            : 'bg-slate-900 border-slate-800 text-cyan-400/90 hover:border-cyan-500/40'
+                        }`}
+                      >
+                        {c.name || c.handle}
                       </button>
                     ))}
                   </div>
@@ -480,10 +540,22 @@ export default function GreetingCardWindow() {
                   className="w-full py-3 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-pink-600 via-rose-600 to-amber-600 hover:from-pink-500 hover:to-amber-500 shadow-xl shadow-pink-600/25 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                 >
                   <Send className="w-4 h-4" />
-                  <span>{sending ? 'Sending...' : recipientPeerId ? 'Send Across Sovereign Mesh' : 'Pick a mesh peer to send to'}</span>
+                  <span>
+                    {sending
+                      ? 'Dispatching Card...'
+                      : recipientPeerId === 'broadcast'
+                        ? 'Broadcast Card to Entire Mesh Swarm'
+                        : recipientPeerId
+                          ? `Send Directly to ${recipientName || 'Peer'}`
+                          : 'Pick a peer above, or Broadcast'}
+                  </span>
                 </button>
                 <p className="text-[10px] text-center text-slate-500 mt-2">
-                  Sends a signed card to the one peer you picked. Export HTML to share it any other way.
+                  {recipientPeerId === 'broadcast'
+                    ? 'Broadcasting to all discovered nodes across sovereign mesh relays.'
+                    : recipientPeerId
+                      ? `Routing directly to peer ${recipientPeerId.slice(0, 10)}...`
+                      : 'Signed with your Ed25519 identity key. Authentic peer-to-peer delivery.'}
                 </p>
               </div>
             </div>

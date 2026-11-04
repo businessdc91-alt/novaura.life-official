@@ -54,19 +54,9 @@ export function applyBuilderEdit(html, key, innerHtml) {
 export const EDIT_BRIDGE_SCRIPT = `<script>(function () {
   function send(key, html) { parent.postMessage({ novauraBuilderEdit: 1, key: key, html: html }, '*'); }
   var timers = {};
-  document.addEventListener('input', function (e) {
-    var el = e.target && e.target.closest && e.target.closest('[data-nb^="t"]');
-    if (!el) return;
-    clearTimeout(timers[el.dataset.nb]);
-    timers[el.dataset.nb] = setTimeout(function () { send(el.dataset.nb, el.innerHTML); }, 400);
-  }, true);
-  document.addEventListener('drop', function (e) {
-    var el = e.target && e.target.closest && e.target.closest('[data-nb^="i"]');
-    var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (!el || !file || file.type.indexOf('image/') !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    el.classList.remove('drag-hover');
+
+  function processImageFile(file, el) {
+    if (!file || file.type.indexOf('image/') !== 0) return;
     var url = URL.createObjectURL(file);
     var img = new Image();
     img.onload = function () {
@@ -81,5 +71,48 @@ export const EDIT_BRIDGE_SCRIPT = `<script>(function () {
     };
     img.onerror = function () { URL.revokeObjectURL(url); };
     img.src = url;
+  }
+
+  document.addEventListener('input', function (e) {
+    var el = e.target && e.target.closest && e.target.closest('[data-nb^="t"]');
+    if (!el) return;
+    clearTimeout(timers[el.dataset.nb]);
+    timers[el.dataset.nb] = setTimeout(function () { send(el.dataset.nb, el.innerHTML); }, 400);
+  }, true);
+
+  document.addEventListener('dragover', function (e) {
+    var el = e.target && e.target.closest && e.target.closest('[data-nb^="i"]');
+    if (el) { e.preventDefault(); el.classList.add('drag-hover'); }
+  }, true);
+
+  document.addEventListener('dragleave', function (e) {
+    var el = e.target && e.target.closest && e.target.closest('[data-nb^="i"]');
+    if (el) { el.classList.remove('drag-hover'); }
+  }, true);
+
+  document.addEventListener('drop', function (e) {
+    var el = e.target && e.target.closest && e.target.closest('[data-nb^="i"]');
+    var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!el || !file) return;
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove('drag-hover');
+    processImageFile(file, el);
+  }, true);
+
+  document.addEventListener('click', function (e) {
+    var el = e.target && e.target.closest && e.target.closest('[data-nb^="i"]');
+    if (!el || el.querySelector('input[type="file"]')) return;
+    var inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.style.display = 'none';
+    inp.onchange = function () {
+      var file = inp.files && inp.files[0];
+      if (file) processImageFile(file, el);
+    };
+    document.body.appendChild(inp);
+    inp.click();
+    setTimeout(function () { inp.remove(); }, 1000);
   }, true);
 })();</script>`;

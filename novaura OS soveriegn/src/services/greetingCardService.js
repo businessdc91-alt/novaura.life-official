@@ -491,13 +491,12 @@ export function storeReceivedGreetingCard(card, did) {
 }
 
 /**
- * Send a card to one mesh peer. Resolves with the card as sent; throws when
- * no peer was chosen or the mesh refused it.
+ * Send a card across the sovereign mesh. When recipientPeerId is a specific peer,
+ * sends directly; 'broadcast' sends it to every peer online. With neither, nothing is sent.
  */
 export async function sendGreetingCardOverMesh(card) {
-  if (!card.recipientPeerId) throw new Error('Pick who the card is for from the mesh peers first.');
   // Loaded here so the rest of this module (themes, cleaning, export) stays free of the mesh.
-  const { sendDirectMeshPacket, getLocalIdentity } = await import('./sovereignMesh.js');
+  const { sendDirectMeshPacket, broadcastMeshPacket, getLocalIdentity } = await import('./sovereignMesh.js');
   const localId = getLocalIdentity();
   const cardPacket = cleanGreetingCard({
     ...card,
@@ -505,14 +504,22 @@ export async function sendGreetingCardOverMesh(card) {
     senderName: localId?.handle || 'operator',
     timestamp: new Date().toISOString(),
   });
-  const sent = await sendDirectMeshPacket(card.recipientPeerId, 'MESH_GREETING_CARD', cardPacket);
-  if (!sent) {
-    throw new Error("The mesh didn't send this card. The peer may have gone offline, or the message contains a word the mesh treats as a credential (secret, vault, API key, bearer).");
+
+  if (!card.recipientPeerId) throw new Error('Pick who the card is for, or choose Broadcast to send it to everyone online.');
+  const isBroadcast = card.recipientPeerId === 'broadcast';
+
+  if (isBroadcast) {
+    broadcastMeshPacket('MESH_GREETING_CARD', cardPacket);
+  } else {
+    const sent = await sendDirectMeshPacket(card.recipientPeerId, 'MESH_GREETING_CARD', cardPacket);
+    if (!sent) {
+      throw new Error("The mesh didn't send this card. The peer may have gone offline, or the message contains a word the mesh treats as a credential (secret, vault, API key, bearer).");
+    }
   }
 
   try {
     const history = getSentGreetingCards();
-    history.unshift({ ...cardPacket, senderDid: localId?.nodeId || null, recipientPeerId: card.recipientPeerId });
+    history.unshift({ ...cardPacket, senderDid: localId?.nodeId || null, recipientPeerId: card.recipientPeerId || 'broadcast' });
     localStorage.setItem('sovereign_greeting_cards_sent', JSON.stringify(history.slice(0, 50)));
   } catch { /* history is a convenience */ }
 
