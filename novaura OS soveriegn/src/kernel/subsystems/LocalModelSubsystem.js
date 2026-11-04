@@ -302,6 +302,10 @@ export class LocalModelSubsystem {
       stream,
       temperature: options.temperature ?? 0.7,
       max_tokens: options.maxTokens ?? 2048,
+      // Thinking models (Qwen 3.x, Gemma 4) otherwise spend minutes thinking, and a short budget
+      // comes back empty; LM Studio ignores this for models that don't think. Same as runLocalChat.
+      reasoning_effort: 'none',
+      ...(options.jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: options.jsonSchema } } } : {}),
     };
 
     const res = await fetch(`${this._lmstudioUrl}/chat/completions`, {

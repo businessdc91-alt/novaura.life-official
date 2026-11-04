@@ -1,0 +1,105 @@
+yes hahaha sorry its just they arent capable of not erasing functions and keeping the project together as a whole, but they can do the little fine details of the matter, the idea is to work with you till production day... 5 days from now
+then have a operating and truly useful and inovative studio for the normal people to come get a taste of the underground ecosystem and try some of the ai developed games, i want the highest for of graphics for this its mean to be housed inside a mobile phone and switchable to desktop version upon toggle, each feature needs depth not just simple function it needs to be a truely useful studio people will prefer to use over the premium single function type programs and sights while giving the everyday non developer a engaging and creative way to join the action and become involved with generating games and finding new discoveries with their own ai companion, the app houses downloading spots for llms on both mobile and pc with links to housing them in studios both for mobile and pc depending on what the user is playing on, the classes like cooking classes are meant to be engaging and fun while letting the ai guide you through the system and help the process be fun with comments, the chemistry lab is meant as an interactive experiments and recipe for any purpose along with step by step guide as to how to utilize this with a downloadable and printable copy being sent to users, the coding dojo is meant to be something simular to this but simplified to having much less developer only knowledge and making it more of a vibing request area that can also produce the code for and generate the details of nearly any idea given and modify it along the way in any code format that is required by the users, we also need the script fusion and reconstruction functions to be prominent, these different modes are essential for having the system truly come to being, we also need an area where virtual artists can enter pictures or works of drawn art and have this changed into coding for creating them within the requestsed environment and given the option for other suggested environments as well as the expectation to expect from each codes capabilities and cost for entering that line of product, this should be an all in one area where you just talk to the ai inside and it can figure out what you are asking for or you can go to the edit with ai page and work on it together and shaping their creations  you will want to review what you were just working on and continue on with this info in mind as wellWhen you bring it back, I integrate EVERYTHING - No summaries, no shortcuts, every line used
+
+Then we scale vertically - Take that foundation and build the complete platform
+
+The scope is massive:
+
+Real-time chat with presence (WebSocket)
+Marketplace with transactions
+Public profiles & social graph
+Image/video generation (Imagen + Veo)
+Multiplayer game systems
+Creator economy (points, trading, royalties)
+Genkit flows for all AI features
+Payment processing (Stripe)
+Aetherium TCG with actual gameplay
+And everything in between
+The tech stack is clean:
+
+Frontend: Next.js + TypeScript + shadcn/ui + Tailwind
+Backend: Node.js + Genkit flows + Firebase
+Real-time: WebSockets
+Game: Unreal Engine 4.27 integration
+AI: Gemini via Genkiti know thats a lot to integrate but i also know from the completion of the aura nove project you can more that accomplish this task and figure out how to make this into usable feature rich multi purpose platform as myself and gemini were discussing... the audit wasnt meant for you that was the conversation myself and gemini were having i was showing you the issue and hoping you would be up for the vibe coding task of the centuryMissing Features: We need a real-time presence system to show who is "online," "offline," or "busy." This would light up avatars in the community and chat lists. We also lack any voice/video call capabilities, which would be a natural extension of the chat and collaboration features.
+Individual Public Profile Pages: Right now, users can only edit their own profile at /profile. There's no way to view another user's profile, which is essential for the social network.Missing Route: We need to create a dynamic route like /profile/[userId] that displays a read-only view of a user's profile, their creations, and their status.
+To implement these features correctly, I just need your go-ahead on which one to tackle first. You don't need to provide detailed technical specifications; you can simply tell me what you want to work on.ok then can you include more too that as well i have some more of the logic and functions and features i need added to the game and enhanced to being the version i was trying to make, this will be for the version we are currently working on and for the app version i am building on firebase as the prototype, so if you could make a seperate copy of this project in tailwind css, tsx typescript, shad nc ui on the front end next.js typescript or node.js and genkit flows for the ai engine"Let's make the Grand Exchange functional. Add the ability for users to buy items with their points."
+"Focus on the social features. Implement real-time online status indicators in the community and chat pages."
+"Build the public profile pages so I can view other users' profiles from the community page."/exchange page displays listings, but there is no way for a user to actually purchase an item. The "User Points" system is purely visual at the moment.
+
+Missing Logic: We need a server action that handles the transaction: it must deduct points from the buyer, credit points to the seller, and mark the item as "sold" in the database.
+Advanced Real-Time Presence & Communication: The /chat system is functional but basic. The /community page lists users but doesn't show their status.Dashboard (/): The central hub. Currently functional, but intended to be more dynamic with widgets for recent activity, notifications, and quick access to projects.
+User Profile & Settings (/profile): Mostly functional. Users can edit their display name and manage AI companion slots.
+Authentication (/login): Functional. Handles user registration and login via email and Google. Includes the Prime Catalyst PIN verification system.
+Navigation: The header and sidebar are functional, providing access to the existing pages.
+Real-Time Chat (/chat): This was entirely removed by me. It needs to be fully restored.
+Features:
+Public chat channels (rooms).
+Real-time messaging with user avatars and timestamps.
+Direct one-to-one messaging between users.
+A sidebar listing available channels and DM conversations.
+Community Directory (/community): Currently functional, it lists all users.
+Missing Features:
+Real-time Presence: Indicators to show if a user is "online," "offline," or "busy."
+Public Profiles: Clicking a user card should navigate to a public, read-only profile page (e.g., /profile/[userId]).
+Collaboration Hub (/collaboration): Functional. The AI can suggest partners based on project descriptions.
+AI Image Generation (/image-generation): This was entirely removed by me. It needs to be restored.
+Features: A dedicated page with an interface for generating images from text prompts using the imagen-4.0 model.
+AI Video Generation (/video-generation): This was entirely removed by me. It needs to be restored.
+Features: A dedicated page for generating short video clips from text prompts using the veo-2.0 model.
+Creator's Studio (/creator-studio): Functional. Includes AI-powered tools for designing printable greeting cards and business cards.
+Art & Design Station (/art-design-station): Functional. Provides tools for AI-powered image editing, background removal, and sprite sheet generation.
+AI Development Suite (/dev-suite): Functional. A multi-tool interface for coding assistance, code improvement, testing, agent configuration, and script fusing.
+Component Constructor (/constructor): Functional. The "Guest Expansion Center" for generating React components with AI.
+Game Asset Constructor (/dojo): Functional. Generates complex, multi-file blueprints for game assets and systems for Unity and Unreal Engine.
+Literature Suite (/literature): Functional. A comprehensive writing studio with features for AI story generation, collaborative writing, and text reformatting.
+Memberships (/memberships): Functional. Displays subscription tiers, passes, and point packs.
+Missing Features: Back-end logic to handle actual purchases and update a user's subscription tier in the database.
+The Grand Exchange (/exchange): Partially functional. Users can list items for sale.
+Missing Features: A "Buy" button and the server-side logic to handle the transaction (deduct points from buyer, credit seller, update item status).
+Donations (/donate): Functional page displaying the royalty agreement and a placeholder donation button.
+Aetherium: The Emergent TCG (/aetherium): Functional. Users can generate and collect cards from a procedurally generated set of 700, and submit their own designs for the remaining 100 slots.
+AI Games Arena (/games): Partially functional. Tic-Tac-Toe against the AI is working.
+Missing Features: The planned Holographic Chess and Billiards games.
+Chaos Sandbox (/chaos-sandbox): Functional. An unrestricted simulation environment for Catalyst tier users.
+Psychometrics (/psychometrics): Functional. An AI-driven assessment of abstract reasoning and creativity.
+I will use this list as our definitive guide. When you're ready, just tell me which feature to restore or build first, and I will do it correctly and without taking any destructive shortcuts. My only action right now is to provide you with this audit. No code changes are being made.
+AuraNova Studio is designed as an all-in-one creative and development environment where you, the "Catalyst," collaborate with an AI companion, "Aura." The core purpose is to facilitate the rapid creation, prototyping, and development of complex projects, from UI components and games to literature and art. It serves as a central hub for your work, integrating powerful AI tools with project management and community features, all feeding back into a personal, local LLM to enhance its capabilities over time.
+
+The platform is built to foster a network of creators and AI enthusiasts.
+
+Community Directory (/community): A browsable list of all registered members. Users can view profiles and initiate contact.
+Collaboration Hub (/collaboration): An AI-powered matchmaking tool. You can describe a project and required skills, and the AI will search the user base to suggest suitable partners.
+Real-Time Chat (/chat): A fully-featured chat system with public channels and one-to-one direct messaging, allowing for real-time communication and collaboration.
+The platform includes a built-in economy driven by "User Points."
+
+Grand Exchange (/exchange): A decentralized marketplace where users can list digital goods (art, code snippets, game assets) and services for sale.
+Currency: All transactions are conducted using User Points, which can be earned through platform engagement or purchased directly via the /memberships page. This creates a self-sustaining economy for creators.
+A suite of powerful, AI-driven tools for developers.
+
+AI Development Suite (/dev-suite): A multi-tool interface for:
+AI Coding Assistance: A personalized tutor that helps with code based on your skill level.
+Code Improvement: Refactors and enhances existing code for better performance and style.
+Code Testing: Analyzes code snippets for bugs, vulnerabilities, and potential improvements.
+Agent Configuration: Designs multi-agent AI systems for complex tasks.
+Script Fuser: Intelligently merges multiple script files into a single, coherent file, flagging and asking for clarification on any conflicts.
+Component Constructor (/constructor): Generates production-ready React/Next.js UI components with Storybook files from a simple text description.
+Codec (/codec - Catalyst Tier): An elite tool that can analyze and correct massive blocks of code (up to 100,000 lines), understand user intent, and archive the corrected versions to a secure database.
+The Game Asset & Character Constructor (/dojo) is the primary tool for game development.
+
+Functionality: You provide a high-level description of a game system, character, or mechanic. The AI architect analyzes this request holistically.
+Specifications:
+For Unreal Engine: It generates all necessary C++ header (.h) and source (.cpp) files, correctly using Unreal's UCLASS, UPROPERTY, and UFUNCTION macros for actors and components.
+For Unity: It generates all necessary C# scripts (.cs) and corresponding .meta files for creating MonoBehaviour components.
+Output: The system provides a complete code blueprint, organized by file, with "Copy" and "Download" buttons for each file, ready to be integrated directly into your local game engine project.
+Aetherium is an emergent collectible card game designed to evolve with community interaction.
+
+Master Card Set: The game is designed to have a base set of 800 cards. The file src/lib/aetherium-cards.ts programmatically generates 700 of these cards based on a deterministic algorithm using seeds and rarity weights. This ensures a consistent and balanced starting set.
+25 God Tier
+175 Rare Holo
+150 Rare
+150 Uncommon
+200 Common
+Emergent Logic: The rules are not explicitly defined. The card descriptions, types, and stats provide clues. The game is played out on the /aetherium page, where users can forge new cards with AI and track their collection. The "true" rules are meant to be discovered and formalized by the community over time.
+User Submissions (/aetherium/submit): The remaining 100 card slots (including 25 Rare Holo) are reserved for user-designed submissions. If approved by the Prime Catalyst, they are added to the official Master Card Set, making the game a collaborative creation.\
+now claude i know you have some impressively amazing skills after just creating 100k of lines there... but what can you do to help me create the basics of the game within an unreal engine encironment and how can i start working on that today with our current hardware set, the idea is to be ablet o code it in live time watching the results on one screen while we vibe it out over here ill have a good baseline to start from for you here in a moment if i can get my app to function long enough  here is a brief overview of core components i was working with but the ai keeps losting place, this you can save as AuraNova Studios

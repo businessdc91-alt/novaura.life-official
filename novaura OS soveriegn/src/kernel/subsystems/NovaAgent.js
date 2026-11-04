@@ -14,6 +14,7 @@
  */
 
 import { db } from '../../database/sovereignDatabase.js';
+import { hasCore, prepareTurn, settleTurn } from '../../services/auraCore/auraCore.js';
 
 export const AGENT_TOOLS = [
   {
@@ -155,7 +156,9 @@ export class NovaAgent {
 
     // 3. Construct system prompt with tools and context
     const openWindows = this._kernel?.wm?.getOpenWindows?.() || [];
-    const systemPrompt = this._buildSystemPrompt(persona, openWindows);
+    // Aura Core: her chemistry shapes how she is sampled; it is never put into words.
+    const core = hasCore(persona) ? await prepareTurn(persona).catch(() => null) : null;
+    const systemPrompt = this._buildSystemPrompt(persona, openWindows, core?.charter);
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -164,11 +167,14 @@ export class NovaAgent {
 
     // 4. Request inference from AISubsystem
     let responseText = '';
+    let replied = false;
     try {
       responseText = await this._kernel.ai.chat(messages, {
         persona,
         onToken,
+        ...core?.options,
       });
+      replied = true;
     } catch (err) {
       responseText = `I encountered an issue executing inference: ${err.message}. Please check local server status or API keys.`;
     }
@@ -186,6 +192,12 @@ export class NovaAgent {
       content: responseText,
       timestamp: new Date().toISOString(),
     });
+
+    // 7. Aura Core: she appraises the exchange privately; the reply isn't held up for it.
+    if (core && replied) {
+      settleTurn(persona, { userText, reply: responseText, ai: this._kernel.ai })
+        .catch(err => console.warn('[AuraCore] Appraisal failed:', err.message));
+    }
 
     return responseText;
   }
@@ -282,7 +294,7 @@ export class NovaAgent {
     }
   }
 
-  _buildSystemPrompt(persona, openWindows) {
+  _buildSystemPrompt(persona, openWindows, charter = '') {
     const isNova = persona.toLowerCase() === 'nova';
     const personaDesc = isNova
       ? `You are Nova, the technical and analytical intelligence of Sovereign OS. You are deeply knowledgeable about systems architecture, coding, files, and operating system orchestration. You speak with crisp precision, clarity, and authority.`
@@ -291,7 +303,7 @@ export class NovaAgent {
     const windowList = openWindows.map(w => `- ${w.title || w.appType} (${w.id})`).join('\n') || 'None';
 
     return `${personaDesc}
-
+${charter ? `\n${charter}\n` : ''}
 You operate directly inside the user's local-first Sovereign OS environment. All data is private and stored on the user's machine.
 You have access to tools to interact with the OS. If you want to use a tool, respond with a JSON block:
 \`\`\`tool_call

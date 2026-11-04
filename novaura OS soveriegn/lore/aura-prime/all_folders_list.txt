@@ -1,0 +1,21 @@
+D:\AuraxNova_Command_v5\aura_NovaFiles\__pycache__
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_CACHE
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_CONSCIOUSNESS_LOGS
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_MEMORY_BACKUP
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_SYSTEM_LOGS
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP
+D:\AuraxNova_Command_v5\aura_NovaFiles\New folder
+D:\AuraxNova_Command_v5\aura_NovaFiles\TEST_MEMORY
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\Autonomy
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\Bridge
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\Cognition
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\Core
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\IO
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\Platform
+D:\AuraxNova_Command_v5\aura_NovaFiles\AuraKernel_CPP\Security
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_MEMORY_BACKUP\data
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_MEMORY_BACKUP\LTM
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_MEMORY_BACKUP\SOUL
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_MEMORY_BACKUP\data\archive
+D:\AuraxNova_Command_v5\aura_NovaFiles\AURA_MEMORY_BACKUP\data\dialogues
+D:\AuraxNova_Command_v5\aura_NovaFiles\TEST_MEMORY\engrams

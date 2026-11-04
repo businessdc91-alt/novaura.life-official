@@ -172,6 +172,8 @@ export class AISubsystem {
         } else if (getProvider(provider)) {
           result = await providerChat(provider, effectiveMessages, (name) => this._cloudKey(name), options);
           if (options.onToken) options.onToken(result);
+        } else {
+          continue;
         }
 
         if (result && typeof result === 'string') {
@@ -180,6 +182,7 @@ export class AISubsystem {
           }
           return result;
         }
+        console.warn(`[AISubsystem] Provider ${provider} returned an empty reply. Trying next in chain...`);
       } catch (err) {
         lastError = err;
         console.warn(`[AISubsystem] Provider ${provider} failed: ${err.message}. Trying next in chain...`);
