@@ -2,7 +2,7 @@ import { lazy, createElement, useEffect, useState } from 'react';
 import {
   Code2, FolderOpen, Terminal as TerminalIcon, Globe, CreditCard,
   FileText, Layers, Mail, Users, Bot, ShieldCheck, Settings,
-  BookOpen, MonitorCog, Sparkles, PhoneCall, Palette, Bug, Compass, AtSign
+  BookOpen, MonitorCog, Sparkles, PhoneCall, Palette, Bug, Compass, AtSign, LayoutTemplate
 } from 'lucide-react';
 
 const CybeniBuilderWindow = lazy(() => import('../components/windows/CybeniBuilderWindow.jsx'));
@@ -53,6 +53,7 @@ const HoloChessWindow = lazy(() => import('../components/windows/HoloChessWindow
 const GreetingCardWindow = lazy(() => import('../components/windows/GreetingCardWindow.jsx'));
 const ModelBenchmarkWindow = lazy(() => import('../components/windows/ModelBenchmarkWindow.jsx'));
 const NovaRegistryWindow = lazy(() => import('../components/windows/NovaRegistryWindow.jsx'));
+const TemplateLibraryWindow = lazy(() => import('../components/windows/TemplateLibraryWindow.jsx'));
 import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy } from 'lucide-react';
 
 
@@ -533,6 +534,16 @@ export const APP_REGISTRY = [
     component: NovaRegistryWindow,
     defaultSize: { width: 860, height: 680 },
   },
+  {
+    id: 'template_library',
+    label: 'Templates',
+    category: 'engineering',
+    icon: LayoutTemplate,
+    color: '#f59e0b',
+    title: 'Templates: NovAura prototype projects to build from (pre-alpha, signed, with their license)',
+    component: TemplateLibraryWindow,
+    defaultSize: { width: 900, height: 720 },
+  },
 ];
 
 export const APP_MAP = new Map(APP_REGISTRY.map(app => [app.id, app]));
@@ -659,6 +670,9 @@ export function getAppById(id) {
   }
   if (id === 'registry' || id === 'domains' || id === 'names' || id === 'tld' || id === 'registrar') {
     return APP_MAP.get('nova_registry');
+  }
+  if (id === 'templates' || id === 'template' || id === 'template_library' || id === 'starter_kits') {
+    return APP_MAP.get('template_library');
   }
   return APP_MAP.get(id);
 }

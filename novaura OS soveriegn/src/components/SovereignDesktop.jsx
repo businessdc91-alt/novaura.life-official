@@ -24,6 +24,7 @@ import '../services/holoChessMesh'; // and HoloChess challenges too
 import '../services/greetingCardMesh'; // and greeting cards
 import '../services/web/novaRegistry'; // mesh names: records, claims, the operator
 import '../services/web/meshWebSearch'; // answers peers' Nova Search queries
+import '../services/templates/templateLibrary'; // template license acceptances, sent and received
 import { recordNotification, isDoNotDisturb, markRead } from '../services/notificationCenter';
 import { isTauriApp, popOutApp } from '../services/popoutWindows';
 import { callService, CallState } from '../services/sovereignCallService';

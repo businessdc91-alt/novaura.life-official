@@ -1,6 +1,7 @@
 // zipService.js — ZIP archives with no dependencies. `buildZip` writes stored
 // (uncompressed) entries synchronously; `compressZip` deflates through the
-// browser's CompressionStream; `readZip` extracts stored and deflated entries.
+// browser's CompressionStream; `readZip` extracts stored and deflated entries;
+// `listZipEntries` / `readZipEntry` read a Blob one entry at a time.
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -116,6 +117,51 @@ export async function compressZip(files, date = new Date()) {
   return assemble(entries, date);
 }
 
+function findEnd(view, length) {
+  for (let i = length - 22; i >= Math.max(0, length - 22 - 0xffff); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) return i;
+  }
+  throw new Error('Not a ZIP archive.');
+}
+
+// Central directory records → [{ path, dir, flags, method, crc, compSize, size, localAt }].
+function parseDirectory(bytes, start, count) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const dec = new TextDecoder();
+  const out = [];
+  let p = start;
+  for (let i = 0; i < count; i++) {
+    if (p + 46 > bytes.length || view.getUint32(p, true) !== 0x02014b50) throw new Error('The ZIP directory is damaged.');
+    const nameLen = view.getUint16(p + 28, true);
+    const rawName = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    const entry = {
+      path: safeEntryPath(rawName),
+      dir: rawName.endsWith('/') || rawName.endsWith('\\'),
+      flags: view.getUint16(p + 8, true),
+      method: view.getUint16(p + 10, true),
+      crc: view.getUint32(p + 16, true),
+      compSize: view.getUint32(p + 20, true),
+      size: view.getUint32(p + 24, true),
+      localAt: view.getUint32(p + 42, true),
+    };
+    p += 46 + nameLen + view.getUint16(p + 30, true) + view.getUint16(p + 32, true);
+    if (entry.path) out.push(entry);
+  }
+  return out;
+}
+
+async function unpack(packed, entry) {
+  if (entry.flags & 1) throw new Error(`"${entry.path}" is encrypted; encrypted archives are not supported.`);
+  let data;
+  if (entry.method === 0) data = packed.slice();
+  else if (entry.method === 8) {
+    if (typeof DecompressionStream !== 'function') throw new Error('This system cannot inflate compressed ZIP entries.');
+    data = await through(packed, new DecompressionStream('deflate-raw'));
+  } else throw new Error(`"${entry.path}" uses an unsupported compression method (${entry.method}).`);
+  if (data.length !== entry.size || crc32(data) !== entry.crc) throw new Error(`"${entry.path}" failed its checksum; the archive is corrupt.`);
+  return data;
+}
+
 /**
  * ZIP bytes → [{ path, bytes, dir }]. Supports stored and deflated entries (not ZIP64
  * or encryption). Entries whose path would climb out of the archive (`..`) are skipped.
@@ -123,46 +169,43 @@ export async function compressZip(files, date = new Date()) {
 export async function readZip(input) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 0xffff); i--) {
-    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  }
-  if (eocd < 0) throw new Error('Not a ZIP archive.');
+  const eocd = findEnd(view, bytes.length);
   const count = view.getUint16(eocd + 10, true);
-  let p = view.getUint32(eocd + 16, true);
-  if (p === 0xffffffff || count === 0xffff) throw new Error('ZIP64 archives are not supported.');
-  const dec = new TextDecoder();
+  const start = view.getUint32(eocd + 16, true);
+  if (start === 0xffffffff || count === 0xffff) throw new Error('ZIP64 archives are not supported.');
   const out = [];
-  for (let i = 0; i < count; i++) {
-    if (p + 46 > bytes.length || view.getUint32(p, true) !== 0x02014b50) throw new Error('The ZIP directory is damaged.');
-    const flags = view.getUint16(p + 8, true);
-    const method = view.getUint16(p + 10, true);
-    const crc = view.getUint32(p + 16, true);
-    const compSize = view.getUint32(p + 20, true);
-    const size = view.getUint32(p + 24, true);
-    const nameLen = view.getUint16(p + 28, true);
-    const extraLen = view.getUint16(p + 30, true);
-    const commentLen = view.getUint16(p + 32, true);
-    const localAt = view.getUint32(p + 42, true);
-    const rawName = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
-    p += 46 + nameLen + extraLen + commentLen;
-
-    const dir = rawName.endsWith('/') || rawName.endsWith('\\');
-    const path = safeEntryPath(rawName);
-    if (!path) continue;
-    if (dir) { out.push({ path, bytes: new Uint8Array(0), dir: true }); continue; }
-    if (flags & 1) throw new Error(`"${path}" is encrypted; encrypted archives are not supported.`);
-    if (view.getUint32(localAt, true) !== 0x04034b50) throw new Error(`The ZIP entry "${path}" is damaged.`);
-    const dataAt = localAt + 30 + view.getUint16(localAt + 26, true) + view.getUint16(localAt + 28, true);
-    const packed = bytes.subarray(dataAt, dataAt + compSize);
-    let data;
-    if (method === 0) data = packed.slice();
-    else if (method === 8) {
-      if (typeof DecompressionStream !== 'function') throw new Error('This system cannot inflate compressed ZIP entries.');
-      data = await through(packed, new DecompressionStream('deflate-raw'));
-    } else throw new Error(`"${path}" uses an unsupported compression method (${method}).`);
-    if (data.length !== size || crc32(data) !== crc) throw new Error(`"${path}" failed its checksum; the archive is corrupt.`);
-    out.push({ path, bytes: data, dir: false });
+  for (const e of parseDirectory(bytes, start, count)) {
+    if (e.dir) { out.push({ path: e.path, bytes: new Uint8Array(0), dir: true }); continue; }
+    if (e.localAt + 30 > bytes.length || view.getUint32(e.localAt, true) !== 0x04034b50) throw new Error(`The ZIP entry "${e.path}" is damaged.`);
+    const dataAt = e.localAt + 30 + view.getUint16(e.localAt + 26, true) + view.getUint16(e.localAt + 28, true);
+    out.push({ path: e.path, bytes: await unpack(bytes.subarray(dataAt, dataAt + e.compSize), e), dir: false });
   }
   return out;
+}
+
+/**
+ * The entries of a ZIP Blob or File, read from its end without loading the
+ * rest, so archives larger than memory can be listed and read one entry at a
+ * time: [{ path, dir, method, size, compSize, crc, localAt, flags }].
+ */
+export async function listZipEntries(blob) {
+  const tailLen = Math.min(blob.size, 22 + 0xffff);
+  const tail = new Uint8Array(await blob.slice(blob.size - tailLen).arrayBuffer());
+  const tv = new DataView(tail.buffer);
+  const eocd = findEnd(tv, tail.length);
+  const count = tv.getUint16(eocd + 10, true);
+  const size = tv.getUint32(eocd + 12, true);
+  const start = tv.getUint32(eocd + 16, true);
+  if (start === 0xffffffff || count === 0xffff) throw new Error('ZIP64 archives are not supported.');
+  if (start + size > blob.size) throw new Error('The ZIP directory is damaged.');
+  return parseDirectory(new Uint8Array(await blob.slice(start, start + size).arrayBuffer()), 0, count);
+}
+
+/** One entry's bytes (checked against its CRC), read from the Blob on demand. */
+export async function readZipEntry(blob, entry) {
+  if (entry.dir) return new Uint8Array(0);
+  const head = new DataView(await blob.slice(entry.localAt, entry.localAt + 30).arrayBuffer());
+  if (head.byteLength < 30 || head.getUint32(0, true) !== 0x04034b50) throw new Error(`The ZIP entry "${entry.path}" is damaged.`);
+  const dataAt = entry.localAt + 30 + head.getUint16(26, true) + head.getUint16(28, true);
+  return unpack(new Uint8Array(await blob.slice(dataAt, dataAt + entry.compSize).arrayBuffer()), entry);
 }

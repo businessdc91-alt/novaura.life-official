@@ -1054,10 +1054,12 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_DOMAIN_REPLY',
   'MESH_WEB_SEARCH',
   'MESH_WEB_RESULTS',
+  'MESH_TEMPLATE_ACCEPTANCE',
+  'MESH_TEMPLATE_RECEIPT',
 ]);
 
 // Public by design and built from validated fields (sites, names, search, call
-// setup), so the credential word scan below would only block ordinary words in
+// setup, template license acceptances), so the credential word scan below would only block ordinary words in
 // them: a page that mentions a "secret", a name like vault.nova, SDP from a call.
 const LEAK_SCAN_EXEMPT_TYPES = new Set([
   'MESH_HOSTED_SITE',
@@ -1069,6 +1071,8 @@ const LEAK_SCAN_EXEMPT_TYPES = new Set([
   'MESH_DOMAIN_REPLY',
   'MESH_WEB_SEARCH',
   'MESH_WEB_RESULTS',
+  'MESH_TEMPLATE_ACCEPTANCE',
+  'MESH_TEMPLATE_RECEIPT',
 ]);
 
 function looksLikeCredentialLeak(type, payload) {

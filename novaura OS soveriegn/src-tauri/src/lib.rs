@@ -4,6 +4,7 @@ pub mod llm;
 pub mod forge;
 pub mod mesh;
 pub mod preview;
+pub mod templates;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -1702,6 +1703,9 @@ pub fn run() {
             cloud::cloud_ai_request,
             forge::forge_fetch_text,
             forge::forge_install_desktop_app,
+            templates::template_prepare_dir,
+            templates::template_write_file,
+            templates::template_open_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

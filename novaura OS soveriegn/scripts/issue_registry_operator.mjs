@@ -12,23 +12,9 @@
  * The authority private key comes from NOVAURA_AUTHORITY_PRIVKEY_HEX or
  * ~/.novaura/sovereign_authority_key.json. It is never printed.
  */
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { ed25519 } from '@noble/curves/ed25519.js';
 import { TRUSTED_AUTHORITIES } from '../src/config/trustedAuthorities.js';
-import { signOperatorCert, readOperatorCert, MESH_TLDS, bytesToHex, hexToBytes } from '../src/services/web/novaNames.js';
-
-function authoritySecret() {
-  const env = (process.env.NOVAURA_AUTHORITY_PRIVKEY_HEX || '').trim();
-  if (/^[0-9a-f]{64}$/i.test(env)) return env.toLowerCase();
-  const file = path.join(os.homedir(), '.novaura', 'sovereign_authority_key.json');
-  if (fs.existsSync(file)) {
-    const hex = JSON.parse(fs.readFileSync(file, 'utf8')).privateKeyHex;
-    if (/^[0-9a-f]{64}$/i.test(hex || '')) return hex.toLowerCase();
-  }
-  throw new Error('No authority key: set NOVAURA_AUTHORITY_PRIVKEY_HEX or keep ~/.novaura/sovereign_authority_key.json on this machine.');
-}
+import { signOperatorCert, readOperatorCert, MESH_TLDS } from '../src/services/web/novaNames.js';
+import { loadAuthorityKey } from './lib/authorityKey.mjs';
 
 const [operatorArg, tldArg = MESH_TLDS.join(','), daysArg = '365'] = process.argv.slice(2);
 if (!operatorArg) {
@@ -38,10 +24,7 @@ if (!operatorArg) {
 }
 
 try {
-  const secret = authoritySecret();
-  const pub = bytesToHex(ed25519.getPublicKey(hexToBytes(secret)));
-  const kid = Object.entries(TRUSTED_AUTHORITIES).find(([, a]) => a.pubkeyHex === pub && a.status === 'ACTIVE')?.[0];
-  if (!kid) throw new Error('This authority key is not an active entry in src/config/trustedAuthorities.js.');
+  const { secret, kid } = loadAuthorityKey();
 
   const tlds = tldArg.split(',').map(t => t.trim().replace(/^\./, '').toLowerCase()).filter(Boolean);
   const days = Number(daysArg);

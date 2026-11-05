@@ -1,0 +1,127 @@
+{
+  "id": "novaura-webos",
+  "version": "0.1.0-prealpha",
+  "title": "NovAura Web OS: browser desktop, platform and Firebase backend",
+  "kind": "code",
+  "stage": "pre-alpha prototype",
+  "source": "Z:/Novaura platform/NovAura-WebOS",
+  "include": [
+    "index.html",
+    "os.html",
+    "package.json",
+    "package-lock.json",
+    "vite.config.js",
+    "vite.landing.config.js",
+    "tailwind.config.js",
+    "postcss.config.js",
+    "firebase.json",
+    "firestore.rules",
+    "firestore.indexes.json",
+    "storage.rules",
+    ".gitignore",
+    ".firebaseignore",
+    "src/",
+    "scripts/",
+    "docs/",
+    "functions/src/",
+    "functions/scripts/",
+    "functions/package.json",
+    "functions/package-lock.json",
+    "functions/tsconfig.json",
+    "functions/jest.config.js",
+    "functions/.env.example",
+    "functions/README.md",
+    "functions/Dockerfile",
+    "functions/.dockerignore",
+    "functions/.gitignore",
+    "public/icons/",
+    "public/favicon.png",
+    "public/logo.png",
+    "public/logo-192.png",
+    "public/manifest.json",
+    "public/sw.js",
+    "public/robots.txt",
+    "public/boot-animation.webm",
+    "platform/src/",
+    "platform/scripts/",
+    "platform/shopify-theme/",
+    "platform/index.html",
+    "platform/package.json",
+    "platform/package-lock.json",
+    "platform/vite.config.ts",
+    "platform/tsconfig.json",
+    "platform/tsconfig.app.json",
+    "platform/tsconfig.node.json",
+    "platform/tailwind.config.js",
+    "platform/postcss.config.js",
+    "platform/components.json",
+    "platform/eslint.config.js",
+    "platform/README.md",
+    "platform/.gitignore"
+  ],
+  "exclude": [],
+  "summary": "The NovAura web edition: a full-screen desktop OS in the browser (windows, taskbar, launcher, many built-in apps), a landing page, a separate React + TypeScript platform app, and a Firebase backend (Cloud Functions v2 in TypeScript, Firestore and Storage rules). It was built as a one-stop shop and shelved for a ground-up rebuild, so treat it as a parts bin and a reference.",
+  "works": [
+    "Everything builds: the web OS and landing page with Vite, the platform app with Vite, and the Firebase functions type-check with tsc (checked with `npm install --legacy-peer-deps --include=dev`, then each build).",
+    "The desktop shell runs in the browser: windows, taskbar, launcher and many built-in apps, the BuilderBot IDE and the kernel (IPC bus, subsystems).",
+    "The Firebase backend has real routes for auth, AI (many providers), generation, search, email (IMAP/SMTP), user and admin API keys, sync and assets."
+  ],
+  "unfinished": [
+    "Several apps are shells or show sample data: the browser, terminal, git window and AI companion are partly built, creator earnings and royalties are mock data, and the Dojo world generator returns templates rather than worlds.",
+    "The Games Arena's HTML games (Nova Net Battler, Nova Strike, Gilded Cage) live in public/games/, which is not included, so the arena opens without them.",
+    "Payments are not finished: Stripe checkout redirects but no webhook confirms payment, orders have no download or license delivery, and domain buying is UI only.",
+    "Social feed and messages live in the browser (localStorage) with no backend sync, and signup has no email verification.",
+    "The secrets manager uses weak XOR obfuscation; do not store real keys in it as is.",
+    "Every key, admin email, staff gate code and staff token was removed. Set your own admin emails, gate code and keys before you deploy, and give functions/src/api/routes/drive.ts your own Google service account file (functions/src/service-account.json).",
+    "npm reports a React 19 peer conflict with the 3D packages, so install with --legacy-peer-deps."
+  ],
+  "notIncluded": [
+    "Large media under public/ (about 390 MB): the HTML games, the Aetherium card art and the NovaHearts assets.",
+    "Environment files, Firebase project settings, exported user data and logs.",
+    "Experimental folders outside the build (synth_workspace, Aura-Nova-Genesis, dev-shell)."
+  ],
+  "requirements": [
+    "Node.js 20 or newer",
+    "Your own Firebase project for the backend (Cloud Functions, Firestore, Storage, Hosting)",
+    "Your own API keys for any AI or payment provider you turn on"
+  ],
+  "openWith": "Run `npm install --legacy-peer-deps` then `npm run dev` in this folder for the web OS (it opens /os/). The platform app is in platform/ (its own install). The backend is in functions/: copy .env.example to .env, add your own keys, and deploy to your own Firebase project.",
+  "replace": [
+    {
+      "path": "platform/src/pages/public/NovaSysPage.tsx",
+      "pattern": "(_TOKEN as string\\) \\|\\| )'[^'\\n]*'",
+      "with": "$1''",
+      "note": "built-in staff tokens"
+    },
+    {
+      "path": "platform/src/pages/public/NovaSysPage.tsx",
+      "pattern": "\\(default: [^)\\n]*\\)",
+      "with": "(no default: set it in .env)",
+      "note": "the staff tokens repeated in a comment"
+    },
+    {
+      "path": "src/components/windows/aisocial/AISocialWindow.jsx",
+      "pattern": "// Sub-components\\r?\\n(?:import [A-Za-z]+ from '\\./components/[A-Za-z]+';\\r?\\n){7}",
+      "with": "// Sub-components are defined at the end of this file.\n",
+      "note": "imports of a components/ folder that does not exist; the same components are defined in the file, so the build failed"
+    },
+    {
+      "path": "src/components/windows/aisocial/AISocialEngine.js",
+      "pattern": "from '\\.\\./\\.\\./\\.\\./kernel/storage'",
+      "with": "from '../../../kernel/kernelStorage.js'",
+      "note": "an import of a kernel/storage module that does not exist (kernelStorage.js does)"
+    },
+    {
+      "path": "platform/src/components/checkout/ClickwrapCheckout.tsx",
+      "pattern": "from '\\.\\./@/kernel/kernelStorage\\.js'",
+      "with": "from '@/kernel/kernelStorage.js'",
+      "note": "a broken path to the kernel storage module"
+    },
+    {
+      "path": "platform/src/components/onboarding/OnboardingFlow.tsx",
+      "pattern": "from '\\.\\./@/kernel/kernelStorage\\.js'",
+      "with": "from '@/kernel/kernelStorage.js'",
+      "note": "a broken path to the kernel storage module"
+    }
+  ]
+}

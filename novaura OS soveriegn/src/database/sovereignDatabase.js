@@ -170,9 +170,17 @@ class SovereignDatabase extends Dexie {
       domain_claims: 'id, name, owner, direction, status, receivedAt',
     });
 
+    // v21 — Template Library: installed templates and signed license acceptances (given and received)
+    this.version(21).stores({
+      template_installs: 'id, templateId, installedAt',
+      template_acceptances: 'id, templateId, direction, status, at',
+    });
+
     this.identities = this.table('identities');
     this.domain_records = this.table('domain_records');
     this.domain_claims = this.table('domain_claims');
+    this.template_installs = this.table('template_installs');
+    this.template_acceptances = this.table('template_acceptances');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
     this.documents = this.table('documents');

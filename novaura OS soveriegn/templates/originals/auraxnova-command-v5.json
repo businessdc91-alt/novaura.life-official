@@ -1,0 +1,117 @@
+{
+  "id": "auraxnova-command-v5",
+  "version": "5.0.0-prealpha",
+  "title": "AuraxNova Command v5: WPF AI desktop shell",
+  "kind": "code",
+  "stage": "pre-alpha prototype",
+  "source": "J:/AuraxNova_Itch_Release/AuraxNova_Command_v5_Source",
+  "include": [
+    "*.xaml",
+    "*.xaml.cs",
+    "AssemblyInfo.cs",
+    "AuraxNova_Command_v5.csproj",
+    "AuraxNova_Command_v5.sln",
+    ".gitignore",
+    "Build_Release.ps1",
+    "Assets/",
+    "Config/",
+    "Core/",
+    "backend/",
+    "Infrastructure/"
+  ],
+  "exclude": [],
+  "summary": "A .NET 8 WPF desktop app from January 2026: a main shell with chat, an avatar whose glow follows a simulated mood (the endocrine system), a code IDE window, dev tools, a literature writer, a market terminal, a media window, notes, a social panel and a WebView2 window for the web platform. Its Core folder holds about 90 C# modules: a universal AI API, memory and RAG, a tool registry, speech, vision, hardware monitoring, a Python bridge and the Gemma/LLamaSharp local model interface.",
+  "works": [
+    "Compiles with the .NET SDK (checked with .NET SDK 10.0, targeting .NET 8) once its NuGet packages restore. Five build breaks in the original source are fixed in this copy.",
+    "Complete enough to study end to end: the WPF windows and their code-behind, and about 90 Core modules (AI providers, memory and RAG, tools, speech, vision, hardware monitoring, the Python bridge and local Gemma through LLamaSharp)."
+  ],
+  "unfinished": [
+    "Not run end to end for this release. Expect features that only log, show placeholders, or need services you set up yourself.",
+    "Every key, the license master keys and the owner bypass values were removed. Google sign-in, Firebase, Gemini and the other cloud features need your own credentials before they work.",
+    "The activation window still has a built-in 'Catalyst' bypass path (now with placeholder values). Remove it before you ship anything.",
+    "Many paths point at folders on the original PC (E:/AuraNova_DataLake and others). Change them in Core/AuraPaths.cs and in the modules that hard-code them.",
+    "The Python scripts the bridge launches and the local AI models are not included, so the Python bridge and local AI need your own scripts and GGUF models.",
+    "RestSharp 110.2.0 has a known moderate vulnerability; update it. The build prints about 900 warnings, mostly nullable reference warnings."
+  ],
+  "notIncluded": [
+    "Aura's original memory and personality files (aura_NovaFiles), the AI models (Models/, about 9 GB) and the Z-Image-Turbo demo.",
+    "The older copy of the web platform (Aura Nova OS Complete). The NovAura Web OS template is the current version of it.",
+    "The old documentation, which calls this build production-ready and carries earlier licenses. PROTOTYPE-NOTICE.md and LICENSE-NOVAURA-TEMPLATE.md replace them.",
+    "Images at the project root that the code does not use."
+  ],
+  "requirements": [
+    "Windows 10 or 11",
+    ".NET 8 SDK (or newer) with the Windows desktop workload",
+    "Visual Studio 2022 or the dotnet CLI",
+    "Your own API keys for any cloud AI provider you turn on"
+  ],
+  "openWith": "Open AuraxNova_Command_v5.sln in Visual Studio 2022, or run `dotnet build` in this folder. The first restore downloads the NuGet packages, including LLamaSharp's CUDA backend, which is large.",
+  "replace": [
+    {
+      "path": "Core/AuraDarkWebBrowser.cs",
+      "pattern": "// SHA256 of \"[^\"]*\"",
+      "with": "// SHA-256 of your own access password",
+      "note": "the plaintext password in a comment"
+    },
+    {
+      "path": "Core/AuraLicensing.cs",
+      "pattern": "(CATALYST_KEY = )\"[^\"]*\"",
+      "with": "$1\"YOUR_MASTER_KEY\"",
+      "note": "the built-in master license key"
+    },
+    {
+      "path": "Core/AuraLicensing.cs",
+      "pattern": "(CATALYST_KEY, // )\"[^\"]*\"",
+      "with": "$1\"YOUR_MASTER_KEY\"",
+      "note": "the master key repeated in a comment"
+    },
+    {
+      "path": "Core/AuraLicensing.cs",
+      "pattern": "\"[^\"]*\"( // Variant with exclamation)",
+      "with": "\"YOUR_MASTER_KEY_2\"$1",
+      "note": "a second master key"
+    },
+    {
+      "path": "MainWindow.xaml",
+      "pattern": "<StackPanel Padding=\"10\">",
+      "with": "<StackPanel Margin=\"10\">",
+      "note": "StackPanel has no Padding in WPF, which stopped the build"
+    },
+    {
+      "path": "Core/AuraMasterInit.cs",
+      "pattern": "(public bool CatalystPresent => Catalyst\\?\\.IsCatalystPresent\\(\\) \\?\\? false;\\r?\\n    \\}\\r?\\n)",
+      "with": "$1\n    public static class AuraMasterInit\n    {\n",
+      "note": "the AuraMasterInit class line was missing, so its members sat outside any class"
+    },
+    {
+      "path": "Core/ConsciousnessLogger.cs",
+      "pattern": "(_logDir = AuraPaths\\.GetDataLakeSubPath\\(\"ConsciousnessLogs\"\\);\\r?\\n)[ \\t]*\\{\\r?\\n[ \\t]*_logDir = logDir;\\r?\\n",
+      "with": "$1",
+      "note": "a half-merged constructor (a stray brace and an old parameter assignment)"
+    },
+    {
+      "path": "Core/AuraUniversalAPI.cs",
+      "pattern": "(using System\\.Collections\\.Generic;\\r?\\n)",
+      "with": "$1using System.Diagnostics;\nusing System.IO;\n",
+      "note": "missing usings (WPF projects do not import System.IO implicitly)"
+    },
+    {
+      "path": "MainWindow.xaml.cs",
+      "pattern": "_universalAPI\\.SetCredential\\(AIProvider\\.Google, new APICredential \\{ ApiKey = geminiKey \\}\\);",
+      "with": "_universalAPI.AddCredential(AIProvider.Google, geminiKey);",
+      "note": "a call to SetCredential, which AuraUniversalAPI names AddCredential"
+    },
+    {
+      "path": "MainWindow.xaml.cs",
+      "pattern": "new ConsciousnessLogger\\(@\"[^\"]*\"\\)",
+      "with": "new ConsciousnessLogger()",
+      "note": "a hard-coded log folder on drive E: (the logger now uses AuraPaths)"
+    },
+    {
+      "path": "Core/AuraWritingStudio.cs",
+      "pattern": "(public List<string> DetectedTropes \\{ get; set; \\} = new\\(\\);)",
+      "with": "$1\n        public string DominantTone => EmotionalVibe.Count == 0 ? \"unknown\" : EmotionalVibe.OrderByDescending(kv => kv.Value).First().Key;",
+      "note": "DominantTone, which the literature window reads but the analysis never defined"
+    }
+  ]
+}

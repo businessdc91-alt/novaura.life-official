@@ -60,3 +60,6 @@ release/
 
 # Cybeni live benchmark runs (local output)
 tests/cybeni/.runs/
+
+# Built template bundles (scripts/build_template.mjs)
+template-bundles/
