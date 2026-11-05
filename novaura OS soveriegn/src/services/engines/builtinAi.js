@@ -10,7 +10,7 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { getNativeHardwareSpec, queryLocalAi, probeLocalAi } from '../nativeService.js';
-import { runLocalChat } from '../localModels.js';
+import { runLocalChat, parseModelRef, ollamaCpuOnly, LOCAL_RUNTIMES } from '../localModels.js';
 import { groupGgufFiles, hfModelName } from './hfGguf.js';
 
 export { hfModelName };
@@ -245,6 +245,60 @@ export async function speedTest(modelId) {
   const past = await db.getSetting(SPEED_KEY, []).catch(() => []);
   await db.setSetting(SPEED_KEY, [result, ...(Array.isArray(past) ? past : [])].slice(0, 50));
   return result;
+}
+
+const round1 = (n) => Math.round(n * 10) / 10;
+
+/**
+ * The same test on a model in LM Studio or Ollama ("lmstudio:<id>" / "ollama:<tag>"),
+ * from the runtime's own numbers: LM Studio's REST stats, Ollama's eval timings.
+ * Resolves with { modelId, runtime, genTps, promptTps?, firstTokenSec, genTokens, seconds, at }.
+ */
+export async function speedTestLocal(ref) {
+  const parsed = parseModelRef(ref);
+  if (!parsed || !['lmstudio', 'ollama'].includes(parsed.runtime)) throw new Error('Pick a model in LM Studio or Ollama.');
+  const cfg = LOCAL_RUNTIMES[parsed.runtime];
+  let result;
+  if (parsed.runtime === 'lmstudio') {
+    const res = await queryLocalAi(cfg.port, '/api/v0/chat/completions', 'POST', {
+      model: parsed.model,
+      messages: [{ role: 'user', content: SPEED_PROMPT }],
+      max_tokens: 320,
+      temperature: 0,
+      stream: false,
+      reasoning_effort: 'none',
+    });
+    const s = res?.stats;
+    if (!s || !Number.isFinite(s.tokens_per_second)) throw new Error(String(res?.error?.message || res?.error || `LM Studio did not reply. Is "${parsed.model}" loadable?`));
+    result = {
+      genTps: round1(s.tokens_per_second),
+      firstTokenSec: round1(s.time_to_first_token),
+      genTokens: res.usage?.completion_tokens ?? null,
+      seconds: round1((s.time_to_first_token || 0) + (s.generation_time || 0)),
+    };
+  } else {
+    const cpuOnly = ollamaCpuOnly();
+    const res = await queryLocalAi(cfg.port, '/api/chat', 'POST', {
+      model: parsed.model,
+      messages: [{ role: 'user', content: SPEED_PROMPT }],
+      stream: false,
+      think: false,
+      options: { temperature: 0, num_predict: 320, ...(cpuOnly ? { num_gpu: 0 } : {}) },
+    });
+    if (!res?.eval_count || !res?.eval_duration) throw new Error(String(res?.error || `Ollama did not reply. Is "${parsed.model}" installed?`));
+    result = {
+      genTps: round1(res.eval_count / (res.eval_duration / 1e9)),
+      promptTps: res.prompt_eval_duration ? round1((res.prompt_eval_count || 0) / (res.prompt_eval_duration / 1e9)) : null,
+      firstTokenSec: round1(((res.load_duration || 0) + (res.prompt_eval_duration || 0)) / 1e9),
+      genTokens: res.eval_count,
+      seconds: round1((res.total_duration || 0) / 1e9),
+      cpuOnly,
+    };
+  }
+  const entry = { modelId: ref, runtime: parsed.runtime, ...result, at: new Date().toISOString() };
+  const past = await db.getSetting(SPEED_KEY, []).catch(() => []);
+  await db.setSetting(SPEED_KEY, [entry, ...(Array.isArray(past) ? past : [])].slice(0, 50));
+  return entry;
 }
 
 export async function speedTestHistory() {

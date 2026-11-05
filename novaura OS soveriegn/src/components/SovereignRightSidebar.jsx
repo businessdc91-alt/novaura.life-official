@@ -5,6 +5,7 @@ import {
   Zap, Bell, RefreshCw, Key
 } from 'lucide-react';
 import { getLocalIdentity, getUnreadCount, getPeerCount } from '../services/sovereignMesh.js';
+import { getMyPhoneNumber } from '../services/sovereignCallService.js';
 import { getHardwareFingerprint } from '../services/nativeService.js';
 import { useKernel } from '../kernel/useKernel.js';
 
@@ -126,7 +127,7 @@ export default function SovereignRightSidebar({ openApp, preferences, onUpdatePr
                   @{identity?.handle || 'operator'}
                 </div>
                 <div className="text-[11px] font-mono text-cyan-300/80 truncate">
-                  {identity?.phoneNumber || '+1-700-NOVA-8820'}
+                  {getMyPhoneNumber() || 'No number yet'}
                 </div>
               </div>
             </div>

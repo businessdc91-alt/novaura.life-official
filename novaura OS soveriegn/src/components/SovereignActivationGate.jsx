@@ -6,7 +6,8 @@ import logoImg from '../assets/novaura-logo.png';
 
 export default function SovereignActivationGate({ onAuthorized }) {
   const [inputKey, setInputKey] = useState('');
-  const [inputPhone, setInputPhone] = useState('+1-700-NOVA-8821');
+  // Blank means a number derived from this node's key (phoneNumbers.js), so no two nodes share a default.
+  const [inputPhone, setInputPhone] = useState('');
   const [nodeId, setNodeId] = useState('');
   const [copiedNodeId, setCopiedNodeId] = useState(false);
   const [error, setError] = useState('');
@@ -75,7 +76,7 @@ export default function SovereignActivationGate({ onAuthorized }) {
       const boundNodeId = nativeCheck?.valid && nativeCheck.fingerprint ? nativeCheck.fingerprint : activeNodeId;
       const result = verifySovereignKey(inputKey, boundNodeId);
       if (result.valid) {
-        await saveKeyRecord(inputKey, result, inputPhone);
+        await saveKeyRecord(inputKey, result, inputPhone.trim() || null);
         if (onAuthorized) onAuthorized(result);
       } else {
         setError(result.reason || 'Cryptographic signature verification failed.');
@@ -290,7 +291,7 @@ export default function SovereignActivationGate({ onAuthorized }) {
             type="text"
             value={inputPhone}
             onChange={(e) => setInputPhone(e.target.value)}
-            placeholder="+1-700-NOVA-8821"
+            placeholder="Optional, e.g. +1-700-NOVA-4821 (blank: made from your node key)"
             style={{
               width: '100%',
               padding: '0.75rem 1rem',

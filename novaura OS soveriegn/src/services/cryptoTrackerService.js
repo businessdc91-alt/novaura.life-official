@@ -1,46 +1,99 @@
 /**
- * cryptoTrackerService.js — Sovereign Crypto & NFT Tracker with AI Predictive Intelligence
- * 
- * Features:
- * 1. Live Public Ticker Feeds (Binance 24hr / CoinCap APIs — Zero API Key Required)
- * 2. Top NFT Collection Floor Tracker (Floor prices, 24h volumes, change %)
- * 3. AI Predictive Engine (1h, 24h, 7d directional & target price forecasts via Dual Inference)
- * 4. Prediction Logging & Historical Accuracy Verification (Hit Rate %, MAE %, Directional Accuracy)
- * 5. Sovereign Paper Trading Simulator (Balance, P&L, simulated Buy/Sell orders)
+ * cryptoTrackerService.js — Crypto Pulse: live prices, NFT floors, forecasts
+ * with a real track record, and paper trading.
+ *
+ * 1. Prices: Binance's public 24h ticker (no key). When Binance cannot be
+ *    reached, the last prices this PC actually fetched are shown, marked stale
+ *    with their time. Nothing is ever made up.
+ * 2. NFT floors: CoinGecko's public NFT endpoint (no key, rate limited, so the
+ *    collections are fetched one at a time and cached for 10 minutes).
+ * 3. Forecasts: rule-based (services/crypto/forecast.js), only from live
+ *    prices, with optional AI commentary. A forecast is scored against
+ *    Binance's price at its target time, so the hit rate is real.
+ * 4. Paper trading at live prices only.
  */
 
 import { db } from '../database/sovereignDatabase.js';
 import { dualInference } from './dualInferenceService.js';
+import { forecast, indicators, scoreOutcome, trackRecord } from './crypto/forecast.js';
 
-// Fallback high-fidelity verified top cryptocurrencies
-export const DEFAULT_CRYPTO_ASSETS = [
-  { symbol: 'BTCUSDT', name: 'Bitcoin', base: 'BTC', price: 68420.50, change24h: 2.45, high24h: 69200.0, low24h: 66800.0, volume: '28.4B', marketCap: '1.34T' },
-  { symbol: 'ETHUSDT', name: 'Ethereum', base: 'ETH', price: 2640.80, change24h: -0.85, high24h: 2710.0, low24h: 2590.0, volume: '14.2B', marketCap: '318B' },
-  { symbol: 'SOLUSDT', name: 'Solana', base: 'SOL', price: 174.20, change24h: 5.12, high24h: 178.5, low24h: 164.8, volume: '4.8B', marketCap: '82B' },
-  { symbol: 'BNBUSDT', name: 'BNB', base: 'BNB', price: 592.40, change24h: 1.15, high24h: 601.0, low24h: 585.0, volume: '1.1B', marketCap: '86B' },
-  { symbol: 'DOGEUSDT', name: 'Dogecoin', base: 'DOGE', price: 0.142, change24h: 8.74, high24h: 0.149, low24h: 0.128, volume: '2.1B', marketCap: '20.8B' },
-  { symbol: 'ADAUSDT', name: 'Cardano', base: 'ADA', price: 0.358, change24h: -1.22, high24h: 0.369, low24h: 0.351, volume: '380M', marketCap: '12.8B' },
-  { symbol: 'AVAXUSDT', name: 'Avalanche', base: 'AVAX', price: 27.80, change24h: 3.40, high24h: 28.5, low24h: 26.7, volume: '420M', marketCap: '11.2B' },
-  { symbol: 'LINKUSDT', name: 'Chainlink', base: 'LINK', price: 11.95, change24h: 2.10, high24h: 12.3, low24h: 11.6, volume: '310M', marketCap: '7.4B' },
-  { symbol: 'NEARUSDT', name: 'NEAR Protocol', base: 'NEAR', price: 4.88, change24h: 4.20, high24h: 5.05, low24h: 4.65, volume: '490M', marketCap: '5.9B' },
-  { symbol: 'SUIUSDT', name: 'Sui Network', base: 'SUI', price: 1.98, change24h: 7.60, high24h: 2.05, low24h: 1.82, volume: '880M', marketCap: '5.4B' },
+export const CRYPTO_ASSETS = [
+  { symbol: 'BTCUSDT', name: 'Bitcoin', base: 'BTC' },
+  { symbol: 'ETHUSDT', name: 'Ethereum', base: 'ETH' },
+  { symbol: 'SOLUSDT', name: 'Solana', base: 'SOL' },
+  { symbol: 'BNBUSDT', name: 'BNB', base: 'BNB' },
+  { symbol: 'DOGEUSDT', name: 'Dogecoin', base: 'DOGE' },
+  { symbol: 'ADAUSDT', name: 'Cardano', base: 'ADA' },
+  { symbol: 'AVAXUSDT', name: 'Avalanche', base: 'AVAX' },
+  { symbol: 'LINKUSDT', name: 'Chainlink', base: 'LINK' },
+  { symbol: 'NEARUSDT', name: 'NEAR Protocol', base: 'NEAR' },
+  { symbol: 'SUIUSDT', name: 'Sui Network', base: 'SUI' },
 ];
 
-export const TOP_NFT_COLLECTIONS = [
-  { id: 'cryptopunks', name: 'CryptoPunks', chain: 'Ethereum', floorEth: 28.5, floorUsd: 75240, change24h: 1.8, volume24hEth: 142.5, items: '10,000', owners: '3,840' },
-  { id: 'bayc', name: 'Bored Ape Yacht Club', chain: 'Ethereum', floorEth: 11.8, floorUsd: 31150, change24h: -2.4, volume24hEth: 88.0, items: '10,000', owners: '5,420' },
-  { id: 'pudgy-penguins', name: 'Pudgy Penguins', chain: 'Ethereum', floorEth: 9.6, floorUsd: 25340, change24h: 4.2, volume24hEth: 112.4, items: '8,888', owners: '4,610' },
-  { id: 'milady', name: 'Milady Maker', chain: 'Ethereum', floorEth: 4.15, floorUsd: 10950, change24h: 6.8, volume24hEth: 94.2, items: '9,823', owners: '3,290' },
-  { id: 'mad-lads', name: 'Mad Lads', chain: 'Solana', floorEth: 64.2, floorUsd: 11170, change24h: 3.5, volume24hEth: 1820.0, items: '9,967', owners: '4,890' },
-  { id: 'azuki', name: 'Azuki', chain: 'Ethereum', floorEth: 4.85, floorUsd: 12800, change24h: -1.1, volume24hEth: 54.0, items: '10,000', owners: '4,300' },
+// CoinGecko NFT ids.
+export const NFT_COLLECTIONS = [
+  { id: 'cryptopunks', name: 'CryptoPunks', chain: 'Ethereum' },
+  { id: 'bored-ape-yacht-club', name: 'Bored Ape Yacht Club', chain: 'Ethereum' },
+  { id: 'pudgy-penguins', name: 'Pudgy Penguins', chain: 'Ethereum' },
+  { id: 'milady-maker', name: 'Milady Maker', chain: 'Ethereum' },
+  { id: 'mad-lads', name: 'Mad Lads', chain: 'Solana' },
+  { id: 'azuki', name: 'Azuki', chain: 'Ethereum' },
 ];
+
+// binance.com refuses US connections (HTTP 451); Binance.US serves the same API there.
+const BINANCE_HOSTS = [
+  { base: 'https://api.binance.com/api/v3', label: 'Binance' },
+  { base: 'https://api.binance.us/api/v3', label: 'Binance.US' },
+];
+const LAST_PRICES_KEY = 'novapulse-last-live-prices';
+const NFT_CACHE_KEY = 'novapulse-nft-floors';
+const PORTFOLIO_KEY = 'novaura_paper_trading_portfolio';
+const LIVE_MAX_AGE_MS = 2 * 60_000;
+const NFT_CACHE_MS = 10 * 60_000;
+const NFT_SPACING_MS = 2500;
+const MAX_EVALUATIONS_PER_PASS = 20;
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function readJson(key) {
+  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
+}
+
+function writeJson(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or blocked */ }
+}
+
+function formatVolume(quoteVolume) {
+  const v = parseFloat(quoteVolume) || 0;
+  return v > 1e9 ? `${(v / 1e9).toFixed(1)}B` : `${(v / 1e6).toFixed(1)}M`;
+}
 
 class CryptoTrackerService {
   constructor() {
     this.priceCache = new Map();
-    this.isPolling = false;
-    this.pollInterval = null;
     this.subscribers = new Set();
+    // live: prices came from Binance just now; at: when the shown prices were fetched.
+    this.status = { live: false, at: null, error: null, source: null };
+    this._nftRun = null;
+    this._host = null; // the Binance host that answered last
+  }
+
+  /** GET a Binance API path from whichever host answers here, the last good one first. */
+  async _binance(path) {
+    const hosts = this._host ? [this._host, ...BINANCE_HOSTS.filter(h => h !== this._host)] : BINANCE_HOSTS;
+    let lastError = null;
+    for (const host of hosts) {
+      try {
+        const res = await fetch(`${host.base}${path}`, { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error(`${host.label} answered HTTP ${res.status}${res.status === 451 ? ' (not available in this country)' : ''}`);
+        const data = await res.json();
+        this._host = host;
+        return { data, source: host.label };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error('Binance could not be reached');
   }
 
   subscribe(callback) {
@@ -54,127 +107,96 @@ class CryptoTrackerService {
     }
   }
 
-  /**
-   * Fetch live prices from public Binance 24hr ticker API (zero auth needed)
-   * Falls back gracefully to CoinCap public API or cached verified rates
-   */
+  /** The last prices this PC fetched, marked stale, or [] when it never fetched any. */
+  lastKnownPrices() {
+    const snap = readJson(LAST_PRICES_KEY);
+    return Array.isArray(snap?.assets) ? snap.assets.map(a => ({ ...a, source: 'stale' })) : [];
+  }
+
   async fetchLivePrices() {
-    const symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'NEARUSDT', 'SUIUSDT'];
+    const symbols = CRYPTO_ASSETS.map(a => a.symbol);
+    let error = null;
     try {
-      const symbolsParam = JSON.stringify(symbols);
-      const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(symbolsParam)}`, {
-        headers: { 'Accept': 'application/json' },
-      });
-      if (res.ok) {
-        const raw = await res.json();
-        const mapped = raw.map(item => {
-          const defaultAsset = DEFAULT_CRYPTO_ASSETS.find(a => a.symbol === item.symbol) || {};
-          const currentPrice = parseFloat(item.lastPrice);
-          const priceChangePercent = parseFloat(item.priceChangePercent);
-          return {
-            symbol: item.symbol,
-            name: defaultAsset.name || item.symbol.replace('USDT', ''),
-            base: defaultAsset.base || item.symbol.replace('USDT', ''),
-            price: currentPrice,
-            change24h: priceChangePercent,
-            high24h: parseFloat(item.highPrice),
-            low24h: parseFloat(item.lowPrice),
-            volume: parseFloat(item.quoteVolume) > 1e9 ? `${(parseFloat(item.quoteVolume)/1e9).toFixed(1)}B` : `${(parseFloat(item.quoteVolume)/1e6).toFixed(1)}M`,
-            marketCap: defaultAsset.marketCap || 'N/A',
-            timestamp: Date.now(),
-          };
-        });
+      const { data: raw, source } = await this._binance(`/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`);
+      if (!Array.isArray(raw)) throw new Error('Binance returned no prices');
+      const now = Date.now();
+      const assets = CRYPTO_ASSETS.map(meta => {
+        const item = raw.find(r => r.symbol === meta.symbol);
+        if (!item) return null;
+        return {
+          ...meta,
+          price: parseFloat(item.lastPrice),
+          change24h: parseFloat(item.priceChangePercent),
+          high24h: parseFloat(item.highPrice),
+          low24h: parseFloat(item.lowPrice),
+          volume: formatVolume(item.quoteVolume),
+          timestamp: now,
+          source: 'live',
+        };
+      }).filter(a => a && Number.isFinite(a.price));
+      if (!assets.length) throw new Error('Binance returned no prices');
 
-        mapped.forEach(a => this.priceCache.set(a.symbol, a));
-        this.notify(mapped);
-        return mapped;
-      }
+      assets.forEach(a => this.priceCache.set(a.symbol, a));
+      writeJson(LAST_PRICES_KEY, { at: now, assets, source });
+      this.status = { live: true, at: now, error: null, source };
+      this.notify(assets);
+      return assets;
     } catch (err) {
-      console.warn('Binance live ticker unreachable, trying public fallback:', err.message);
+      error = err.message;
+      console.warn('[CryptoPulse] Binance unreachable:', err.message);
     }
 
-    // Fallback: Default cached values with slight real-time organic jitter
-    const fallbackData = DEFAULT_CRYPTO_ASSETS.map(asset => {
-      const jitter = (Math.random() - 0.5) * 0.002 * asset.price;
-      const updatedPrice = parseFloat((asset.price + jitter).toFixed(asset.price > 10 ? 2 : 4));
-      return { ...asset, price: updatedPrice, timestamp: Date.now() };
-    });
-    fallbackData.forEach(a => this.priceCache.set(a.symbol, a));
-    this.notify(fallbackData);
-    return fallbackData;
+    const stale = this.lastKnownPrices();
+    stale.forEach(a => this.priceCache.set(a.symbol, a));
+    const snap = readJson(LAST_PRICES_KEY);
+    this.status = { live: false, at: snap?.at || null, error, source: snap?.source || null };
+    this.notify(stale);
+    return stale;
   }
 
-  /**
-   * Technical Indicators Calculator
-   */
+  /** A price fetched from Binance within the last 2 minutes, or null. */
+  livePrice(symbol) {
+    const a = this.priceCache.get(symbol);
+    return a?.source === 'live' && Date.now() - a.timestamp < LIVE_MAX_AGE_MS ? a : null;
+  }
+
   calculateIndicators(currentPrice, change24h, high24h, low24h) {
-    const range = high24h - low24h;
-    const positionInRange = range > 0 ? (currentPrice - low24h) / range : 0.5;
-    // Approximated RSI from momentum & position
-    const rsi = Math.min(95, Math.max(10, Math.round(positionInRange * 60 + (change24h > 0 ? 20 : 0))));
-    
-    let signal = 'NEUTRAL';
-    if (rsi < 35 && change24h > -5) signal = 'STRONG BUY (Oversold)';
-    else if (rsi < 45) signal = 'ACCUMULATE';
-    else if (rsi > 75) signal = 'STRONG SELL (Overbought)';
-    else if (rsi > 60) signal = 'TAKE PROFIT';
-
-    return {
-      rsi,
-      signal,
-      volatility: ((range / currentPrice) * 100).toFixed(2) + '%',
-      support: (low24h * 0.985).toFixed(currentPrice > 10 ? 2 : 4),
-      resistance: (high24h * 1.015).toFixed(currentPrice > 10 ? 2 : 4),
-    };
+    return indicators({ price: currentPrice, change24h, high24h, low24h });
   }
 
-  /**
-   * AI Predictive Engine: Generates price prediction with target horizon (1h, 24h, 7d)
-   */
   async generatePrediction(symbol, horizon = '24h') {
-    const asset = this.priceCache.get(symbol) || DEFAULT_CRYPTO_ASSETS.find(a => a.symbol === symbol) || DEFAULT_CRYPTO_ASSETS[0];
-    const tech = this.calculateIndicators(asset.price, asset.change24h, asset.high24h, asset.low24h);
-
-    let horizonHours = 24;
-    let maxExpectedChange = 0.04; // 4% for 24h
-    if (horizon === '1h') { horizonHours = 1; maxExpectedChange = 0.012; }
-    else if (horizon === '7d') { horizonHours = 168; maxExpectedChange = 0.12; }
-
-    let predictedDirection = asset.change24h > 0 ? 'BULLISH' : 'BEARISH';
-    let predictedChangePct = (asset.change24h * 0.35 + (Math.random() - 0.45) * maxExpectedChange * 100);
-    
-    // Mean-reversion bias if RSI is extreme
-    if (tech.rsi < 30) {
-      predictedDirection = 'BULLISH';
-      predictedChangePct = Math.abs(predictedChangePct) + 1.2;
-    } else if (tech.rsi > 70) {
-      predictedDirection = 'BEARISH';
-      predictedChangePct = -(Math.abs(predictedChangePct) + 1.2);
-    }
-
-    const predictedPrice = parseFloat((asset.price * (1 + predictedChangePct / 100)).toFixed(asset.price > 10 ? 2 : 4));
-    const confidenceScore = Math.min(94, Math.max(58, Math.round(75 + (Math.random() - 0.5) * 20)));
+    const asset = this.livePrice(symbol);
+    if (!asset) throw new Error('Live prices are not available right now, so there is nothing to forecast from.');
+    const f = forecast(asset, horizon);
 
     let aiReasoning = '';
     try {
-      const prompt = `Analyze ${asset.name} (${asset.symbol}) currently trading at $${asset.price}. 24h Change: ${asset.change24h}%, RSI: ${tech.rsi}, Range: $${asset.low24h} - $${asset.high24h}. Horizon: ${horizon}. Give a 2-sentence institutional technical forecast.`;
-      const res = await dualInference.queryEngine('aura', [{ role: 'user', content: prompt }], { temperature: 0.3, maxTokens: 120 });
-      if (res && res.text) aiReasoning = res.text.trim();
+      const prompt = `Analyze ${asset.name} (${asset.symbol}) currently trading at $${asset.price}. 24h Change: ${asset.change24h}%, RSI (approximate, from the 24h range): ${f.tech.rsi}, Range: $${asset.low24h} - $${asset.high24h}. Horizon: ${horizon}. Give a 2-sentence technical outlook.`;
+      // The forecast never waits long on commentary.
+      const res = await Promise.race([
+        dualInference.queryEngine('aura', [{ role: 'user', content: prompt }], { temperature: 0.3, maxTokens: 120 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('AI commentary timed out')), 30_000)),
+      ]);
+      aiReasoning = String(res?.text || '').trim();
     } catch {
-      aiReasoning = `${asset.name} displays ${predictedDirection.toLowerCase()} structure with RSI at ${tech.rsi}. Key support anchors at $${tech.support} with resistance near $${tech.resistance}.`;
+      // No AI engine answered: the window says so instead of showing canned text.
     }
 
+    let past = [];
+    try { past = await db.crypto_predictions.toArray(); } catch { /* no history yet */ }
+
     const predictionRecord = {
-      id: `pred_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `pred_${Date.now()}_${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`,
       symbol: asset.symbol,
       assetName: asset.name,
       entryPrice: asset.price,
       targetHorizon: horizon,
-      targetTimestamp: Date.now() + horizonHours * 3600 * 1000,
-      predictedPrice,
-      predictedDirection,
-      predictedChangePct: parseFloat(predictedChangePct.toFixed(2)),
-      confidenceScore,
+      targetTimestamp: Date.now() + f.hours * 3600 * 1000,
+      predictedPrice: f.predictedPrice,
+      predictedDirection: f.direction,
+      predictedChangePct: f.changePct,
+      method: 'momentum-rsi-v1',
+      trackRecord: trackRecord(past, asset.symbol, horizon),
       actualPrice: null,
       accuracyScore: null,
       aiReasoning,
@@ -182,106 +204,124 @@ class CryptoTrackerService {
       createdAt: Date.now(),
     };
 
-    // Persist prediction to Dexie
     try {
       await db.crypto_predictions.put(predictionRecord);
     } catch (e) {
       console.warn('Could not persist crypto prediction to DB:', e);
     }
-
     return predictionRecord;
   }
 
-  /**
-   * Historical Accuracy Evaluator: Audits past predictions and computes hit rate & accuracy
-   */
+  /** Binance's price for the minute containing `timestampMs`, or null. */
+  async priceAt(symbol, timestampMs) {
+    try {
+      const { data: rows } = await this._binance(`/klines?symbol=${encodeURIComponent(symbol)}&interval=1m&startTime=${Math.floor(timestampMs)}&limit=1`);
+      const open = parseFloat(rows?.[0]?.[1]);
+      return Number.isFinite(open) ? open : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Scores forecasts whose target time has passed against the real price at that time. */
   async evaluateHistoricalPredictions() {
+    const empty = { totalPredictions: 0, evaluatedCount: 0, pendingCount: 0, hitRate: 0, avgAccuracyScore: 0, list: [] };
     try {
       const predictions = await db.crypto_predictions.toArray();
-      if (!predictions || predictions.length === 0) return { hitRate: 0, totalEvaluated: 0, pending: 0, directionalAccuracy: 0, list: [] };
+      if (!predictions?.length) return empty;
 
       const now = Date.now();
-      let updatedCount = 0;
-
-      for (const pred of predictions) {
-        if (pred.status === 'pending' && now >= pred.targetTimestamp) {
-          const currentAsset = this.priceCache.get(pred.symbol);
-          if (currentAsset) {
-            const actualPrice = currentAsset.price;
-            const priceDeltaPct = Math.abs((actualPrice - pred.predictedPrice) / pred.predictedPrice) * 100;
-            const predictedGain = pred.predictedPrice - pred.entryPrice;
-            const actualGain = actualPrice - pred.entryPrice;
-            const directionCorrect = (predictedGain >= 0 && actualGain >= 0) || (predictedGain < 0 && actualGain < 0);
-            
-            // Score 0-100% based on proximity and direction
-            let score = Math.max(0, 100 - priceDeltaPct * 5);
-            if (!directionCorrect) score = Math.max(0, score - 35);
-
-            pred.actualPrice = actualPrice;
-            pred.accuracyScore = Math.round(score);
-            pred.directionCorrect = directionCorrect;
-            pred.status = 'evaluated';
-            pred.evaluatedAt = now;
-
-            await db.crypto_predictions.put(pred);
-            updatedCount++;
-          }
-        }
+      const due = predictions.filter(p => p.status === 'pending' && now >= p.targetTimestamp).slice(0, MAX_EVALUATIONS_PER_PASS);
+      for (const pred of due) {
+        const actualPrice = await this.priceAt(pred.symbol, pred.targetTimestamp);
+        if (actualPrice == null) continue; // offline: stays pending, never scored against a guess
+        const { directionCorrect, accuracyScore } = scoreOutcome(pred, actualPrice);
+        await db.crypto_predictions.put({ ...pred, actualPrice, accuracyScore, directionCorrect, status: 'evaluated', evaluatedAt: now });
       }
 
       const all = await db.crypto_predictions.orderBy('createdAt').reverse().toArray();
       const evaluated = all.filter(p => p.status === 'evaluated');
       const correctDirection = evaluated.filter(p => p.directionCorrect).length;
-      const hitRate = evaluated.length > 0 ? Math.round((correctDirection / evaluated.length) * 100) : 0;
-      const avgScore = evaluated.length > 0 ? Math.round(evaluated.reduce((acc, p) => acc + (p.accuracyScore || 0), 0) / evaluated.length) : 0;
-
       return {
         totalPredictions: all.length,
         evaluatedCount: evaluated.length,
         pendingCount: all.length - evaluated.length,
-        hitRate,
-        avgAccuracyScore: avgScore,
-        list: all,
+        hitRate: evaluated.length ? Math.round((correctDirection / evaluated.length) * 100) : 0,
+        avgAccuracyScore: evaluated.length ? Math.round(evaluated.reduce((acc, p) => acc + (p.accuracyScore || 0), 0) / evaluated.length) : 0,
+        list: all.slice(0, 50),
       };
     } catch (e) {
       console.error('Error evaluating crypto predictions:', e);
-      return { totalPredictions: 0, evaluatedCount: 0, pendingCount: 0, hitRate: 0, avgAccuracyScore: 0, list: [] };
+      return empty;
     }
   }
 
   /**
-   * Sovereign Paper Portfolio state manager
+   * NFT floors from CoinGecko, one collection at a time (its free tier allows a
+   * few requests a minute). onUpdate gets the rows as each one arrives.
    */
-  async getPaperPortfolio() {
-    const key = 'novaura_paper_trading_portfolio';
-    const saved = localStorage.getItem(key);
-    if (saved) {
-      try { return JSON.parse(saved); } catch {}
+  fetchNftFloors({ force = false, onUpdate } = {}) {
+    const cached = readJson(NFT_CACHE_KEY);
+    if (!force && cached?.at && Date.now() - cached.at < NFT_CACHE_MS && Array.isArray(cached.rows)) {
+      return Promise.resolve(cached.rows);
     }
-    const defaultPortfolio = {
-      cashUsd: 100000.0,
-      holdings: {
-        'BTC': { amount: 0.5, avgEntry: 65200 },
-        'ETH': { amount: 4.0, avgEntry: 2580 },
-        'SOL': { amount: 25.0, avgEntry: 160 },
-      },
-      trades: [],
-    };
-    localStorage.setItem(key, JSON.stringify(defaultPortfolio));
-    return defaultPortfolio;
+    if (this._nftRun) return this._nftRun;
+
+    this._nftRun = (async () => {
+      const previous = new Map((cached?.rows || []).filter(r => r.loaded).map(r => [r.id, r]));
+      const rows = NFT_COLLECTIONS.map(c => previous.get(c.id) || { ...c, loaded: false });
+      for (let i = 0; i < NFT_COLLECTIONS.length; i++) {
+        if (i) await sleep(NFT_SPACING_MS);
+        const meta = NFT_COLLECTIONS[i];
+        try {
+          const res = await fetch(`https://api.coingecko.com/api/v3/nfts/${meta.id}`, { headers: { Accept: 'application/json' } });
+          if (!res.ok) throw new Error(res.status === 429 ? 'CoinGecko rate limit, try again in a minute' : `CoinGecko HTTP ${res.status}`);
+          const j = await res.json();
+          const floor = j.floor_price || {};
+          if (!Number.isFinite(floor.usd)) throw new Error('No floor price published');
+          rows[i] = {
+            ...meta,
+            loaded: true,
+            floorNative: floor.native_currency,
+            nativeSymbol: meta.chain === 'Solana' ? 'SOL' : 'ETH',
+            floorUsd: floor.usd,
+            change24h: Number.isFinite(j.floor_price_in_usd_24h_percentage_change) ? j.floor_price_in_usd_24h_percentage_change : null,
+            volume24hUsd: Number.isFinite(j.volume_24h?.usd) ? j.volume_24h.usd : null,
+            owners: Number.isFinite(j.number_of_unique_addresses) ? j.number_of_unique_addresses : null,
+            fetchedAt: Date.now(),
+          };
+        } catch (err) {
+          // Keep an earlier real reading if there is one, marked with its own time.
+          if (!rows[i].loaded) rows[i] = { ...meta, loaded: false, error: err.message };
+        }
+        onUpdate?.([...rows]);
+      }
+      writeJson(NFT_CACHE_KEY, { at: Date.now(), rows });
+      return rows;
+    })().finally(() => { this._nftRun = null; });
+    return this._nftRun;
+  }
+
+  async getPaperPortfolio() {
+    const saved = readJson(PORTFOLIO_KEY);
+    if (saved) return saved;
+    // Paper money only; it starts as cash, with no holdings bought at made-up prices.
+    const fresh = { cashUsd: 100000.0, holdings: {}, trades: [] };
+    writeJson(PORTFOLIO_KEY, fresh);
+    return fresh;
   }
 
   async executePaperTrade(symbol, action, amountUsd) {
     const portfolio = await this.getPaperPortfolio();
-    const asset = this.priceCache.get(symbol) || DEFAULT_CRYPTO_ASSETS.find(a => a.symbol === symbol);
-    if (!asset) throw new Error('Asset price unavailable for trade');
+    const asset = this.livePrice(symbol);
+    if (!asset) throw new Error('Live prices are not available right now, so paper trades are paused.');
 
     const base = asset.base;
     const currentPrice = asset.price;
     const coins = amountUsd / currentPrice;
 
     if (action === 'BUY') {
-      if (portfolio.cashUsd < amountUsd) throw new Error('Insufficient simulated cash balance');
+      if (portfolio.cashUsd < amountUsd) throw new Error('Insufficient paper cash balance');
       portfolio.cashUsd -= amountUsd;
       if (!portfolio.holdings[base]) portfolio.holdings[base] = { amount: 0, avgEntry: 0 };
       const currentHolding = portfolio.holdings[base];
@@ -308,7 +348,7 @@ class CryptoTrackerService {
       timestamp: Date.now(),
     });
 
-    localStorage.setItem('novaura_paper_trading_portfolio', JSON.stringify(portfolio));
+    writeJson(PORTFOLIO_KEY, portfolio);
     return portfolio;
   }
 }

@@ -6,17 +6,21 @@ import {
 } from 'lucide-react';
 import {
   cryptoTracker,
-  DEFAULT_CRYPTO_ASSETS,
-  TOP_NFT_COLLECTIONS
+  NFT_COLLECTIONS
 } from '../../services/cryptoTrackerService.js';
+
+const timeOf = (ms) => (ms ? new Date(ms).toLocaleString() : 'never');
 
 export default function CryptoPredictionTrackerWindow() {
   const [activeTab, setActiveTab] = useState('market'); // 'market' | 'predictions' | 'accuracy' | 'trading'
-  const [cryptoAssets, setCryptoAssets] = useState(DEFAULT_CRYPTO_ASSETS);
-  const [nftCollections, setNftCollections] = useState(TOP_NFT_COLLECTIONS);
+  const [cryptoAssets, setCryptoAssets] = useState(() => cryptoTracker.lastKnownPrices());
+  const [marketStatus, setMarketStatus] = useState(() => ({ ...cryptoTracker.status }));
+  const [nftCollections, setNftCollections] = useState(() => NFT_COLLECTIONS.map(c => ({ ...c, loaded: false })));
+  const [nftLoading, setNftLoading] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState('BTCUSDT');
   const [selectedHorizon, setSelectedHorizon] = useState('24h');
   const [isPredicting, setIsPredicting] = useState(false);
+  const [predictionError, setPredictionError] = useState('');
   const [currentPrediction, setCurrentPrediction] = useState(null);
   const [accuracyStats, setAccuracyStats] = useState({ hitRate: 0, evaluatedCount: 0, pendingCount: 0, avgAccuracyScore: 0, list: [] });
   const [paperPortfolio, setPaperPortfolio] = useState({ cashUsd: 100000, holdings: {}, trades: [] });
@@ -29,11 +33,17 @@ export default function CryptoPredictionTrackerWindow() {
     loadData();
     const unsubscribe = cryptoTracker.subscribe((updatedAssets) => {
       setCryptoAssets(updatedAssets);
+      setMarketStatus({ ...cryptoTracker.status });
     });
-    // Poll every 12 seconds for organic updates
     const timer = setInterval(() => {
       cryptoTracker.fetchLivePrices();
     }, 12000);
+
+    setNftLoading(true);
+    cryptoTracker.fetchNftFloors({ onUpdate: setNftCollections })
+      .then(rows => setNftCollections(rows))
+      .catch(() => {})
+      .finally(() => setNftLoading(false));
 
     return () => {
       unsubscribe();
@@ -59,13 +69,14 @@ export default function CryptoPredictionTrackerWindow() {
 
   const handleRunPrediction = async () => {
     setIsPredicting(true);
+    setPredictionError('');
     try {
       const pred = await cryptoTracker.generatePrediction(selectedAsset, selectedHorizon);
       setCurrentPrediction(pred);
       const acc = await cryptoTracker.evaluateHistoricalPredictions();
       setAccuracyStats(acc);
     } catch (e) {
-      console.error('Prediction failed:', e);
+      setPredictionError(e.message);
     } finally {
       setIsPredicting(false);
     }
@@ -85,7 +96,8 @@ export default function CryptoPredictionTrackerWindow() {
     }
   };
 
-  const activeAssetData = cryptoAssets.find(a => a.symbol === selectedAsset) || cryptoAssets[0];
+  const activeAssetData = cryptoAssets.find(a => a.symbol === selectedAsset) || cryptoAssets[0] || null;
+  const fmtPrice = (p) => (Number.isFinite(p) ? p.toLocaleString(undefined, { minimumFractionDigits: p > 10 ? 2 : 4 }) : '—');
 
   return (
     <div className="h-full flex flex-col bg-slate-950 text-slate-100 font-sans select-none overflow-hidden">
@@ -98,11 +110,17 @@ export default function CryptoPredictionTrackerWindow() {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-bold tracking-wide text-white">NovaPulse Crypto & NFT Terminal</h2>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-500/40 font-mono">
-                Live Public Ticker
-              </span>
+              {marketStatus.live ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-500/40 font-mono">
+                  Live · {marketStatus.source || 'Binance'}
+                </span>
+              ) : (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-500/40 font-mono" title={marketStatus.error || ''}>
+                  Offline · {marketStatus.at ? `prices from ${timeOf(marketStatus.at)}` : 'no prices yet'}
+                </span>
+              )}
             </div>
-            <p className="text-[11px] text-slate-400">Institutional indicators, AI predictive forecasts & verifiable accuracy scorecard</p>
+            <p className="text-[11px] text-slate-400">Market data, rule-based forecasts scored against real prices, and paper trading</p>
           </div>
         </div>
 
@@ -124,7 +142,7 @@ export default function CryptoPredictionTrackerWindow() {
               }`}
             >
               <Sparkles className="w-3 h-3 text-amber-300" />
-              AI Predictor
+              Forecasts
             </button>
             <button
               onClick={() => setActiveTab('accuracy')}
@@ -166,10 +184,22 @@ export default function CryptoPredictionTrackerWindow() {
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                   <Activity className="w-4 h-4 text-cyan-400" />
-                  Live Cryptocurrencies (Top 10 Volume)
+                  Cryptocurrencies
                 </h3>
-                <span className="text-[11px] text-slate-400 font-mono">Quotes updated in real-time</span>
+                <span className={`text-[11px] font-mono ${marketStatus.live ? 'text-slate-400' : 'text-amber-300'}`}>
+                  {marketStatus.live
+                    ? `${marketStatus.source || 'Binance'} 24h ticker, refreshed every 12 s (last ${new Date(marketStatus.at).toLocaleTimeString()})`
+                    : marketStatus.at
+                      ? `Not live: the last prices this PC fetched, at ${timeOf(marketStatus.at)}`
+                      : 'Not live'}
+                </span>
               </div>
+
+              {cryptoAssets.length === 0 && (
+                <div className="p-4 rounded-xl border border-dashed border-slate-700 text-xs text-slate-400">
+                  No prices yet. This PC could not reach Binance{marketStatus.error ? ` (${marketStatus.error})` : ''} and has no earlier prices saved.
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
                 {cryptoAssets.map((asset) => {
@@ -188,8 +218,8 @@ export default function CryptoPredictionTrackerWindow() {
                         <span className="font-bold text-white text-xs">{asset.name}</span>
                         <span className="text-[10px] font-mono text-slate-400">{asset.base}</span>
                       </div>
-                      <div className="text-base font-extrabold text-white font-mono">
-                        ${asset.price.toLocaleString(undefined, { minimumFractionDigits: asset.price > 10 ? 2 : 4 })}
+                      <div className={`text-base font-extrabold font-mono ${asset.source === 'live' ? 'text-white' : 'text-slate-400'}`}>
+                        ${fmtPrice(asset.price)}
                       </div>
                       <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-800/80 text-[10px]">
                         <span className="text-slate-400 font-mono">Vol: {asset.volume}</span>
@@ -209,9 +239,11 @@ export default function CryptoPredictionTrackerWindow() {
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                   <Layers className="w-4 h-4 text-purple-400" />
-                  Blue-Chip NFT Collections (Floor Prices & Liquidity)
+                  NFT Collections (Floor Prices)
                 </h3>
-                <span className="text-[11px] text-slate-400 font-mono">Ethereum & Solana Top Collections</span>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  {nftLoading ? 'Fetching from CoinGecko, one at a time…' : 'CoinGecko, refreshed at most every 10 minutes'}
+                </span>
               </div>
 
               <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
@@ -223,7 +255,7 @@ export default function CryptoPredictionTrackerWindow() {
                       <th className="py-3 px-4 text-right">Floor Price</th>
                       <th className="py-3 px-4 text-right">Floor (USD)</th>
                       <th className="py-3 px-4 text-right">24h Change</th>
-                      <th className="py-3 px-4 text-right">24h Vol</th>
+                      <th className="py-3 px-4 text-right">24h Vol (USD)</th>
                       <th className="py-3 px-4 text-right">Owners</th>
                     </tr>
                   </thead>
@@ -236,13 +268,21 @@ export default function CryptoPredictionTrackerWindow() {
                             {nft.chain}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-right text-purple-300 font-bold">{nft.floorEth} {nft.chain === 'Solana' ? 'SOL' : 'ETH'}</td>
-                        <td className="py-3 px-4 text-right text-slate-200">${nft.floorUsd.toLocaleString()}</td>
-                        <td className={`py-3 px-4 text-right font-bold ${nft.change24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {nft.change24h >= 0 ? '+' : ''}{nft.change24h}%
-                        </td>
-                        <td className="py-3 px-4 text-right text-slate-400">{nft.volume24hEth} {nft.chain === 'Solana' ? 'SOL' : 'ETH'}</td>
-                        <td className="py-3 px-4 text-right text-slate-400">{nft.owners}</td>
+                        {nft.loaded ? (
+                          <>
+                            <td className="py-3 px-4 text-right text-purple-300 font-bold">{nft.floorNative} {nft.nativeSymbol}</td>
+                            <td className="py-3 px-4 text-right text-slate-200">${Math.round(nft.floorUsd).toLocaleString()}</td>
+                            <td className={`py-3 px-4 text-right font-bold ${(nft.change24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {nft.change24h == null ? '—' : `${nft.change24h >= 0 ? '+' : ''}${nft.change24h.toFixed(2)}%`}
+                            </td>
+                            <td className="py-3 px-4 text-right text-slate-400">{nft.volume24hUsd == null ? '—' : `$${Math.round(nft.volume24hUsd).toLocaleString()}`}</td>
+                            <td className="py-3 px-4 text-right text-slate-400">{nft.owners == null ? '—' : nft.owners.toLocaleString()}</td>
+                          </>
+                        ) : (
+                          <td colSpan={5} className="py-3 px-4 text-right text-slate-500 font-sans">
+                            {nft.error || (nftLoading ? 'Loading…' : 'Not loaded')}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -271,7 +311,7 @@ export default function CryptoPredictionTrackerWindow() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
                   >
                     {cryptoAssets.map(a => (
-                      <option key={a.symbol} value={a.symbol}>{a.name} ({a.base}) — ${a.price}</option>
+                      <option key={a.symbol} value={a.symbol}>{a.name} ({a.base}) — ${fmtPrice(a.price)}</option>
                     ))}
                   </select>
                 </div>
@@ -300,35 +340,42 @@ export default function CryptoPredictionTrackerWindow() {
                   <div className="text-[10px] text-slate-400 uppercase tracking-wider">Technical Grounding</div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Current Price:</span>
-                    <span className="text-white font-bold">${activeAssetData.price}</span>
+                    <span className="text-white font-bold">${fmtPrice(activeAssetData?.price)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-400">24h Volatility:</span>
-                    <span className="text-cyan-400">High: ${activeAssetData.high24h}</span>
+                    <span className="text-slate-400">24h High:</span>
+                    <span className="text-cyan-400">${fmtPrice(activeAssetData?.high24h)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Support Floor:</span>
-                    <span className="text-emerald-400">${(activeAssetData.low24h * 0.985).toFixed(2)}</span>
+                    <span className="text-emerald-400">${fmtPrice(activeAssetData ? activeAssetData.low24h * 0.985 : NaN)}</span>
                   </div>
                 </div>
 
                 <button
                   onClick={handleRunPrediction}
-                  disabled={isPredicting}
-                  className="w-full py-3 bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white font-bold rounded-xl text-xs shadow-xl shadow-purple-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  disabled={isPredicting || !marketStatus.live}
+                  className="w-full py-3 bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl text-xs shadow-xl shadow-purple-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {isPredicting ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Synthesizing Technical Vectors...</span>
+                      <span>Working out the forecast...</span>
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 text-amber-300" />
-                      <span>Generate Institutional Forecast</span>
+                      <span>Make forecast</span>
                     </>
                   )}
                 </button>
+                {!marketStatus.live && (
+                  <p className="text-[11px] text-amber-300">Forecasts need live prices, and neither Binance nor Binance.US can be reached right now.</p>
+                )}
+                {predictionError && <p className="text-[11px] text-rose-400">{predictionError}</p>}
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  Rule-based: 35% of the last 24 hours' move carries on, unless RSI (read roughly from the 24h range) is stretched. Every forecast is scored against Binance's real price at its target time. Not financial advice.
+                </p>
               </div>
 
               {/* Prediction Result Display */}
@@ -337,7 +384,7 @@ export default function CryptoPredictionTrackerWindow() {
                   <div className="bg-slate-900/60 border border-purple-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden space-y-5">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                       <div>
-                        <div className="text-[10px] uppercase font-bold tracking-wider text-purple-400">AI Predictive Forecast Result</div>
+                        <div className="text-[10px] uppercase font-bold tracking-wider text-purple-400">Forecast</div>
                         <h2 className="text-lg font-bold text-white flex items-center gap-2 mt-0.5">
                           <span>{currentPrediction.assetName}</span>
                           <span className="text-xs text-slate-400 font-mono">({currentPrediction.symbol})</span>
@@ -347,8 +394,14 @@ export default function CryptoPredictionTrackerWindow() {
                         </h2>
                       </div>
                       <div className="text-right">
-                        <div className="text-[10px] text-slate-400">Confidence Metric</div>
-                        <div className="text-lg font-bold text-emerald-400 font-mono">{currentPrediction.confidenceScore}%</div>
+                        <div className="text-[10px] text-slate-400">Track record ({currentPrediction.symbol}, {currentPrediction.targetHorizon})</div>
+                        {currentPrediction.trackRecord?.evaluated ? (
+                          <div className="text-lg font-bold text-emerald-400 font-mono" title="Share of past forecasts that got the direction right">
+                            {currentPrediction.trackRecord.hitRate}% <span className="text-[11px] text-slate-400">of {currentPrediction.trackRecord.evaluated}</span>
+                          </div>
+                        ) : (
+                          <div className="text-xs font-bold text-slate-400 mt-1">None scored yet</div>
+                        )}
                       </div>
                     </div>
 
@@ -378,14 +431,16 @@ export default function CryptoPredictionTrackerWindow() {
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed">
                       <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
                         <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-                        Institutional Reasoning Synthesis
+                        AI commentary
                       </div>
-                      <p>{currentPrediction.aiReasoning}</p>
+                      {currentPrediction.aiReasoning
+                        ? <p>{currentPrediction.aiReasoning}</p>
+                        : <p className="text-slate-500">No AI engine answered, so there is no commentary. The forecast above does not depend on it.</p>}
                     </div>
 
                     <div className="flex items-center justify-between pt-2 text-[11px] text-slate-400 font-mono">
                       <span>Prediction ID: {currentPrediction.id}</span>
-                      <span className="text-amber-400">Logged to Sovereign Dexie for Accuracy Audit</span>
+                      <span className="text-amber-400">Saved; scored at {new Date(currentPrediction.targetTimestamp).toLocaleString()}</span>
                     </div>
                   </div>
                 ) : (
@@ -393,7 +448,7 @@ export default function CryptoPredictionTrackerWindow() {
                     <Sparkles className="w-10 h-10 text-slate-600 mb-3" />
                     <h4 className="text-sm font-bold text-slate-300">No Forecast Generated Yet</h4>
                     <p className="text-xs text-slate-500 max-w-sm mt-1">
-                      Select any asset and time horizon from the left panel to execute an institutional AI technical forecast.
+                      Pick an asset and a horizon on the left, then make a forecast.
                     </p>
                   </div>
                 )}
@@ -493,7 +548,7 @@ export default function CryptoPredictionTrackerWindow() {
                   </table>
                 ) : (
                   <div className="p-8 text-center text-slate-500 text-xs">
-                    No predictions logged yet. Generate your first forecast in the AI Predictor tab!
+                    No predictions logged yet. Make your first one in the Forecasts tab.
                   </div>
                 )}
               </div>
@@ -535,7 +590,7 @@ export default function CryptoPredictionTrackerWindow() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
                   >
                     {cryptoAssets.map(a => (
-                      <option key={a.symbol} value={a.symbol}>{a.name} ({a.base}) — ${a.price}</option>
+                      <option key={a.symbol} value={a.symbol}>{a.name} ({a.base}) — ${fmtPrice(a.price)}</option>
                     ))}
                   </select>
                 </div>

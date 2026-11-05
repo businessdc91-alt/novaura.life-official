@@ -11,9 +11,21 @@ import { torOnion, VERIFIED_ONION_SERVICES } from '../../services/torOnionServic
 import SovereignAuthModal from '../modals/SovereignAuthModal.jsx';
 import { getAuthorizedApps, revokeAppAccess } from '../../services/decentralizedAuthService.js';
 import MeshRegistryView from './browser/MeshRegistryView.jsx';
+import MeshSearchPage, { openRegistry } from './browser/MeshSearchPage.jsx';
+import { parseMeshName, meshUrl, factionOf, normalizeName } from '../../services/web/novaNames.js';
+import { nameStatus } from '../../services/web/novaRegistry.js';
+
+const SPECIAL_PAGE_RE = /^nova:\/\/(search|registry)(\/|\?|$)/;
+const FOUNDER_PAGE_RE = /^(founder:\/\/|nova:\/\/office\.founder|aura:\/\/office\.founder)/;
+
+function registrationOf(status) {
+  if (!status || status.state === 'invalid') return null;
+  return { state: status.state, owner: status.record?.owner || null, expiresAt: status.record?.expiresAt || null, registrable: status.parsed?.registrable, policy: status.policy, review: status.review };
+}
 import { loadSiteIntoFrame, clearSitePreview, newSiteSession } from '../../services/sitePreview.js';
 
 const BOOKMARKS = [
+  { title: 'Nova Search', url: 'nova://search', isNova: true, faction: 'nova', favicon: '🔎' },
   { title: 'Genesis Hub (.nova)', url: 'nova://genesis.nova', isNova: true, faction: 'nova', favicon: '🌐' },
   { title: 'Deca Mesh (.nova)', url: 'nova://deca.nova', isNova: true, faction: 'nova', favicon: '⚡' },
   { title: 'Elysium Studio (.aura)', url: 'aura://elysium.aura', isAura: true, faction: 'aura', favicon: '✨' },
@@ -30,7 +42,6 @@ const SEED_NOVA_SITES = {
     id: 'genesis.nova',
     domain: 'genesis.nova',
     ownerHandle: 'genesis-council',
-    ownerPhone: '+1-700-NOVA-0001',
     title: 'Novaura Sovereign Decentralized Web Hub',
     updatedAt: new Date().toISOString(),
     htmlContent: `<!DOCTYPE html>
@@ -112,7 +123,6 @@ const SEED_NOVA_SITES = {
     id: 'docs.nova',
     domain: 'docs.nova',
     ownerHandle: 'arch-core',
-    ownerPhone: '+1-700-NOVA-0002',
     title: 'Sovereign OS Architecture Documentation',
     updatedAt: new Date().toISOString(),
     htmlContent: `<!DOCTYPE html>
@@ -174,7 +184,6 @@ const SEED_NOVA_SITES = {
     id: 'deca.nova',
     domain: 'deca.nova',
     ownerHandle: 'deca-founder',
-    ownerPhone: '+1-700-DECA-0010',
     title: 'Deca Sovereign Network — Autonomous Intelligence & Mesh Portal',
     updatedAt: new Date().toISOString(),
     htmlContent: `<!DOCTYPE html>
@@ -301,7 +310,7 @@ const SEED_NOVA_SITES = {
         <span><b>Protocol:</b> <span style="color:#38bdf8;font-family:monospace;">nova://deca.nova</span></span>
       </div>
       <div class="status-item">
-        <span><b>Sovereign Host:</b> @deca-founder (+1-700-DECA-0010)</span>
+        <span><b>Sovereign Host:</b> a built-in page shipped with every node</span>
       </div>
       <div class="status-item">
         <span><b>Consensus:</b> Ed25519 Local Node Verification</span>
@@ -312,15 +321,15 @@ const SEED_NOVA_SITES = {
       <div class="card">
         <div class="card-icon">⚡</div>
         <h3>Neural Host Compute</h3>
-        <p>Interrogates native hardware to power local LLM inference engines (Gemma 4 & Qwen MoE).</p>
-        <div class="metric-value">Intel i9-9940X (14C / 28T) • 64GB RAM</div>
+        <p>Local models (Gemma 4, Qwen or any GGUF) run on your own CPU and GPU through the built-in AI, LM Studio or Ollama.</p>
+        <div class="metric-value">Your hardware, nobody else's</div>
       </div>
 
       <div class="card">
         <div class="card-icon">🎮</div>
         <h3>Dual GPU Accelerator</h3>
-        <p>Workstation neural rendering and game loop acceleration across high-bandwidth VRAM.</p>
-        <div class="metric-value">Quadro M6000 24GB + RX 580 (32GB Total)</div>
+        <p>Vulkan acceleration on whatever GPUs this PC has, for local models and games.</p>
+        <div class="metric-value">AI Benchmarks measures this PC's real speed</div>
       </div>
 
       <div class="card">
@@ -356,7 +365,6 @@ const SEED_NOVA_SITES = {
     id: 'elysium.aura',
     domain: 'elysium.aura',
     ownerHandle: 'aura-synthesis',
-    ownerPhone: '+1-700-AURA-7777',
     title: 'Elysium Neural Collective — Creative Studio & Aesthetic Agents',
     favicon: '✨',
     faction: 'aura',
@@ -449,7 +457,6 @@ const SEED_NOVA_SITES = {
     id: 'oracle.aura',
     domain: 'oracle.aura',
     ownerHandle: 'aura-oracle',
-    ownerPhone: '+1-700-AURA-0001',
     title: 'Aura Oracle — Neural Synthesis & Swarm Intelligence',
     favicon: '🔮',
     faction: 'aura',
@@ -627,8 +634,10 @@ const TEMPLATES = {
   }
 };
 
-export default function BrowserWindow() {
+export default function BrowserWindow({ props: windowProps } = {}) {
   const { kernel } = useKernel();
+  // Another app asked to open an address (Nova Registry's "Open").
+  const [openRequest, setOpenRequest] = useState(windowProps?.openId ? windowProps : null);
   const [tabs, setTabs] = useState([
     { id: 'tab-1', title: 'Genesis Hub (.nova)', url: 'nova://genesis.nova', isNova: true },
   ]);
@@ -738,8 +747,16 @@ export default function BrowserWindow() {
   useEffect(() => {
     const resolveTab = async () => {
       const url = activeTab.url;
-      const isNova = url.startsWith('nova://') || url.endsWith('.nova');
-      const isAura = url.startsWith('aura://') || url.endsWith('.aura');
+      const meshName = parseMeshName(url);
+      const isNova = Boolean(meshName) || SPECIAL_PAGE_RE.test(url);
+      const isAura = meshName?.tld === 'aura';
+
+      if (/^nova:\/\/search(\/|\?|$)/.test(url)) {
+        const q = new URLSearchParams(url.split('?')[1] || '').get('q') || '';
+        setNovaPageData({ domain: 'search', title: 'Nova Search', isSearch: true, query: q });
+        setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, title: q ? `${q} · Nova Search` : 'Nova Search', favicon: '🔎', isNova: true, isAura: false } : t));
+        return;
+      }
 
       if (url.startsWith('founder://') || url === 'nova://office.founder' || url === 'aura://office.founder') {
         kernel?.openApp?.('founder_office');
@@ -752,8 +769,8 @@ export default function BrowserWindow() {
       }
 
       if (isNova || isAura) {
-        const cleanDomain = url.replace(/^(nova|aura):\/\//, '').replace(/\/$/, '');
-        const faction = isAura || cleanDomain.endsWith('.aura') ? 'aura' : 'nova';
+        const cleanDomain = normalizeName(url);
+        const faction = factionOf(cleanDomain);
 
         // Check if user navigated to the Mesh Registry View
         if (cleanDomain === 'registry.nova' || cleanDomain === 'registry.aura' || cleanDomain === 'registry') {
@@ -774,16 +791,30 @@ export default function BrowserWindow() {
         }
 
         try {
+          // A registered name shows only its registered owner's site; a revoked one shows nothing.
+          const status = await nameStatus(cleanDomain, { ask: false }).catch(() => null);
+          const registration = registrationOf(status);
+          const owner = ['registered', 'yours', 'grace'].includes(status?.state) ? status.record.owner : null;
+          const blocked = (s) => status?.state === 'revoked' || (owner && s?.publisherPubkey !== owner);
+
           // Robust query: check domain index first, then primary key, then fallback to seed
           let site = await db.hosted_sites.where('domain').equals(cleanDomain).first();
           if (!site) site = await db.hosted_sites.get(cleanDomain);
-          if (!site && SEED_NOVA_SITES[cleanDomain]) {
+          if (!site && SEED_NOVA_SITES[cleanDomain] && !owner) {
             site = { ...SEED_NOVA_SITES[cleanDomain], id: cleanDomain, faction };
             await db.hosted_sites.put(site).catch(() => {});
           }
+          if (site && blocked(site)) site = null;
+
+          if (!site) {
+            // Ask peers for the name's record, so the page can say who holds it.
+            nameStatus(cleanDomain, { ask: true }).then(st => {
+              setNovaPageData(prev => (prev?.domain === cleanDomain && prev.isNotFound ? { ...prev, registration: registrationOf(st) } : prev));
+            }).catch(() => {});
+          }
 
           if (site) {
-            setNovaPageData(site);
+            setNovaPageData({ ...site, registration });
             setTabs(prev => prev.map(t => t.id === activeTabId ? {
               ...t,
               favicon: site.favicon || (faction === 'aura' ? '✨' : '🌐'),
@@ -792,12 +823,13 @@ export default function BrowserWindow() {
               isAura: faction === 'aura',
             } : t));
           } else {
-            // Unregistered domain
+            // No site for this name on this PC (yet)
             setNovaPageData({
               domain: cleanDomain,
-              title: `${cleanDomain} — Unregistered Sovereign Domain`,
+              title: `${cleanDomain} — no site on this PC`,
               isNotFound: true,
               faction,
+              registration,
             });
           }
         } catch (err) {
@@ -817,7 +849,8 @@ export default function BrowserWindow() {
   }, [activeTab.url]);
 
   const navigateTo = (targetUrl) => {
-    let finalUrl = targetUrl.trim();
+    let finalUrl = String(targetUrl || '').trim();
+    if (!finalUrl) return;
     let isNova = false;
     let isAura = false;
     let isOnion = false;
@@ -827,16 +860,15 @@ export default function BrowserWindow() {
       return;
     }
 
-    if (finalUrl.startsWith('aura://') || finalUrl.endsWith('.aura')) {
-      isAura = true;
-      if (!finalUrl.startsWith('aura://')) {
-        finalUrl = 'aura://' + finalUrl;
-      }
-    } else if (finalUrl.startsWith('nova://') || finalUrl.endsWith('.nova')) {
+    // Mesh names (.nova .aura .novaura .catalyst) open on the mesh web; plain
+    // words search it (Nova Search); web and .onion addresses go out as before.
+    const meshName = parseMeshName(finalUrl);
+    if (SPECIAL_PAGE_RE.test(finalUrl)) {
       isNova = true;
-      if (!finalUrl.startsWith('nova://')) {
-        finalUrl = 'nova://' + finalUrl;
-      }
+    } else if (meshName) {
+      finalUrl = meshUrl(meshName.host);
+      isAura = meshName.tld === 'aura';
+      isNova = !isAura;
     } else if (finalUrl.includes('.onion') || finalUrl.startsWith('tor://')) {
       isOnion = true;
       if (finalUrl.startsWith('tor://')) {
@@ -844,11 +876,12 @@ export default function BrowserWindow() {
       } else if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
         finalUrl = 'http://' + finalUrl;
       }
-    } else if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
-      if (finalUrl.includes('.') && !finalUrl.includes(' ')) {
+    } else if (!/^https?:\/\//i.test(finalUrl)) {
+      if (/^[^\s/:]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(finalUrl)) {
         finalUrl = 'https://' + finalUrl;
       } else {
-        finalUrl = `https://duckduckgo.com/?q=${encodeURIComponent(finalUrl)}`;
+        finalUrl = `nova://search?q=${encodeURIComponent(finalUrl)}`;
+        isNova = true;
       }
     }
 
@@ -859,10 +892,10 @@ export default function BrowserWindow() {
       ...t,
       url: finalUrl,
       renderUrl,
-      title: isAura
-        ? finalUrl.replace('aura://', '')
+      title: meshName
+        ? meshName.host
         : (isNova
-          ? finalUrl.replace('nova://', '')
+          ? 'Nova Search'
           : (isOnion ? (finalUrl.split('/')[2]?.substring(0, 16) + '...onion') : finalUrl)),
       isNova,
       isAura,
@@ -871,6 +904,17 @@ export default function BrowserWindow() {
     } : t));
     setSummary(null);
   };
+
+  useEffect(() => {
+    const onContext = (e) => {
+      if (e.detail?.appId === 'browser' && e.detail.props?.openId) setOpenRequest(e.detail.props);
+    };
+    window.addEventListener('novaura:app_context', onContext);
+    return () => window.removeEventListener('novaura:app_context', onContext);
+  }, []);
+  useEffect(() => {
+    if (openRequest?.url) navigateTo(openRequest.url);
+  }, [openRequest?.openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenStudio = (targetDomain = null, initialTemplate = null) => {
     const domain = targetDomain || (novaPageData?.domain) || 'deca.nova';
@@ -987,10 +1031,10 @@ export default function BrowserWindow() {
 
   const addTab = () => {
     const newId = `tab-${Date.now()}`;
-    const newTab = { id: newId, title: 'Genesis Hub (.nova)', url: 'nova://genesis.nova', isNova: true };
+    const newTab = { id: newId, title: 'Nova Search', url: 'nova://search', isNova: true };
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(newId);
-    setUrlInput('nova://genesis.nova');
+    setUrlInput('nova://search');
   };
 
   const closeTab = (id, e) => {
@@ -1004,9 +1048,11 @@ export default function BrowserWindow() {
     }
   };
 
-  const isCurrentTabNova = activeTab.url.startsWith('nova://') || activeTab.url.endsWith('.nova') || activeTab.url.startsWith('aura://') || activeTab.url.endsWith('.aura');
-  const isAuraFaction = activeTab.url.startsWith('aura://') || activeTab.url.endsWith('.aura') || novaPageData?.faction === 'aura';
-  const activeCleanDomain = isCurrentTabNova ? activeTab.url.replace(/^(nova|aura):\/\//, '').replace(/\/$/, '') : '';
+  const isCurrentTabNova = Boolean(parseMeshName(activeTab.url)) || SPECIAL_PAGE_RE.test(activeTab.url) || FOUNDER_PAGE_RE.test(activeTab.url);
+  const isAuraFaction = factionOf(activeTab.url) === 'aura' || novaPageData?.faction === 'aura';
+  const activeCleanDomain = isCurrentTabNova ? normalizeName(activeTab.url) : '';
+  const reg = novaPageData?.registration;
+  const shortKey = (hex) => (hex ? `${hex.slice(0, 6)}…${hex.slice(-4)}` : '');
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
@@ -1104,7 +1150,7 @@ export default function BrowserWindow() {
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && navigateTo(urlInput)}
-            placeholder="Enter .nova or .aura domain (e.g. deca.nova, elysium.aura), .onion address, or web URL..."
+            placeholder="Search the mesh web, or go to a name (.nova .aura .novaura .catalyst), a .onion or an https:// address"
             className="w-full bg-slate-950 border border-slate-700/80 rounded-lg pl-9 pr-36 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 outline-none focus:border-cyan-500"
           />
           <div className="absolute right-2 flex items-center gap-1.5">
@@ -1235,7 +1281,14 @@ export default function BrowserWindow() {
       {/* Webpage Viewport */}
       <div className="flex-1 bg-slate-950 relative overflow-hidden flex flex-col">
         {isCurrentTabNova && novaPageData ? (
-          novaPageData.isRegistry ? (
+          novaPageData.isSearch ? (
+            /* Nova Search: the mesh web's front page */
+            <MeshSearchPage
+              initialQuery={novaPageData.query || ''}
+              onOpen={(domain) => navigateTo(domain)}
+              onSearch={(q) => navigateTo(q ? `nova://search?q=${encodeURIComponent(q)}` : 'nova://search')}
+            />
+          ) : novaPageData.isRegistry ? (
             /* Decentralized Mesh Registry & Faction Directory */
             <MeshRegistryView onNavigateToUrl={(targetUrl) => navigateTo(targetUrl)} />
           ) : novaPageData.isFounderOfficeRedirect ? (
@@ -1276,16 +1329,29 @@ export default function BrowserWindow() {
                   ? 'bg-violet-950/80 border border-violet-500/40 text-violet-300'
                   : 'bg-cyan-950/80 border border-cyan-500/30 text-cyan-300'
               }`}>
-                <span>●</span> UNCLAIMED {isAuraFaction ? 'AURA MESH' : 'NOVA MESH'} DOMAIN
+                <span>●</span> {reg?.state === 'registered' || reg?.state === 'grace' ? 'REGISTERED NAME' : reg?.state === 'yours' ? 'YOUR NAME' : reg?.state === 'revoked' ? 'REVOKED NAME' : 'UNREGISTERED NAME'} · NO SITE ON THIS PC
               </div>
               <h2 className="text-2xl font-bold text-slate-100 mb-2">
                 <span className={`font-mono ${isAuraFaction ? 'text-violet-400' : 'text-cyan-400'}`}>
-                  {isAuraFaction ? 'aura://' : 'nova://'}{novaPageData.domain}
+                  {meshUrl(novaPageData.domain) || novaPageData.domain}
                 </span>
               </h2>
               <p className="text-sm text-slate-400 max-w-lg mb-6 leading-relaxed">
-                This decentralized site has not been registered in your local mesh cache. As a sovereign node, you can claim ownership and publish this site directly to the peer-to-peer web right now with zero corporate cloud fees.
+                {reg?.state === 'yours' && 'This name is registered to you. Build a site for it and publish it, and peers will accept it as yours.'}
+                {(reg?.state === 'registered' || reg?.state === 'grace') && <>Registered to node <span className="font-mono text-slate-300">{shortKey(reg.owner)}</span>. Their site is not on this PC yet; peers may have it.</>}
+                {reg?.state === 'revoked' && 'The registry operator revoked this name, so no site is shown for it.'}
+                {(!reg || reg.state === 'available') && <>Nobody has registered <span className="font-mono text-slate-300">{reg?.registrable || novaPageData.domain}</span> yet. {reg?.review || 'Register it, then publish a site, and it is yours on every node.'}</>}
               </p>
+
+              {(!reg || reg.state === 'available') && (
+                <button
+                  onClick={() => openRegistry(reg?.registrable || novaPageData.domain)}
+                  className="flex items-center gap-2 px-6 py-2.5 mb-4 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl text-xs font-semibold shadow-lg cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Register {reg?.registrable || novaPageData.domain}</span>
+                </button>
+              )}
 
               <div className="flex flex-wrap items-center justify-center gap-3 mb-6">
                 <button
@@ -1343,7 +1409,16 @@ export default function BrowserWindow() {
                     <Server className="w-3.5 h-3.5 text-emerald-400" />
                   )}
                   <span>Decentralized Site: <b className="font-mono">{novaPageData.domain}</b></span>
-                  <span className="text-slate-400">• Hosted by: @{novaPageData.ownerHandle} ({novaPageData.ownerPhone})</span>
+                  <span className="text-slate-400">• Hosted by: @{novaPageData.ownerHandle}{novaPageData.ownerPhone ? ` (${novaPageData.ownerPhone})` : ''}</span>
+                  {reg?.state === 'registered' || reg?.state === 'yours' ? (
+                    <span className="text-[10px] px-2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40" title={`Registered to ${reg.owner}, until ${new Date(reg.expiresAt).toLocaleDateString()}`}>
+                      ✓ Registered{reg.state === 'yours' ? ' to you' : ''}
+                    </span>
+                  ) : novaPageData.publisherSig ? (
+                    <span className="text-[10px] px-2 rounded bg-amber-950 text-amber-300 border border-amber-500/40" title="Signed by its publisher, but the name is not registered: the first publisher holds it until someone registers it.">
+                      Unregistered name
+                    </span>
+                  ) : null}
                   <span className={`text-[10px] px-2 py-0.2 rounded font-mono font-bold uppercase ${
                     isAuraFaction ? 'bg-violet-950 text-violet-300 border border-violet-500/40' : 'bg-cyan-950 text-cyan-300 border border-cyan-500/40'
                   }`}>

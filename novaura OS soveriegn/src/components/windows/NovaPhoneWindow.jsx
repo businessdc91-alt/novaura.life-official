@@ -4,7 +4,7 @@ import {
   Mic, MicOff, Video, VideoOff, Monitor, Users, Clock, Plus, Search,
   Copy, Check, ShieldCheck, Volume2, Key, Sparkles, Hash, X
 } from 'lucide-react';
-import { callService, CallState } from '../../services/sovereignCallService.js';
+import { callService, CallState, getMyPhoneNumber } from '../../services/sovereignCallService.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { getLocalIdentity } from '../../services/sovereignMesh.js';
 
@@ -197,7 +197,8 @@ export default function NovaPhoneWindow() {
   };
 
   const copyMyNumber = () => {
-    const num = localIdentity?.phoneNumber || '+1-700-NOVA-0001';
+    const num = getMyPhoneNumber();
+    if (!num) return;
     navigator.clipboard.writeText(num);
     setCopiedNotice(true);
     setTimeout(() => setCopiedNotice(false), 2000);
@@ -293,7 +294,7 @@ export default function NovaPhoneWindow() {
               className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-mono transition-colors"
             >
               {copiedNotice ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
-              <span>{localIdentity?.phoneNumber || '+1-700-NOVA-0001'}</span>
+              <span>{getMyPhoneNumber() || 'No number until you create a node identity'}</span>
             </button>
           </div>
         </div>
@@ -543,7 +544,7 @@ export default function NovaPhoneWindow() {
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between py-1.5 border-b border-slate-800">
                   <span className="text-slate-400">Sovereign Phone Number:</span>
-                  <span className="font-mono text-emerald-300 font-semibold">{localIdentity?.phoneNumber || '+1-700-NOVA-0001'}</span>
+                  <span className="font-mono text-emerald-300 font-semibold">{getMyPhoneNumber() || 'No number until you create a node identity'}</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-800">
                   <span className="text-slate-400">Ecosystem Handle:</span>
@@ -551,7 +552,7 @@ export default function NovaPhoneWindow() {
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-800">
                   <span className="text-slate-400">Node Public Key:</span>
-                  <span className="font-mono text-[10px] text-slate-400 truncate max-w-[180px]">{localIdentity?.publicKey || 'ECDSA_P256_ACTIVE'}</span>
+                  <span className="font-mono text-[10px] text-slate-400 truncate max-w-[180px]">{localIdentity?.publicKey || 'No node key yet'}</span>
                 </div>
                 <div className="flex justify-between py-1.5">
                   <span className="text-slate-400">Persistence State:</span>

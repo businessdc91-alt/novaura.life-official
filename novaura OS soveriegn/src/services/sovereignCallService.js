@@ -3,15 +3,52 @@
  *
  * Implements:
  * - Direct peer-to-peer audio & video calling with end-to-end DTLS-SRTP encryption
- * - In-ecosystem Sovereign Phone Number dialing (+1-700-NOVA-XXXX)
- * - Multi-tier signaling: Global Decentralized Mesh Relay + Local BroadcastChannel + Direct Token Handshake
- * - Automatic STUN NAT traversal for global internet connectivity
+ * - In-ecosystem Sovereign Phone Number dialing (+1-700-XXXX-XXXX)
+ * - Signaling over the Sovereign mesh only: a dialled number is looked up
+ *   (MESH_PHONE_LOOKUP, which carries no call data), the node that answers for
+ *   it is reached with direct packets signed by both node keys
+ *   (MESH_CALL_SIGNAL), and once a call starts only that node's packets count.
+ *   Windows on the same PC also hear each other over a BroadcastChannel.
+ * - STUN, plus the relay's TURN server when it offers one
  * - Call state machine: IDLE -> DIALING -> RINGING -> CONNECTED -> ENDED
  * - Call logging to on-device private cloud database (db.call_logs)
  */
 
 import { db } from '../database/sovereignDatabase.js';
-import { getLocalIdentity, getPhysicalMeshStatus } from './sovereignMesh.js';
+import {
+  getLocalIdentity, getPhysicalMeshStatus, broadcastMeshPacket, sendDirectMeshPacket,
+  registerMeshHandler, verifiedSenderDid,
+} from './sovereignMesh.js';
+import { getSavedKeyRecord } from './sovereignAuth.js';
+import { chooseMyNumber, phoneKey, samePhoneNumber } from './phoneNumbers.js';
+
+const LOOKUP_TIMEOUT_MS = 6000;
+// After the first node answers, wait this long for a second one (a number collision).
+const LOOKUP_GRACE_MS = 1500;
+const SIGNAL_TYPES = new Set(['CALL_OFFER', 'CALL_ANSWER', 'ICE_CANDIDATE', 'CALL_REJECT', 'CALL_BUSY', 'CALL_HANGUP']);
+
+/** This node's number: the one chosen at activation or on the identity, else one derived from its key. */
+export function getMyPhoneNumber() {
+  const id = getLocalIdentity();
+  let licensed = '';
+  try { licensed = getSavedKeyRecord()?.phoneNumber || ''; } catch { /* no license yet */ }
+  return chooseMyNumber({ chosen: [id?.phoneNumber, licensed], pubHex: id?.publicKey });
+}
+
+function myDid() {
+  const pub = String(getLocalIdentity()?.publicKey || '').replace(/^0x/, '').toLowerCase();
+  return /^[0-9a-f]{64}$/.test(pub) ? `did:nova:${pub}` : null;
+}
+
+function contactDid(contact) {
+  if (/^did:nova:[0-9a-f]{64}$/.test(String(contact?.id || ''))) return contact.id;
+  if (/^did:nova:[0-9a-f]{64}$/.test(String(contact?.nodeId || ''))) return contact.nodeId;
+  const pub = String(contact?.publicKey || '').replace(/^0x/, '').toLowerCase();
+  return /^[0-9a-f]{64}$/.test(pub) ? `did:nova:${pub}` : null;
+}
+
+// Open number lookups: phoneKey(number) -> { dids: Set, settle() }
+const _lookups = new Map();
 
 // Public STUN servers for peer-to-peer NAT traversal across the global internet
 const STUN_SERVERS = [
@@ -54,9 +91,9 @@ class SovereignCallService extends EventTarget {
     this.remoteStream = null;
     this.dataChannel = null;
     this.callState = CallState.IDLE;
-    this.currentCall = null; // { callId, remoteNumber, remoteHandle, direction, isVideo, startTime }
+    this.currentCall = null; // { callId, remoteNumber, remoteHandle, remoteDid, direction, isVideo, startTime }
     this.signalChannel = null;
-    this.meshRelaySocket = null;
+    this.pendingCandidates = [];
     this.callTimer = null;
     this.durationSec = 0;
 
@@ -77,96 +114,94 @@ class SovereignCallService extends EventTarget {
       }
     }
 
-    // 2. Global Decentralized Mesh Relay (WebSocket pub-sub over public relay networks)
-    this._connectMeshRelay();
+    // 2. Other machines: the Sovereign mesh (handlers registered below the class).
   }
 
-  _connectMeshRelay() {
-    // Connect to decentralized signaling relay with automatic reconnection
+  /**
+   * The node that answers for `number`: a saved contact with a node key first,
+   * else whoever answers a mesh lookup. Throws when nobody, or more than one
+   * node, answers.
+   */
+  async resolveNumber(number) {
     try {
-      const relayUrl = 'wss://relay.damus.io'; // Public decentralized WSS relay
-      this.meshRelaySocket = new WebSocket(relayUrl);
-
-      this.meshRelaySocket.onopen = () => {
-        console.info('[CallService] Connected to Global Decentralized Mesh Relay');
-        const identity = getLocalIdentity();
-        if (identity?.phoneNumber) {
-          // Subscribe to incoming calls addressed to our phone number
-          const subMsg = JSON.stringify(['REQ', 'incoming_calls', { kinds: [20000], '#t': [identity.phoneNumber] }]);
-          this.meshRelaySocket.send(subMsg);
-        }
-      };
-
-      this.meshRelaySocket.onmessage = (event) => {
-        try {
-          const parsed = JSON.parse(event.data);
-          if (Array.isArray(parsed) && parsed[0] === 'EVENT') {
-            const rawContent = parsed[2]?.content;
-            if (rawContent) {
-              const signal = JSON.parse(rawContent);
-              this._handleSignalPacket(signal);
-            }
-          }
-        } catch {}
-      };
-
-      this.meshRelaySocket.onerror = () => {
-        // Soft fail; local and direct token signaling remains active
-      };
-
-      this.meshRelaySocket.onclose = () => {
-        // Reconnect after delay
-        setTimeout(() => this._connectMeshRelay(), 30000);
-      };
+      const contacts = await db.contacts.toArray();
+      const known = contacts.map(c => ({ c, did: contactDid(c) })).find(({ c, did }) => did && samePhoneNumber(c.phoneNumber, number));
+      if (known) return known.did;
     } catch {
-      // Mesh relay optional
+      // No contacts table yet: fall through to the lookup.
     }
+
+    const key = phoneKey(number);
+    if (key.length < 4) throw new Error('Enter a full Nova Phone number.');
+    const dids = await new Promise((resolve) => {
+      const found = new Set();
+      let grace = null;
+      const timer = setTimeout(() => finish(), LOOKUP_TIMEOUT_MS);
+      const finish = () => {
+        clearTimeout(timer);
+        clearTimeout(grace);
+        _lookups.delete(key);
+        resolve(found);
+      };
+      _lookups.set(key, {
+        add: (did) => {
+          found.add(did);
+          if (!grace) grace = setTimeout(finish, LOOKUP_GRACE_MS);
+        },
+      });
+      broadcastMeshPacket('MESH_PHONE_LOOKUP', { number });
+    });
+
+    if (dids.size === 1) return [...dids][0];
+    if (dids.size > 1) throw new Error('More than one node answers for this number. Call them from a saved contact instead.');
+    throw new Error('No node on the mesh answered for this number. They may be offline.');
   }
 
   _sendSignal(packet) {
-    const enriched = {
+    const identity = getLocalIdentity();
+    // Plain JSON: SDP and ICE objects keep their fields on the prototype, which
+    // the packet signature (canonical JSON of own keys) would not cover.
+    const enriched = JSON.parse(JSON.stringify({
       ...packet,
-      fromNumber: getLocalIdentity()?.phoneNumber || '+1-700-NOVA-0001',
-      fromHandle: getLocalIdentity()?.handle || 'operator',
+      fromNumber: getMyPhoneNumber(),
+      fromHandle: identity?.handle || 'operator',
       timestamp: Date.now(),
-    };
+    }));
+    // An explicit toDid (even null) wins: a busy reply must not go to the current call.
+    const toDid = Object.prototype.hasOwnProperty.call(enriched, 'toDid') ? enriched.toDid : (this.currentCall?.remoteDid || null);
+    delete enriched.toDid;
 
-    // 1. Broadcast locally across windows
+    // 1. Other windows on this PC
     if (this.signalChannel) {
       try {
         this.signalChannel.postMessage(enriched);
       } catch {}
     }
 
-    // 2. Publish to Global Decentralized Mesh Relay if connected
-    if (this.meshRelaySocket && this.meshRelaySocket.readyState === WebSocket.OPEN) {
-      try {
-        const nostrEvent = JSON.stringify([
-          'EVENT',
-          {
-            kind: 20000,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [['t', packet.toNumber]],
-            content: JSON.stringify(enriched),
-          },
-        ]);
-        this.meshRelaySocket.send(nostrEvent);
-      } catch {}
+    // 2. The node on the other end of this call, directly over the mesh
+    if (toDid) {
+      sendDirectMeshPacket(toDid, 'MESH_CALL_SIGNAL', { signal: enriched }).catch(() => {});
     }
 
-    // Dispatch internal event
     this.dispatchEvent(new CustomEvent('signal_sent', { detail: enriched }));
+  }
+
+  /** A call signal from the mesh, from the node whose key signed it. */
+  _handleMeshSignal(signal, fromDid) {
+    if (!signal || typeof signal !== 'object' || !SIGNAL_TYPES.has(signal.type) || !fromDid) return;
+    // Mid-call, only the node this call is with may speak for it.
+    if (signal.type !== 'CALL_OFFER' && this.currentCall?.remoteDid && this.currentCall.remoteDid !== fromDid) return;
+    this._handleSignalPacket({ ...signal, fromDid });
   }
 
   // ── 2. Handling Incoming Signal Packets ────────────────────────────────────
   async _handleSignalPacket(data) {
     if (!data || !data.type) return;
 
-    const myIdentity = getLocalIdentity();
-    const myNumber = myIdentity?.phoneNumber || '+1-700-NOVA-0001';
+    const myNumber = getMyPhoneNumber();
 
-    // Ignore if not addressed to this node (unless it is a general broadcast)
-    if (data.toNumber && data.toNumber !== myNumber) return;
+    // Over the mesh the packet was sent to this node's key; on the local bus the number decides.
+    if (!data.fromDid && data.toNumber && !samePhoneNumber(data.toNumber, myNumber)) return;
 
     // Ignore packets from self
     if (data.fromNumber === myNumber && data.callId === this.currentCall?.callId && this.currentCall?.direction === 'outgoing') {
@@ -183,6 +218,7 @@ class SovereignCallService extends EventTarget {
             type: 'CALL_BUSY',
             callId: data.callId,
             toNumber: data.fromNumber,
+            toDid: data.fromDid || null,
           });
         }
         break;
@@ -194,11 +230,16 @@ class SovereignCallService extends EventTarget {
         break;
 
       case 'ICE_CANDIDATE':
-        if (this.peerConnection && this.currentCall?.callId === data.callId) {
-          try {
-            await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (e) {
-            console.warn('[CallService] ICE candidate error:', e);
+        if (this.currentCall?.callId === data.callId && data.candidate) {
+          if (this.peerConnection?.remoteDescription) {
+            try {
+              await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch (e) {
+              console.warn('[CallService] ICE candidate error:', e);
+            }
+          } else if (this.pendingCandidates.length < 64) {
+            // Arrived before the offer was answered: applied once the remote description is set.
+            this.pendingCandidates.push(data.candidate);
           }
         }
         break;
@@ -215,16 +256,17 @@ class SovereignCallService extends EventTarget {
 
   // ── 3. Call Lifecycle (Dial, Answer, Hangup) ───────────────────────────────
 
-  async startCall(toNumber, isVideo = true) {
+  async startCall(toNumber, isVideo = true, options = {}) {
     if (this.callState !== CallState.IDLE) {
       throw new Error('Call already in progress');
     }
 
-    const callId = `call_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const callId = `call_${Date.now()}_${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
     this.currentCall = {
       callId,
       remoteNumber: toNumber,
       remoteHandle: toNumber.replace('+1-700-', ''),
+      remoteDid: null,
       direction: 'outgoing',
       isVideo,
       startTime: null,
@@ -232,6 +274,11 @@ class SovereignCallService extends EventTarget {
     this._setCallState(CallState.DIALING);
 
     try {
+      // 0. Find the node that answers for this number
+      const remoteDid = options.did || await this.resolveNumber(toNumber);
+      if (remoteDid === myDid()) throw new Error('That number belongs to this PC.');
+      this.currentCall.remoteDid = remoteDid;
+
       // 1. Acquire Local Media
       await this._acquireMedia(isVideo);
 
@@ -264,14 +311,35 @@ class SovereignCallService extends EventTarget {
   async _handleIncomingCallOffer(data) {
     this.currentCall = {
       callId: data.callId,
-      remoteNumber: data.fromNumber,
-      remoteHandle: data.fromHandle,
+      remoteNumber: String(data.fromNumber || '').slice(0, 32),
+      remoteHandle: String(data.fromHandle || 'unknown').slice(0, 64),
+      remoteDid: data.fromDid || null,
       direction: 'incoming',
       isVideo: Boolean(data.isVideo),
       pendingOffer: data.sdp,
       startTime: null,
     };
     this._setCallState(CallState.RINGING);
+
+    // Caller ID: the number and name are the caller's own claim. A saved contact
+    // with this key is shown as itself; a contact's number on another key is not.
+    if (data.fromDid) {
+      try {
+        const contacts = await db.contacts.toArray();
+        const byKey = contacts.find(c => contactDid(c) === data.fromDid);
+        const byNumber = contacts.find(c => samePhoneNumber(c.phoneNumber, data.fromNumber));
+        if (this.currentCall?.callId === data.callId) {
+          if (byKey) {
+            this.currentCall.remoteHandle = byKey.handle || byKey.name || this.currentCall.remoteHandle;
+            this.currentCall.verifiedContact = true;
+          } else if (byNumber) {
+            this.currentCall.remoteNumber = `${this.currentCall.remoteNumber} (not ${byNumber.handle || 'your contact'}'s key)`;
+          }
+        }
+      } catch {
+        // No contacts: show the claim as is.
+      }
+    }
 
     // Notify listeners / UI to show incoming call modal
     this.dispatchEvent(new CustomEvent('incoming_call', { detail: this.currentCall }));
@@ -291,6 +359,7 @@ class SovereignCallService extends EventTarget {
 
       // 3. Set Remote Description from incoming offer
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(this.currentCall.pendingOffer));
+      await this._flushCandidates();
 
       // 4. Create Answer
       const answer = await this.peerConnection.createAnswer();
@@ -314,6 +383,7 @@ class SovereignCallService extends EventTarget {
   async _handleCallAnswer(data) {
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      await this._flushCandidates();
       this._startTimer();
       this._setCallState(CallState.CONNECTED);
     } catch (err) {
@@ -485,9 +555,21 @@ class SovereignCallService extends EventTarget {
     }, 1000);
   }
 
+  async _flushCandidates() {
+    const queued = this.pendingCandidates.splice(0);
+    for (const candidate of queued) {
+      try {
+        await this.peerConnection?.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('[CallService] Queued ICE candidate error:', e);
+      }
+    }
+  }
+
   _cleanup() {
     clearInterval(this.callTimer);
     this.durationSec = 0;
+    this.pendingCandidates = [];
 
     if (this.localStream) {
       this.localStream.getTracks().forEach((t) => t.stop());
@@ -524,3 +606,24 @@ class SovereignCallService extends EventTarget {
 
 export const callService = new SovereignCallService();
 export default callService;
+
+// ── Mesh signaling ──────────────────────────────────────────────────────────
+// Handlers only ever see packets whose signature verified, so the sender DID
+// below is the key that actually sent them.
+
+registerMeshHandler('MESH_PHONE_LOOKUP', (payload, packet) => {
+  const from = verifiedSenderDid(packet);
+  const mine = getMyPhoneNumber();
+  if (!from || from === myDid() || !samePhoneNumber(payload?.number, mine)) return;
+  sendDirectMeshPacket(from, 'MESH_PHONE_HERE', { number: mine }).catch(() => {});
+});
+
+registerMeshHandler('MESH_PHONE_HERE', (payload, packet) => {
+  const from = verifiedSenderDid(packet);
+  const lookup = _lookups.get(phoneKey(payload?.number));
+  if (from && lookup) lookup.add(from);
+});
+
+registerMeshHandler('MESH_CALL_SIGNAL', (payload, packet) => {
+  callService._handleMeshSignal(payload?.signal, verifiedSenderDid(packet));
+});

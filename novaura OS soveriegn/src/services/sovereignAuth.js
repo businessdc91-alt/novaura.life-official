@@ -13,20 +13,8 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 
 const STORAGE_KEY = 'novaura_sovereign_auth_vault';
 
-// Official Novaura Sovereign Licensing Authority Public Keys Registry
-// Each entry maps an explicit Key ID ('kid') to its Ed25519 public key and operational status.
-export const TRUSTED_AUTHORITIES = {
-  'nova-auth-2026-v1': {
-    pubkeyHex: 'e71dced6ba1e1646f9ad868a00c0479933d602775f81cbf81bf6e9b6a49e0143',
-    status: 'ACTIVE',
-    tier: 'ROOT_GENESIS',
-  },
-  'nova-auth-operator': {
-    pubkeyHex: 'd442d3ac7b1385393c95e17691dade298efe48b79751a550f74ad8de253d8a23',
-    status: 'ACTIVE',
-    tier: 'FOUNDER_GENESIS',
-  },
-};
+import { TRUSTED_AUTHORITIES } from '../config/trustedAuthorities.js';
+export { TRUSTED_AUTHORITIES };
 
 // Default Genesis Root Authority Public Key (Backwards compatibility)
 export const AUTHORITY_PUBKEY_HEX = TRUSTED_AUTHORITIES['nova-auth-2026-v1'].pubkeyHex;
@@ -211,23 +199,20 @@ export function verifySovereignKey(rawKey, expectedNodeId = null) {
  * Format: +1-700-NOVA-[XXXX] or +1-700-[4 digits]-[4 digits]
  */
 export function formatSovereignPhoneNumber(input) {
-  if (!input) return '+1-700-NOVA-0001';
-  const clean = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  
-  if (clean.length === 4) {
-    return `+1-700-NOVA-${clean}`;
-  }
-  
-  if (clean.length === 8) {
-    return `+1-700-${clean.substring(0, 4)}-${clean.substring(4, 8)}`;
-  }
-  
-  const digitsOnly = input.replace(/[^0-9]/g, '');
-  if (digitsOnly.startsWith('1700') && digitsOnly.length >= 11) {
-    return `+1-700-${digitsOnly.substring(4, 8)}-${digitsOnly.substring(8, 12)}`;
-  }
+  if (!input) return '';
+  const clean = String(input).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // A full number (+1-700-XXXX-XXXX) keeps its last eight characters. The old
+  // fallback turned every "+1-700-NOVA-XXXX" into "+1-700-NOVA-1700", so they all collided.
+  const body = clean.length === 12 && clean.startsWith('1700') ? clean.slice(4) : clean;
 
-  return `+1-700-NOVA-${clean.substring(0, 4).padEnd(4, '0')}`;
+  if (body.length === 4) {
+    return `+1-700-NOVA-${body}`;
+  }
+  if (body.length === 8) {
+    return `+1-700-${body.substring(0, 4)}-${body.substring(4, 8)}`;
+  }
+  // Anything else is not a number: none is stored, and one is derived from the node key.
+  return '';
 }
 
 /**
@@ -296,7 +281,9 @@ export async function saveKeyRecord(key, details, phoneNumber = null) {
     const { getHardwareFingerprint, saveNodeCertificate } = await import('./nativeService.js');
     hwFingerprint = await getHardwareFingerprint();
     
-    const assignedPhone = phoneNumber ? formatSovereignPhoneNumber(phoneNumber) : formatSovereignPhoneNumber(key.substring(0, 4));
+    // No number chosen: none is stored, and the call service derives one from the node key.
+    // (Every license token starts "NOVA1.", so the old key-prefix default gave everyone the same number.)
+    const assignedPhone = phoneNumber ? formatSovereignPhoneNumber(phoneNumber) : '';
     
     const payload = {
       key: key.trim(),

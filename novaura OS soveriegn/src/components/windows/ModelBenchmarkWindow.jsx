@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Trophy, Cpu, Gauge, ExternalLink, Download, Loader2, Info, ArrowUpDown, Check } from 'lucide-react';
 import { OPEN_MODELS, FRONTIER, BENCHMARKS, RETRIEVED, scoreOf } from '../../services/benchmarks/modelBenchmarks.js';
 import { getNativeHardwareSpec } from '../../services/nativeService.js';
-import { listBuiltinModels, speedTest, speedTestHistory, subscribeBuiltinAi } from '../../services/engines/builtinAi.js';
+import { listBuiltinModels, speedTest, speedTestLocal, speedTestHistory, subscribeBuiltinAi } from '../../services/engines/builtinAi.js';
+import { discoverLocalModels } from '../../services/localModels.js';
 
 const TABS = [
   ['open', 'Open models for your PC', Cpu],
@@ -123,8 +124,17 @@ function Frontier() {
   );
 }
 
+function speedSummary(r) {
+  const parts = [`${r.genTps} tokens/s writing`];
+  if (r.promptTps != null) parts.push(`${r.promptTps} reading`);
+  if (r.firstTokenSec != null) parts.push(`first word after ${r.firstTokenSec}s`);
+  if (r.cpuOnly) parts.push('CPU');
+  return parts.join(' · ');
+}
+
 function LocalTest() {
   const [models, setModels] = useState([]);
+  const [runtimes, setRuntimes] = useState([]);
   const [history, setHistory] = useState([]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -133,47 +143,62 @@ function LocalTest() {
     setHistory(await speedTestHistory());
   };
   useEffect(() => { refresh(); return subscribeBuiltinAi(refresh); }, []);
+  useEffect(() => {
+    discoverLocalModels()
+      .then(list => setRuntimes(list.filter(r => r.online && (r.runtime === 'lmstudio' || r.runtime === 'ollama'))))
+      .catch(() => setRuntimes([]));
+  }, []);
 
-  const run = async (id) => {
+  const run = async (id, external) => {
     setBusy(id);
     setError('');
-    try { await speedTest(id); } catch (e) { setError(e.message); } finally { setBusy(''); refresh(); }
+    try { await (external ? speedTestLocal(id) : speedTest(id)); } catch (e) { setError(e.message); } finally { setBusy(''); refresh(); }
   };
 
-  if (!models.length) {
+  const latest = Object.fromEntries([...history].reverse().map(h => [h.modelId, h]));
+  const row = (id, label, external, note = '') => {
+    const r = latest[id];
     return (
-      <div className="text-[12px] text-slate-400 space-y-2">
-        <div>Download a model with the built-in AI, then measure how fast it runs on this PC.</div>
-        <button onClick={() => openGetIt({ builtin: 'gemma-4-e4b' })} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-700 text-white text-[12px]"><Download className="w-3.5 h-3.5" /> Set up the built-in AI</button>
+      <div key={id} className="flex items-center gap-3 p-2 rounded-lg border border-slate-800 text-[12px]">
+        <span className="flex-1 text-white truncate" title={id}>{label}{note && <span className="ml-2 text-[10px] text-slate-500">{note}</span>}</span>
+        {r ? <span className="text-slate-300 font-mono">{speedSummary(r)}</span> : <span className="text-slate-500">Not tested yet</span>}
+        <button onClick={() => run(id, external)} disabled={Boolean(busy)} className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-cyan-800 text-slate-200 disabled:opacity-40">
+          {busy === id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Gauge className="w-3.5 h-3.5" />} {busy === id ? 'Testing…' : r ? 'Test again' : 'Test'}
+        </button>
       </div>
     );
-  }
-  const latest = Object.fromEntries([...history].reverse().map(h => [h.modelId, h]));
+  };
+
   return (
     <div className="space-y-3">
-      <div className="text-[12px] text-slate-400">Each test writes the same 200-word story and reads llama.cpp's own timings. Reading speed is how fast the prompt is taken in; writing speed is how fast the reply comes out (about 5 words a second reads comfortably).</div>
+      <div className="text-[12px] text-slate-400">Each test writes the same 200-word story and reads the runtime's own timings (llama.cpp, LM Studio or Ollama). Writing speed is how fast the reply comes out; about 5 words a second reads comfortably. Other models loaded at the same time share the GPU and slow each other down.</div>
       {error && <div className="text-[12px] text-rose-300">{error}</div>}
+
       <div className="space-y-1.5">
-        {models.map(m => {
-          const r = latest[m.id];
-          return (
-            <div key={m.id} className="flex items-center gap-3 p-2 rounded-lg border border-slate-800 text-[12px]">
-              <span className="flex-1 text-white truncate">{m.id}</span>
-              {r ? (
-                <span className="text-slate-300 font-mono">{r.genTps} tokens/s writing · {r.promptTps} reading{r.cpuOnly ? ' · CPU' : ''}</span>
-              ) : <span className="text-slate-500">Not tested yet</span>}
-              <button onClick={() => run(m.id)} disabled={Boolean(busy)} className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-cyan-800 text-slate-200 disabled:opacity-40">
-                {busy === m.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Gauge className="w-3.5 h-3.5" />} {busy === m.id ? 'Testing…' : r ? 'Test again' : 'Test'}
-              </button>
-            </div>
-          );
-        })}
+        <div className="text-[11px] uppercase tracking-wider text-slate-500">Built-in AI</div>
+        {models.length ? models.map(m => row(m.id, m.id, false)) : (
+          <div className="text-[12px] text-slate-400 flex items-center gap-3">
+            <span>No built-in models downloaded yet.</span>
+            <button onClick={() => openGetIt({ builtin: 'gemma-4-e4b' })} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-700 text-white text-[12px]"><Download className="w-3.5 h-3.5" /> Set up the built-in AI</button>
+          </div>
+        )}
       </div>
+
+      {runtimes.map(rt => (
+        <div key={rt.runtime} className="space-y-1.5">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">{rt.label}</div>
+          {rt.models.length ? rt.models.map(ref => {
+            const loaded = rt.loaded.includes(ref);
+            return row(ref, ref.slice(rt.runtime.length + 1), true, loaded ? '● loaded' : 'loads first, counted in the first-word time');
+          }) : <div className="text-[12px] text-slate-500">No chat models installed.</div>}
+        </div>
+      ))}
+
       {history.length > 0 && (
         <details className="text-[11px] text-slate-400">
           <summary className="cursor-pointer hover:text-slate-200">All results</summary>
           <div className="mt-1 space-y-0.5 font-mono">
-            {history.map(h => <div key={h.at}>{h.at.slice(0, 16).replace('T', ' ')} · {h.modelId} · {h.genTps} t/s writing · {h.promptTps} t/s reading · {h.genTokens} tokens in {h.seconds}s{h.cpuOnly ? ' · CPU only' : ''}</div>)}
+            {history.map(h => <div key={h.at}>{h.at.slice(0, 16).replace('T', ' ')} · {h.modelId} · {speedSummary(h)} · {h.genTokens ?? '?'} tokens in {h.seconds}s</div>)}
           </div>
         </details>
       )}

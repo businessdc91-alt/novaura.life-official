@@ -7,6 +7,7 @@ import { db } from '../database/sovereignDatabase.js';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { admitMeshListing } from './marketplaceListings.js';
 import { admitMeshManuscript } from './meshManuscripts.js';
+import { isMeshName, normalizeName, parseMeshName } from './web/novaNames.js';
 import {
   SOCIAL_LIMITS, signPost as signSocialPost, admitPost as admitSocialPost, signedPostCopy as signedSocialPostCopy,
   signComment as signSocialComment, admitComment as admitSocialComment, insertComment as insertSocialComment,
@@ -473,11 +474,12 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
       const domain = payload?.domain || packet?.payload?.domain;
       const requesterId = packet?.sender_id || payload?.requesterId;
       if (domain && requesterId) {
-        const cleanDomain = domain.replace(/^nova:\/\//, '').replace(/\/$/, '');
+        const cleanDomain = cleanNovaDomain(domain);
         (async () => {
           let found = await db.hosted_sites.where('domain').equals(cleanDomain).first();
           if (!found) found = await db.hosted_sites.get(cleanDomain);
-          if (found) {
+          // Only signed copies leave this node; unsigned drafts stay local.
+          if (found?.publisherSig) {
             sendDirectMeshPacket(requesterId, 'MESH_SITE_RESPONSE', { site: found });
           }
         })().catch(() => {});
@@ -1043,7 +1045,36 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_FOLLOW',
   'MESH_REPOST',
   'MESH_GREETING_CARD',
+  'MESH_PHONE_LOOKUP',
+  'MESH_PHONE_HERE',
+  'MESH_CALL_SIGNAL',
+  'MESH_DOMAIN_CLAIM',
+  'MESH_DOMAIN_RECORD',
+  'MESH_DOMAIN_QUERY',
+  'MESH_DOMAIN_REPLY',
+  'MESH_WEB_SEARCH',
+  'MESH_WEB_RESULTS',
 ]);
+
+// Public by design and built from validated fields (sites, names, search, call
+// setup), so the credential word scan below would only block ordinary words in
+// them: a page that mentions a "secret", a name like vault.nova, SDP from a call.
+const LEAK_SCAN_EXEMPT_TYPES = new Set([
+  'MESH_HOSTED_SITE',
+  'MESH_SITE_RESPONSE',
+  'MESH_CALL_SIGNAL',
+  'MESH_DOMAIN_CLAIM',
+  'MESH_DOMAIN_RECORD',
+  'MESH_DOMAIN_QUERY',
+  'MESH_DOMAIN_REPLY',
+  'MESH_WEB_SEARCH',
+  'MESH_WEB_RESULTS',
+]);
+
+function looksLikeCredentialLeak(type, payload) {
+  if (LEAK_SCAN_EXEMPT_TYPES.has(type)) return false;
+  return /api[_-]?key|vault|secret|private[_-]?key|bearer/i.test(JSON.stringify(payload));
+}
 
 export function broadcastMeshPacket(type, payload) {
   if (!ALLOWED_MESH_PACKET_TYPES.has(type)) {
@@ -1053,8 +1084,7 @@ export function broadcastMeshPacket(type, payload) {
 
   // Deep inspection to guarantee zero credentials or internal documents leak over the mesh
   try {
-    const rawPayload = JSON.stringify(payload);
-    if (/api[_-]?key|vault|secret|private[_-]?key|bearer/i.test(rawPayload)) {
+    if (looksLikeCredentialLeak(type, payload)) {
       console.warn('[ZeroLeakGuard] Blocked potential credential leak across P2P mesh bus.');
       return;
     }
@@ -1105,8 +1135,7 @@ export async function sendDirectMeshPacket(recipientId, type, payload) {
   }
 
   try {
-    const rawPayload = JSON.stringify(payload);
-    if (/api[_-]?key|vault|secret|private[_-]?key|bearer/i.test(rawPayload)) {
+    if (looksLikeCredentialLeak(type, payload)) {
       console.warn('[ZeroLeakGuard] Blocked potential credential leak across direct mesh packet.');
       return false;
     }
@@ -1152,7 +1181,7 @@ export function getLocalIdentity() {
     handle: 'operator',
     displayName: 'Sovereign Operator',
     address: 'operator@nova.node',
-    publicKey: '0x_nova_local_key',
+    publicKey: '', // no key until the operator creates an identity
     bio: 'Local Node Operator',
     avatarColor: '#00f0ff',
   };
@@ -2333,7 +2362,14 @@ export async function publishHostedSite(siteData) {
   const identity = getLocalIdentity();
   const publisherPubkey = String(identity.publicKey || '').replace(/^0x/, '').toLowerCase();
   const priorRecord = (await db.hosted_sites.get(cleanDomain)) || (await db.hosted_sites.where('domain').equals(cleanDomain).first());
-  if (priorRecord?.publisherPubkey && priorRecord.publisherPubkey !== publisherPubkey) {
+  const registered = await registryRecordFor(cleanDomain);
+  if (registered?.status === 'revoked') {
+    throw new Error(`${parseMeshName(cleanDomain).registrable} was revoked by the registry operator and cannot be published.`);
+  }
+  if (registered && registered.owner !== publisherPubkey) {
+    throw new Error(`${parseMeshName(cleanDomain).registrable} is registered to another node. Register a name of your own in Nova Registry.`);
+  }
+  if (!registered && priorRecord?.publisherPubkey && priorRecord.publisherPubkey !== publisherPubkey) {
     throw new Error(`${cleanDomain} is already published by another node and cannot be overwritten. Choose a different domain.`);
   }
   
@@ -2363,7 +2399,7 @@ export async function publishHostedSite(siteData) {
     faction,
     category: siteData.category || (faction === 'aura' ? 'Creative & Neural' : 'Infrastructure & Tools'),
     ownerHandle: siteData.ownerHandle || identity.handle || 'operator',
-    ownerPhone: siteData.ownerPhone || identity.phoneNumber || '+1-700-NOVA-0001',
+    ownerPhone: siteData.ownerPhone || identity.phoneNumber || '',
     ownerNodeId: identity.nodeId || `did:nova:${(identity.publicKey || '').replace(/^0x/, '')}`,
     cid,
     contentHash: hashHex,
@@ -2386,7 +2422,8 @@ export async function publishHostedSite(siteData) {
 // Sites from peers contain HTML/JS. Nothing from the mesh is stored or shown
 // unless it is signed by its publisher, matches its content hash, is bounded in
 // size, and does not take over a domain that someone else already published.
-const NOVA_DOMAIN_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.(nova|aura)$/i;
+// Names: .nova, .aura, .novaura, .catalyst (web/novaNames.js).
+const NOVA_DOMAIN_RE = { test: (d) => isMeshName(d) };
 const MAX_SITE_HTML_CHARS = 512 * 1024;
 const MAX_SITE_CLOCK_SKEW_MS = 10 * 60 * 1000;
 // Portals shipped inside every node across both Nova and Aura factions.
@@ -2396,7 +2433,21 @@ const BUILTIN_NOVA_DOMAINS = new Set([
 ]);
 
 function cleanNovaDomain(raw) {
-  return String(raw || '').trim().replace(/^(nova|aura):\/\//, '').replace(/\/+$/, '');
+  return normalizeName(raw);
+}
+
+/**
+ * The live registry record for the name a site sits under, the revoked record
+ * when the operator took the name back, or null when it is unregistered.
+ * Records in the table were verified against the authority key on arrival.
+ */
+async function registryRecordFor(domain) {
+  const p = parseMeshName(domain);
+  if (!p) return null;
+  const r = await db.domain_records.get(p.registrable).catch(() => null);
+  if (!r) return null;
+  if (r.status === 'revoked') return r;
+  return r.status === 'active' && r.expiresAt > Date.now() ? r : null;
 }
 
 function siteHexToBytes(hex) {
@@ -2456,10 +2507,16 @@ export async function admitRemoteSite(site) {
     );
     if (!signedOk) return null;
 
-    // Ownership: first valid publisher owns the domain (pinned). A built-in or
-    // unsigned local copy only yields to an ally; a signed copy only to its owner.
+    // Ownership: a registered name belongs to its registered owner, whoever
+    // published first. Unregistered names fall back to the first valid
+    // publisher (pinned); a built-in or unsigned local copy only yields to an
+    // ally, a signed copy only to its owner.
     const existing = (await db.hosted_sites.get(domain)) || (await db.hosted_sites.where('domain').equals(domain).first());
-    if (existing?.publisherPubkey) {
+    const registered = await registryRecordFor(domain);
+    if (registered) {
+      if (registered.status === 'revoked' || registered.owner !== pub) return null;
+      if (existing?.publisherPubkey === pub && updatedMs <= (Date.parse(existing.updatedAt || '') || 0)) return null; // replay / rollback
+    } else if (existing?.publisherPubkey) {
       if (existing.publisherPubkey !== pub) return null;
       if (updatedMs <= (Date.parse(existing.updatedAt || '') || 0)) return null; // replay / rollback
     } else if (existing || BUILTIN_NOVA_DOMAINS.has(domain.toLowerCase())) {

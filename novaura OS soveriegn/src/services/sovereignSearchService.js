@@ -144,7 +144,7 @@ class SovereignSearchService {
           title: myId.displayName || 'Primary Operator',
           handle: myId.handle || '@operator',
           address: myId.address || 'operator@nova.node',
-          publicKey: myId.publicKey || 'local-key',
+          publicKey: myId.publicKey || '',
           reputation: 100.0,
           isLocal: true,
           status: 'online',

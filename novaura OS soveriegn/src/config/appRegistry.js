@@ -2,7 +2,7 @@ import { lazy, createElement, useEffect, useState } from 'react';
 import {
   Code2, FolderOpen, Terminal as TerminalIcon, Globe, CreditCard,
   FileText, Layers, Mail, Users, Bot, ShieldCheck, Settings,
-  BookOpen, MonitorCog, Sparkles, PhoneCall, Palette, Bug, Compass
+  BookOpen, MonitorCog, Sparkles, PhoneCall, Palette, Bug, Compass, AtSign
 } from 'lucide-react';
 
 const CybeniBuilderWindow = lazy(() => import('../components/windows/CybeniBuilderWindow.jsx'));
@@ -52,6 +52,7 @@ const FounderOfficeSuiteWindow = lazy(() => import('../components/windows/Founde
 const HoloChessWindow = lazy(() => import('../components/windows/HoloChessWindow.jsx'));
 const GreetingCardWindow = lazy(() => import('../components/windows/GreetingCardWindow.jsx'));
 const ModelBenchmarkWindow = lazy(() => import('../components/windows/ModelBenchmarkWindow.jsx'));
+const NovaRegistryWindow = lazy(() => import('../components/windows/NovaRegistryWindow.jsx'));
 import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy } from 'lucide-react';
 
 
@@ -522,6 +523,16 @@ export const APP_REGISTRY = [
     component: ModelBenchmarkWindow,
     defaultSize: { width: 1180, height: 740 },
   },
+  {
+    id: 'nova_registry',
+    label: 'Nova Registry',
+    category: 'core',
+    icon: AtSign,
+    color: '#22d3ee',
+    title: 'Nova Registry: names for the mesh web (.nova .aura .novaura .catalyst)',
+    component: NovaRegistryWindow,
+    defaultSize: { width: 860, height: 680 },
+  },
 ];
 
 export const APP_MAP = new Map(APP_REGISTRY.map(app => [app.id, app]));
@@ -645,6 +656,9 @@ export function getAppById(id) {
   }
   if (id === 'benchmarks' || id === 'benchmark' || id === 'leaderboard' || id === 'model_benchmarks') {
     return APP_MAP.get('model_benchmarks');
+  }
+  if (id === 'registry' || id === 'domains' || id === 'names' || id === 'tld' || id === 'registrar') {
+    return APP_MAP.get('nova_registry');
   }
   return APP_MAP.get(id);
 }

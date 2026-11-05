@@ -164,7 +164,15 @@ class SovereignDatabase extends Dexie {
       founder_directives: 'id, type, target, authorityLevel, issuedAt, expiresAt',
     });
 
+    // v20 — Mesh web names: operator-signed domain records and registration claims
+    this.version(20).stores({
+      domain_records: 'name, owner, status, expiresAt, updatedAt',
+      domain_claims: 'id, name, owner, direction, status, receivedAt',
+    });
+
     this.identities = this.table('identities');
+    this.domain_records = this.table('domain_records');
+    this.domain_claims = this.table('domain_claims');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
     this.documents = this.table('documents');
@@ -239,7 +247,7 @@ class SovereignDatabase extends Dexie {
             handle: parsed.handle || 'operator',
             displayName: parsed.displayName || 'Sovereign Node Operator',
             address: parsed.address || 'operator@nova.node',
-            publicKey: parsed.publicKey || 'local-ed25519-key',
+            publicKey: parsed.publicKey || '',
             bio: parsed.bio || 'Local Node Operator',
             tier: 'SOVEREIGN_FOUNDER',
             createdAt: parsed.createdAt || new Date().toISOString(),

@@ -22,6 +22,8 @@ import '../services/meshArchiveSync';
 import '../games/relayDuel/relayDuelMesh'; // Relay Duel challenges arrive while the game is closed
 import '../services/holoChessMesh'; // and HoloChess challenges too
 import '../services/greetingCardMesh'; // and greeting cards
+import '../services/web/novaRegistry'; // mesh names: records, claims, the operator
+import '../services/web/meshWebSearch'; // answers peers' Nova Search queries
 import { recordNotification, isDoNotDisturb, markRead } from '../services/notificationCenter';
 import { isTauriApp, popOutApp } from '../services/popoutWindows';
 import { callService, CallState } from '../services/sovereignCallService';
@@ -494,7 +496,7 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
                 Incoming Sovereign Call
               </div>
               <div className="text-sm font-semibold text-white">
-                {incomingCall.remoteNumber || '+1-700-NOVA-XXXX'}
+                {incomingCall.remoteNumber || 'Unknown number'}
               </div>
               <div className="text-[11px] text-slate-400">
                 Peer: @{incomingCall.remoteHandle || 'operator'}
