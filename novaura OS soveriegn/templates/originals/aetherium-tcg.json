@@ -1,133 +1,49 @@
 {
   "id": "aetherium-tcg",
-  "version": "0.1.0-prealpha",
+  "version": "0.2.0-prealpha",
   "title": "Aetherium: Godot trading card game",
   "kind": "code",
   "stage": "pre-alpha prototype",
   "source": "Z:/Aetherium_Master/Aetherium_Project",
   "include": [
     "project.godot",
-    "icon.svg",
-    "icon.svg.import",
     "README.md",
-    "LICENSE",
-    "CardBase.png",
-    "CardBase.png.import",
-    "Deckbox-basic.png",
-    "Deckbox-basic.png.import",
-    "Dragon.png",
-    "Dragon.png.import",
-    "Iconupcsale.png",
-    "Iconupcsale.png.import",
-    "Plus.png",
-    "Plus.png.import",
-    "Screenshot.png",
-    "Screenshot.png.import",
-    "Unreferencelogo_upscale2.png",
-    "Unreferencelogo_upscale2.png.import",
     "Scripts/",
     "Scenes/",
     "Shaders/",
     "Resources/",
-    "Characters/"
+    "Characters/",
+    "Tools/"
   ],
   "exclude": [
     "assets/",
     "addons/",
     "data/"
   ],
-  "rootLicense": "GPL-3.0",
-  "parts": [
-    {
-      "path": "Scripts/",
-      "license": "GPL-3.0",
-      "note": "Game code, built on the CCG Engine Template (GPL-3.0). It stays GPL-3.0: you may sell a game made with it, but you must share that game's source under the GPL, and no royalty applies to this code."
-    },
-    {
-      "path": "Scenes/",
-      "license": "GPL-3.0",
-      "note": "Scenes built on the CCG Engine Template (GPL-3.0)."
-    },
-    {
-      "path": "Shaders/",
-      "license": "GPL-3.0",
-      "note": "Shipped with the GPL-3.0 game code."
-    },
-    {
-      "path": "project.godot",
-      "license": "GPL-3.0",
-      "note": "Project settings from the CCG Engine Template (GPL-3.0)."
-    },
-    {
-      "path": "README.md",
-      "license": "GPL-3.0",
-      "note": "The CCG Engine Template's original README."
-    },
-    {
-      "path": "CardBase.png",
-      "license": "GPL-3.0",
-      "note": "Art from the CCG Engine Template."
-    },
-    {
-      "path": "Deckbox-basic.png",
-      "license": "GPL-3.0",
-      "note": "Art from the CCG Engine Template."
-    },
-    {
-      "path": "Dragon.png",
-      "license": "GPL-3.0",
-      "note": "Art from the CCG Engine Template."
-    },
-    {
-      "path": "Iconupcsale.png",
-      "license": "GPL-3.0",
-      "note": "Art from the CCG Engine Template."
-    },
-    {
-      "path": "Plus.png",
-      "license": "GPL-3.0",
-      "note": "Art from the CCG Engine Template."
-    },
-    {
-      "path": "Screenshot.png",
-      "license": "GPL-3.0",
-      "note": "Screenshot from the CCG Engine Template."
-    },
-    {
-      "path": "Unreferencelogo_upscale2.png",
-      "license": "GPL-3.0",
-      "note": "Art from the CCG Engine Template."
-    },
-    {
-      "path": "icon.svg",
-      "license": "GPL-3.0",
-      "note": "Icon from the CCG Engine Template."
-    }
-  ],
-  "summary": "A Godot 4.6 collectible card game: a main menu, a collection and deck manager, a turn and mana system, 665 card definitions with stats and effects (damage, heal, buff, debuff, life steal, bounce, destroy, draw and more), a card inspector, and an AI opponent that can chat through a local model. The royalty covers Dillan Copeland's Aetherium card content in this template (the 665 card definitions: names, stats, abilities); the game code is GPL-3.0 because it grew out of the open-source CCG Engine Template.",
+  "parts": [],
+  "summary": "A Godot 4.6 collectible card game: duels against a computer opponent (rules-based, or through a local model when one is running), draw, preparation, combat and main phases, mana that grows each turn, stage 2 and 3 evolutions, about 600 playable cards with their abilities (damage, heal, buff, debuff, life steal, bounce, destroy, draw, auras, traps and more), a card inspector, and a deck manager. Aetherium began from the open-source CCG Engine Template; every part of that has since been replaced, so the royalty covers the whole template, code and card content alike.",
   "works": [
-    "Opens and imports in Godot 4.6 with no script errors (checked with Godot 4.6 stable).",
-    "All 665 cards load from Resources/Cards/*.tres and the game boots to the main menu, with blank placeholder faces where the card art goes.",
-    "The turn and mana system, playing and attacking with cards, and the effect resolver come from the CCG Engine Template, extended with Aetherium's effects (damage, heal, buff, debuff, life steal, bounce, destroy, draw and more). Full matches were not played through for this release."
+    "Opens and imports in Godot 4.6 with no script errors, and boots to the main menu (checked with Godot 4.6 stable).",
+    "Two computer players finish full matches on the real board: Tools/smoke_match.tscn runs one headless and prints the result. Six matches of 7 to 17 turns ran clean for this release, each seat winning some.",
+    "All 605 playable cards load, with blank placeholder faces where the card art goes. Turn buffs are taken back exactly at the end of the turn (Tools/rules_check.tscn)."
   ],
   "unfinished": [
-    "Card art, music and the main menu art are not included: cards show a blank placeholder face and the menu plays no music until you add your own (see Not included).",
+    "Card art, music and the main menu's button art are not included: cards show a blank placeholder face and the menu plays no music until you add your own (see Not included).",
     "About a dozen card names come from other games (RuneScape and Pokémon). Rename them before any commercial use.",
-    "Deck editing is partly built (the deck selection code calls its hand-off to the deck builder a stopgap).",
-    "Buffs do not wear off at the end of the turn yet.",
-    "The AI opponent's chat calls Ollama at localhost:11434 with qwen3:4b; using LM Studio needs a small change to Scripts/AI/OllamaClient.gd.",
-    "Balance, rules text and the AI's play have not been tuned or tested at length.",
+    "The deck manager lists, opens, creates, renames and deletes decks, but picking cards into a deck isn't built yet; duels use a generated starter deck.",
+    "The opponent's chat calls Ollama at localhost:11434 with qwen3:4b; using LM Studio needs a small change to Scripts/AI/OllamaClient.gd.",
+    "Balance, rules text and the computer's play have not been tuned at length, and the person at the board has only been tested by hand, not automatically.",
     "No online play and no export presets."
   ],
   "notIncluded": [
-    "Card art (assets/card_textures/, 665 images, about 670 MB), kept for the Aetherium card set. Each card refers to res://assets/card_textures/<name>.png or .jpg: replace the placeholders with art of the same name, or point the cards at your own.",
+    "Card art (assets/card_textures/, about 670 MB), kept for the Aetherium card set. Each card refers to res://assets/card_textures/<name>.png or .jpg: replace the placeholders with art of the same name, or point the cards at your own.",
     "Music (assets/audio/music/): Dillan Copeland's original soundtrack is not part of the template.",
     "Third-party art packs the game used, whose licenses do not allow passing the files on: Free Hologram Interface by Wenrexa (main menu buttons, free on itch.io), Lightning VFX by Frostwindz, and 16x16 effect and bullet sprites. Get your own copies from their authors.",
     "The old JSON card database (data/), which the game no longer uses."
   ],
   "requirements": [
     "Godot 4.6 (standard build, Forward+ renderer)",
-    "Optional: Ollama for the AI opponent's chat"
+    "Optional: Ollama, for the opponent to talk and play through a local model"
   ],
   "openWith": "Open Godot 4.6, choose Import, and pick project.godot in this folder. Godot rebuilds its import cache the first time (a minute or two). Run the project to reach the main menu.",
   "placeholders": [
@@ -157,50 +73,6 @@
         "jpg": "templates/assets/placeholder-card.jpg",
         "jpeg": "templates/assets/placeholder-card.jpg"
       }
-    }
-  ],
-  "replace": [
-    {
-      "path": "Scripts/AI/LLMGameBridge.gd",
-      "pattern": "\\bvar _opp_index\\b",
-      "with": "var opp_index",
-      "note": "a rename that broke the script (opp_index is still used)"
-    },
-    {
-      "path": "Scripts/Effects/AoeDamageEffect.gd",
-      "pattern": "\\bvar _opp_index\\b",
-      "with": "var opp_index",
-      "note": "a rename that broke the script (opp_index is still used)"
-    },
-    {
-      "path": "Scripts/Effects/BounceEffect.gd",
-      "pattern": "\\bvar _opp_index\\b",
-      "with": "var opp_index",
-      "note": "a rename that broke the script (opp_index is still used)"
-    },
-    {
-      "path": "Scripts/Effects/DebuffEffect.gd",
-      "pattern": "\\bvar _opp_index\\b",
-      "with": "var opp_index",
-      "note": "a rename that broke the script (opp_index is still used)"
-    },
-    {
-      "path": "Scripts/Effects/DestroyEffect.gd",
-      "pattern": "\\bvar _opp_index\\b",
-      "with": "var opp_index",
-      "note": "a rename that broke the script (opp_index is still used)"
-    },
-    {
-      "path": "Scripts/Effects/LifeStealEffect.gd",
-      "pattern": "\\bvar _opp_index\\b",
-      "with": "var opp_index",
-      "note": "a rename that broke the script (opp_index is still used)"
-    },
-    {
-      "path": "Scripts/UI/Game/BoardUI.gd",
-      "pattern": "\\bvar _has_attacked\\b",
-      "with": "var has_attacked",
-      "note": "a rename that broke the script (has_attacked is still used)"
     }
   ]
 }
