@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import logoImg from '../assets/novaura-logo.png';
 import studioLogo from '../assets/auraxnova-studios.jpg';
+import originLogo from '../assets/auraxnova-systems.png';
 import { useGraphics, GRAPHICS_LEVELS } from '../contexts/GraphicsContext';
 import './brandSplash.css';
 
@@ -11,7 +12,8 @@ const FADE_MS = 700;
 /**
  * The title card after the boot screen: the NovAura mark as liquid light behind
  * everything, NovAura Systems Inc. and the edition on the left, Aura x Nova Studios
- * on the right, then "See you on the inside." Click or press a key to go on.
+ * on the right, Aura x Nova Systems (the Command prototype it grew from) in the top
+ * corner, then "See you on the inside." Click or press a key to go on.
  */
 export default function BrandSplash({ onComplete }) {
   const { graphicsLevel } = useGraphics();
@@ -66,6 +68,14 @@ export default function BrandSplash({ onComplete }) {
       <div className="nv-vignette" />
 
       <div className="nv-skip-hint">CLICK OR PRESS ENTER</div>
+
+      <div className="nv-origin nv-in" style={at(1.6)}>
+        <img src={originLogo} alt="" className="nv-origin-logo" draggable={false} />
+        <div>
+          <div className="nv-origin-name">Aura x Nova Systems</div>
+          <div className="nv-origin-note">The prototype that started it all</div>
+        </div>
+      </div>
 
       <div className="nv-inside" style={at(4.6)}>See you on the inside.</div>
 

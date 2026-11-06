@@ -303,6 +303,41 @@
   text-shadow: 0 0 14px rgba(217, 70, 239, 0.65);
 }
 
+/* ── Top left: Aura x Nova Systems, the prototype it grew from ───────────── */
+
+.nv-origin {
+  position: absolute;
+  top: 4vh;
+  left: 6vw;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.nv-origin-logo {
+  height: clamp(72px, 11vh, 124px);
+  width: auto;
+  filter: brightness(1.3) saturate(1.2) drop-shadow(0 0 14px rgba(45, 212, 191, 0.45));
+}
+
+.nv-origin-name {
+  font-family: 'Montserrat', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: clamp(13px, 1.25vw, 20px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #99f6e4;
+  text-shadow: 0 0 12px rgba(45, 212, 191, 0.55);
+}
+
+.nv-origin-note {
+  margin-top: 0.35rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: clamp(10px, 0.8vw, 12px);
+  letter-spacing: 0.14em;
+  color: #64748b;
+}
+
 /* ── The send-off ────────────────────────────────────────────────────────── */
 
 .nv-inside {
