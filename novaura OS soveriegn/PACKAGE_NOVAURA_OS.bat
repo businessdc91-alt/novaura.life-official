@@ -29,7 +29,8 @@ echo [1] Standalone Binary:
 echo     "%~dp0src-tauri\target\release\app.exe"
 echo.
 echo [2] NSIS Windows Setup Installer:
-echo     "%~dp0src-tauri\target\release\bundle\nsis\Novaura Sovereign OS_1.0.0_x64-setup.exe"
+for /f "delims=" %%F in ('dir /b /o:d "%~dp0src-tauri\target\release\bundle\nsis\Novaura Sovereign OS_*_x64-setup.exe" 2^>nul') do set "INSTALLER=%%F"
+echo     "%~dp0src-tauri\target\release\bundle\nsis\!INSTALLER!"
 echo.
 echo Opening output directory...
 explorer.exe "%~dp0src-tauri\target\release\bundle\nsis"

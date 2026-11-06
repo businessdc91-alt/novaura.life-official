@@ -3,16 +3,19 @@ setlocal enabledelayedexpansion
 title Novaura Sovereign OS - Setup Installer
 
 cd /d "%~dp0"
-set "INSTALLER=%~dp0src-tauri\target\release\bundle\nsis\Novaura Sovereign OS_1.0.0_x64-setup.exe"
+set "NSIS=%~dp0src-tauri\target\release\bundle\nsis"
+set "INSTALLER="
+rem Every build has its own version in the installer's name; take the newest.
+for /f "delims=" %%F in ('dir /b /o:d "%NSIS%\Novaura Sovereign OS_*_x64-setup.exe" 2^>nul') do set "INSTALLER=%NSIS%\%%F"
 
-if exist "%INSTALLER%" (
-    echo [*] Launching Novaura Sovereign OS Setup Installer...
-    start "" "%INSTALLER%"
+if defined INSTALLER (
+    echo [*] Launching "!INSTALLER!"...
+    start "" "!INSTALLER!"
     exit /b 0
 )
 
-echo [!] Setup installer not found at:
-echo     "%INSTALLER%"
+echo [!] No setup installer found in:
+echo     "%NSIS%"
 echo.
 echo [*] Building package now...
 call "%~dp0PACKAGE_NOVAURA_OS.bat"

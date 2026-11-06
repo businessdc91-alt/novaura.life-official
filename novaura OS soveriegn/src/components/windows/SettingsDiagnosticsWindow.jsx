@@ -13,6 +13,7 @@ import { getNativeSystemInfo, probeLocalAi } from '../../services/nativeService.
 import { submitBetaFeedback, syncPendingFeedback, countPendingFeedback } from '../../services/betaFeedbackService.js';
 import { evaluateHostHardware, HARDWARE_TIERS } from '../../services/hardwareSpecService.js';
 import { interAppSecurityBroker } from '../../kernel/InterAppSecurityBroker.js';
+import { APP_VERSION, BUILD_TIME, buildDateLabel } from '../../config/buildInfo.js';
 
 export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
   const { kernel } = useKernel();
@@ -246,7 +247,8 @@ export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
 
       const bundle = {
         app: 'NovAura Sovereign OS',
-        version: '1.0.0-BETA',
+        version: `${APP_VERSION}-BETA`,
+        builtAt: BUILD_TIME,
         exportedAt: new Date().toISOString(),
         hostSystem: nativeSys || { os: 'windows', arch: 'x86_64' },
         hardwareAudit: hardwareAudit || null,
@@ -276,7 +278,8 @@ export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
   };
 
   const handleCopyBugReportMarkdown = () => {
-    const md = `### NovAura Sovereign OS — Beta v1.0 Bug Report
+    const md = `### NovAura Sovereign OS — Beta v${APP_VERSION} Bug Report
+**Build:** v${APP_VERSION}, built ${buildDateLabel()}
 **Title:** ${betaForm.title || 'Untitled issue'}
 **Category:** ${betaForm.category}
 **Severity:** ${betaForm.severity}
@@ -434,7 +437,7 @@ ${betaForm.description || 'No steps provided.'}
               <span>Beta & Diagnostics</span>
             </div>
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/25 text-cyan-300 font-bold border border-cyan-500/40">
-              v1.0
+              v{APP_VERSION}
             </span>
           </button>
         </nav>
@@ -886,9 +889,12 @@ ${betaForm.description || 'No steps provided.'}
                   <Bug className="w-4 h-4 text-cyan-400" />
                   <span>Beta Testing & Diagnostic Command Deck</span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono font-bold">
-                    v1.0 BETA
+                    v{APP_VERSION} BETA
                   </span>
                 </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  This build: v{APP_VERSION}, built {buildDateLabel()}.
+                </p>
                 <p className="text-xs text-slate-400 mt-0.5">
                   Real-time host telemetry, local AI port latency meters, 1-click diagnostic bundles, and state hygiene tools for external beta testers.
                 </p>

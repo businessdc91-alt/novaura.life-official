@@ -9,7 +9,10 @@
   Usage:
     powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode check
     powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode dev
-    powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode build [-Bundles nsis|msi|none] [-DebugBuild]
+    powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode build [-Bundles nsis|msi|none] [-DebugBuild] [-KeepVersion]
+
+  Every build raises the patch version in src-tauri\tauri.conf.json by one (1.0.1, 1.0.2, ...),
+  and only the newest installer is kept, so an old installer can't be run by mistake.
 #>
 param(
   [ValidateSet('check', 'dev', 'build')]
@@ -18,7 +21,9 @@ param(
   [switch]$DebugBuild,
   [string]$DriveLetter = 'N:',
   # Close a running Sovereign instance if its app.exe is locked during copy-back.
-  [switch]$KillRunning
+  [switch]$KillRunning,
+  # Rebuild under the current version number instead of raising it.
+  [switch]$KeepVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,6 +77,27 @@ if ($Mode -eq 'build') {
   }
 }
 
+# ---- Version: one number per build -------------------------------------------
+# The app shows it in the top bar (src/config/buildInfo.js) and the installer carries it in its name.
+$ConfPath = Join-Path $ProjectRoot 'src-tauri\tauri.conf.json'
+$confText = [IO.File]::ReadAllText($ConfPath)
+$versionMatch = [regex]::Match($confText, '"version":\s*"(\d+)\.(\d+)\.(\d+)"')
+if (-not $versionMatch.Success) { throw "No x.y.z version found in $ConfPath" }
+$Version = '{0}.{1}.{2}' -f $versionMatch.Groups[1].Value, $versionMatch.Groups[2].Value, $versionMatch.Groups[3].Value
+if ($Mode -eq 'build' -and -not $KeepVersion) {
+  $Version = '{0}.{1}.{2}' -f $versionMatch.Groups[1].Value, $versionMatch.Groups[2].Value, ([int]$versionMatch.Groups[3].Value + 1)
+  $confText = $confText.Substring(0, $versionMatch.Index) + "`"version`": `"$Version`"" + $confText.Substring($versionMatch.Index + $versionMatch.Length)
+  [IO.File]::WriteAllText($ConfPath, $confText, (New-Object System.Text.UTF8Encoding $false))
+}
+if ($Mode -eq 'build') { Write-Host "Building Novaura Sovereign OS $Version" -ForegroundColor Cyan }
+
+# Installers from earlier builds, which would otherwise pile up beside the new one.
+function Remove-OlderInstallers([string]$NsisDir) {
+  Get-ChildItem $NsisDir -Filter '*_x64-setup.exe*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike "*_$($Version)_x64-setup.exe*" } |
+    Remove-Item -Force
+}
+
 Push-Location "$DriveLetter\"
 try {
   switch ($Mode) {
@@ -117,7 +143,9 @@ if ($Mode -eq 'build') {
     }
   }
   if (Test-Path (Join-Path $LocalTargetDir "$buildProfile\bundle")) {
+    Remove-OlderInstallers (Join-Path $LocalTargetDir "$buildProfile\bundle\nsis")
     Copy-Item -Path (Join-Path $LocalTargetDir "$buildProfile\bundle") -Destination $destRelease -Recurse -Force
+    Remove-OlderInstallers (Join-Path $destRelease 'bundle\nsis')
   }
 
   Write-Host ""

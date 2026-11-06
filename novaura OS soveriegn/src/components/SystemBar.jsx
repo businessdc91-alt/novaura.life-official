@@ -9,6 +9,7 @@ import { getAppById } from '../config/appRegistry.js';
 import { getPeerCount } from '../services/sovereignMesh.js';
 import { getEngineStatus, subscribeEngineStatus } from '../services/engines/comfyEngine.js';
 import NotificationBell from './NotificationBell.jsx';
+import { APP_VERSION, buildDateLabel } from '../config/buildInfo.js';
 
 const ENGINE_LABELS = { starting: 'AI STARTING', loading: 'AI LOADING', ready: 'AI READY', error: 'AI ENGINE' };
 
@@ -73,10 +74,10 @@ export default function SystemBar({
             openApp?.('settings');
           }}
           className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[10px] font-mono font-bold tracking-wider transition-colors cursor-pointer"
-          title="NovAura Sovereign OS — Beta v1.0 (Click to open Beta Diagnostics & Feedback)"
+          title={`NovAura Sovereign OS — Beta v${APP_VERSION}, built ${buildDateLabel()} (Click to open Beta Diagnostics & Feedback)`}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-          <span>BETA v1.0</span>
+          <span>BETA v{APP_VERSION}</span>
         </button>
 
         {/* Global Quick Command Input */}

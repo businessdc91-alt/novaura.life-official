@@ -17,8 +17,8 @@
   With -HostingDir, the files are also copied into that folder (for example a
   local copy of the web root you sync to the relay VPS).
 
-  Remember to bump "version" in src-tauri\tauri.conf.json before each release;
-  installed copies only update when the feed version is higher than theirs.
+  Installed copies only update when the feed version is higher than theirs; every
+  build (scripts\tauri-gnu.ps1) raises "version" in src-tauri\tauri.conf.json by one.
 
   Usage:
     powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1 -Notes "Fixes mail delivery"
