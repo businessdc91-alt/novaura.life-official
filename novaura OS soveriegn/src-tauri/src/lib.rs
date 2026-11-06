@@ -5,6 +5,8 @@ pub mod forge;
 pub mod mesh;
 pub mod preview;
 pub mod templates;
+mod password;
+pub mod profiles;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -333,7 +335,7 @@ fn verify_native_license(key: String) -> LicenseVerification {
 
 #[tauri::command]
 fn save_sovereign_file(filename: String, content: String) -> Result<String, String> {
-    let mut path = get_app_data_dir();
+    let mut path = profiles::data_dir();
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     // Sanitize filename
     let clean_name: String = filename
@@ -348,7 +350,7 @@ fn save_sovereign_file(filename: String, content: String) -> Result<String, Stri
 
 #[tauri::command]
 fn read_sovereign_file(filename: String) -> Result<String, String> {
-    let mut path = get_app_data_dir();
+    let mut path = profiles::data_dir();
     let clean_name: String = filename
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
@@ -561,7 +563,8 @@ fn open_vault_payload(stored: String) -> Result<String, String> {
 
 #[tauri::command]
 fn sync_vault_state(filename: String, payload: String) -> Result<bool, String> {
-    let mut path = get_app_data_dir();
+    // Per profile: a new profile's empty database must never rehydrate from someone else's mirror.
+    let mut path = profiles::data_dir();
     path.push("vault");
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     let clean_name: String = filename
@@ -579,7 +582,7 @@ fn sync_vault_state(filename: String, payload: String) -> Result<bool, String> {
 
 #[tauri::command]
 fn load_vault_state(filename: String) -> Result<Option<String>, String> {
-    let mut path = get_app_data_dir();
+    let mut path = profiles::data_dir();
     path.push("vault");
     let clean_name: String = filename
         .chars()
@@ -765,7 +768,12 @@ fn clean_user_temp_cache() -> Result<u64, String> {
     Ok(deleted_bytes)
 }
 
+/// Documents\NovauraSovereign for the active profile (profiles.rs gives others a subfolder).
 fn get_documents_dir() -> PathBuf {
+    profiles::documents_dir(get_documents_dir_for_main())
+}
+
+fn get_documents_dir_for_main() -> PathBuf {
     if let Ok(userprofile) = std::env::var("USERPROFILE") {
         let mut p = PathBuf::from(userprofile);
         p.push("Documents");
@@ -1611,6 +1619,8 @@ async fn get_native_hardware_spec() -> Result<NativeHardwareSpec, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First, before any window: which profile's data this process opens.
+    profiles::init_from_args();
     let node_id = get_hardware_fingerprint();
     let node_name = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
@@ -1706,6 +1716,15 @@ pub fn run() {
             templates::template_prepare_dir,
             templates::template_write_file,
             templates::template_open_dir,
+            profiles::profiles_state,
+            profiles::profile_create,
+            profiles::profile_update,
+            profiles::profile_set_password,
+            profiles::profile_remove,
+            profiles::profile_enter,
+            profiles::profile_switch,
+            profiles::autostart_get,
+            profiles::autostart_set,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

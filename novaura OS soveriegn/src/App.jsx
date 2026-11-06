@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import BootSplash from './components/BootSplash';
+import BrandSplash from './components/BrandSplash';
+import ProfilePicker from './components/ProfilePicker';
 import SovereignActivationGate from './components/SovereignActivationGate';
 import SovereignDesktop from './components/SovereignDesktop';
 import UpdateNotifier from './components/UpdateNotifier';
 import { getSavedKeyRecord, clearKeyRecord } from './services/sovereignAuth';
 import { verifyNativeLicense } from './services/nativeService';
+import { profilesAvailable, getProfilesState } from './services/profiles';
 import { KernelProvider } from './kernel/KernelProvider';
 import { GraphicsProvider } from './contexts/GraphicsContext';
 import { KernelErrorBoundary } from './kernel/KernelErrorBoundary';
@@ -23,10 +26,24 @@ const OPEN_BETA_RECORD = Object.freeze({
   isOpenBeta: true,
 });
 
+// Startup: boot screen → title card → profile sign-in → desktop. A restart into a
+// chosen profile goes straight to the desktop; "Switch profile" straight to sign-in.
 function AppContent() {
-  const [bootCompleted, setBootCompleted] = useState(false);
+  const [stage, setStage] = useState(() => (profilesAvailable() ? 'checking' : 'boot'));
+  const [canPickProfile, setCanPickProfile] = useState(false);
   const [authRecord, setAuthRecord] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const bootCompleted = stage === 'desktop';
+
+  useEffect(() => {
+    if (!profilesAvailable()) return;
+    getProfilesState()
+      .then((state) => {
+        setCanPickProfile(true);
+        setStage(state.chosen ? 'desktop' : state.choose ? 'profiles' : 'boot');
+      })
+      .catch(() => setStage('boot'));
+  }, []);
 
   useEffect(() => {
     if (OPEN_BETA) {
@@ -72,10 +89,10 @@ function AppContent() {
 
   return (
     <div className="sovereign-app-container">
-      {/* 1. First Boot Splash Sequence */}
-      {!bootCompleted && (
-        <BootSplash onComplete={() => setBootCompleted(true)} />
-      )}
+      {/* 1. Boot screen, title card and profile sign-in */}
+      {stage === 'boot' && <BootSplash onComplete={() => setStage('brand')} />}
+      {stage === 'brand' && <BrandSplash onComplete={() => setStage(canPickProfile ? 'profiles' : 'desktop')} />}
+      {stage === 'profiles' && <ProfilePicker onEntered={() => setStage('desktop')} />}
 
       {/* 2. Cryptographic Activation Gate (Blocks if no valid offline key) */}
       {bootCompleted && !authRecord && !checkingAuth && (

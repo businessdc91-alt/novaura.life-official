@@ -9,6 +9,7 @@ import { getAppById } from '../config/appRegistry.js';
 import { getPeerCount } from '../services/sovereignMesh.js';
 import { getEngineStatus, subscribeEngineStatus } from '../services/engines/comfyEngine.js';
 import NotificationBell from './NotificationBell.jsx';
+import ProfileChip from './ProfileChip.jsx';
 import { APP_VERSION, buildDateLabel } from '../config/buildInfo.js';
 
 const ENGINE_LABELS = { starting: 'AI STARTING', loading: 'AI LOADING', ready: 'AI READY', error: 'AI ENGINE' };
@@ -235,6 +236,9 @@ export default function SystemBar({
           <Clock className="w-3.5 h-3.5 text-slate-500" />
           <span>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
+
+        {/* Signed-in profile and "Switch profile" */}
+        <ProfileChip />
 
         {/* Personalization & Themes */}
         <button

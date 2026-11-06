@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Novaura Sovereign OS",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "identifier": "life.novaura.sovereign",
   "build": {
     "frontendDist": "../dist",
