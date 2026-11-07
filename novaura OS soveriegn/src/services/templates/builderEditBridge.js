@@ -49,8 +49,8 @@ export function applyBuilderEdit(html, key, innerHtml) {
   return body.innerHTML;
 }
 
-// Runs inside the preview only. Photos are scaled to 1024 px and stored as
-// WebP, so a page with several stays under the mesh's 512 KB site limit.
+// Runs inside the preview only. Photos are scaled to 2560 px and stored as
+// WebP, so a page with several stays inside one mesh packet (meshLimits.js).
 export const EDIT_BRIDGE_SCRIPT = `<script>(function () {
   function send(key, html) { parent.postMessage({ novauraBuilderEdit: 1, key: key, html: html }, '*'); }
   var timers = {};
@@ -60,13 +60,13 @@ export const EDIT_BRIDGE_SCRIPT = `<script>(function () {
     var url = URL.createObjectURL(file);
     var img = new Image();
     img.onload = function () {
-      var s = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight));
+      var s = Math.min(1, 2560 / Math.max(img.naturalWidth, img.naturalHeight));
       var c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(img.naturalWidth * s));
       c.height = Math.max(1, Math.round(img.naturalHeight * s));
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      el.innerHTML = '<img src="' + c.toDataURL('image/webp', 0.82) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;" />';
+      el.innerHTML = '<img src="' + c.toDataURL('image/webp', 0.9) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;" />';
       send(el.dataset.nb, el.innerHTML);
     };
     img.onerror = function () { URL.revokeObjectURL(url); };

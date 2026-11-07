@@ -7,6 +7,7 @@ pub mod preview;
 pub mod templates;
 mod password;
 pub mod profiles;
+mod transfers;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -1002,6 +1003,64 @@ fn read_native_project_files(target_dir: Option<String>) -> Result<String, Strin
     serde_json::to_string(&results).map_err(|e| e.to_string())
 }
 
+// ── Files received over the mesh (transfers.rs) ──────────────────────────────
+// Pieces arrive decrypted from meshTransfers.js and go straight to disk, so a
+// transfer of any size never sits in memory. Disk work runs off the async threads.
+
+/// Documents\NovauraSovereign\Received for the active profile.
+fn received_dir() -> PathBuf {
+    get_documents_dir().join("Received")
+}
+
+async fn blocking<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(job).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn transfer_recv_open(id: String, name: String, size: u64) -> Result<u64, String> {
+    let dir = received_dir();
+    blocking(move || transfers::open(&dir, &id, &name, size)).await
+}
+
+/// One piece as raw bytes (no base64 over IPC); the transfer id and offset come
+/// as `x-transfer-id` and `x-offset` headers.
+#[tauri::command]
+async fn transfer_recv_write(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("A piece of the file must be sent as raw bytes.".to_string());
+    };
+    let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let id = header("x-transfer-id").ok_or("Missing transfer id.")?;
+    let offset: u64 = header("x-offset").and_then(|v| v.parse().ok()).ok_or("Missing offset.")?;
+    let bytes = bytes.clone();
+    blocking(move || transfers::write(&id, offset, &bytes)).await
+}
+
+#[tauri::command]
+async fn transfer_recv_finish(id: String, sha256: String) -> Result<String, String> {
+    blocking(move || transfers::finish(&id, &sha256).map(|p| p.to_string_lossy().to_string())).await
+}
+
+#[tauri::command]
+async fn transfer_recv_cancel(id: String) -> Result<(), String> {
+    let dir = received_dir();
+    blocking(move || transfers::cancel(&dir, &id)).await
+}
+
+/// Opens Explorer on a received file (only files inside the received folder).
+#[tauri::command]
+fn transfer_reveal(path: Option<String>) -> Result<(), String> {
+    let dir = received_dir();
+    let _ = fs::create_dir_all(&dir);
+    let mut cmd = std::process::Command::new("explorer");
+    match path.map(PathBuf::from) {
+        Some(p) if transfers::is_inside(&dir, &p) => cmd.arg(format!("/select,{}", p.display())),
+        Some(_) => return Err("That file is not in the received folder.".to_string()),
+        None => cmd.arg(dir.as_os_str()),
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn open_native_sync_folder(path: Option<String>) -> Result<bool, String> {
     let target = resolve_safe_sync_root(path)?;
@@ -1674,6 +1733,11 @@ pub fn run() {
             sync_native_project_files,
             read_native_project_files,
             open_native_sync_folder,
+            transfer_recv_open,
+            transfer_recv_write,
+            transfer_recv_finish,
+            transfer_recv_cancel,
+            transfer_reveal,
             mesh_get_status,
             mesh_broadcast_packet,
             mesh_send_direct_packet,

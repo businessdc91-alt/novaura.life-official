@@ -22,6 +22,7 @@ import '../services/meshArchiveSync';
 import '../games/relayDuel/relayDuelMesh'; // Relay Duel challenges arrive while the game is closed
 import '../services/holoChessMesh'; // and HoloChess challenges too
 import '../services/greetingCardMesh'; // and greeting cards
+import '../services/meshTransfers'; // and file offers, which wait for the user to accept
 import '../services/web/novaRegistry'; // mesh names: records, claims, the operator
 import '../services/web/meshWebSearch'; // answers peers' Nova Search queries
 import '../services/templates/templateLibrary'; // template license acceptances, sent and received

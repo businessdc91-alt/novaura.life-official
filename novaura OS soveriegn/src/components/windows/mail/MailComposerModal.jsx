@@ -6,6 +6,7 @@ import {
 import { db } from '../../../database/sovereignDatabase.js';
 import { resolveRecipientPublicKey, getConnectedPeers, MAX_MAIL_ATTACHMENT_BYTES } from '../../../services/sovereignMesh.js';
 import { polishMailDraft } from '../../../services/mailAiService.js';
+import { formatBytes } from '../../../config/meshLimits.js';
 
 export default function MailComposerModal({
   isOpen,
@@ -112,7 +113,7 @@ export default function MailComposerModal({
     const adding = Array.from(files).reduce((n, f) => n + f.size, 0);
     e.target.value = '';
     if (already + adding > MAX_MAIL_ATTACHMENT_BYTES) {
-      setNotice(`Attachments are limited to ${Math.round(MAX_MAIL_ATTACHMENT_BYTES / 1024)} KB in total for now (mail goes over the mesh in one packet). Share larger files with Files → Send to peer.`);
+      setNotice(`Mail attachments are limited to ${formatBytes(MAX_MAIL_ATTACHMENT_BYTES)} in total (mail goes over the mesh in one packet). Send bigger files from Sovereign Network → Transfers, which has no size limit.`);
       return;
     }
     setNotice('');

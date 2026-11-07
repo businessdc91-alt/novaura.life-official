@@ -67,6 +67,14 @@ journalctl -u coturn -f            # TURN sessions
 
 The relay's startup lines say whether TURN logins are on (`TURN credentials: turn:...`) and how many listings the archive holds (`Listing archive: N stored in /var/lib/novaura`).
 
+## Sizes and memory
+
+One packet can be up to 16 MB. Files of any size (multi-GB projects) travel as a series of 4 MB pieces, so there is no limit on the total. A broadcast keeps one copy in memory however many people it goes to.
+
+Every packet the relay is holding (being read, or waiting for a slow receiver) counts against one memory budget, 1536 MB by default. On a machine with more RAM, raise it in `/etc/novaura/relay.env`, for example `NOVAURA_RELAY_MEMORY_MB=4096`, then `sudo systemctl restart novaura-relay`. When the budget is in use, senders wait instead of losing packets.
+
+Each connection can send 64 MB at once and then 16 MB per second; past that, the relay reads more slowly (the sender's upload waits) rather than dropping anything.
+
 ## Files on the server
 
 | Path | What |

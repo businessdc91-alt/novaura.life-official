@@ -15,7 +15,9 @@ use std::path::PathBuf;
 
 /// Packet types the relay keeps for late joiners.
 pub const ARCHIVED_TYPES: &[&str] = &["MESH_MARKETPLACE_LISTING"];
-pub const MAX_ENTRY_BYTES: usize = 16 * 1024;
+pub const MAX_ENTRY_BYTES: usize = 1024 * 1024;
+/// All entries together (they are held in memory).
+pub const MAX_TOTAL_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 5000;
 pub const MAX_ENTRIES_PER_OWNER: usize = 200;
 const MAX_FUTURE_SKEW_MS: u64 = 5 * 60 * 1000;
@@ -34,6 +36,8 @@ pub struct Entry {
 
 pub struct Archive {
     entries: HashMap<String, Entry>,
+    sizes: HashMap<String, usize>,
+    total_bytes: usize,
     owner_counts: HashMap<String, usize>,
     last_archived_ms: u64,
     file: Option<PathBuf>,
@@ -55,6 +59,8 @@ impl Archive {
     pub fn open(dir: Option<PathBuf>) -> Self {
         let mut archive = Self {
             entries: HashMap::new(),
+            sizes: HashMap::new(),
+            total_bytes: 0,
             owner_counts: HashMap::new(),
             last_archived_ms: 0,
             file: dir.map(|d| d.join(FILE_NAME)),
@@ -97,6 +103,15 @@ impl Archive {
             Some(_) => {}
             None => *self.owner_counts.entry(entry.owner.clone()).or_insert(0) += 1,
         }
+        let size = serde_json::to_string(&entry.packet).map(|s| s.len()).unwrap_or(0);
+        self.put(entry, size);
+    }
+
+    fn put(&mut self, entry: Entry, size: usize) {
+        if let Some(old) = self.sizes.insert(entry.key.clone(), size) {
+            self.total_bytes -= old;
+        }
+        self.total_bytes += size;
         self.entries.insert(entry.key.clone(), entry);
     }
 
@@ -131,6 +146,10 @@ impl Archive {
                 }
             }
         }
+        let replaced = self.sizes.get(&key).copied().unwrap_or(0);
+        if self.total_bytes - replaced + raw_len > MAX_TOTAL_BYTES {
+            return Err("archive full");
+        }
 
         self.last_archived_ms = now_ms.max(self.last_archived_ms + 1);
         let entry = Entry {
@@ -154,7 +173,7 @@ impl Archive {
         if !self.entries.contains_key(&key) {
             *self.owner_counts.entry(owner.to_string()).or_insert(0) += 1;
         }
-        self.entries.insert(key, entry);
+        self.put(entry, raw_len);
         Ok(())
     }
 

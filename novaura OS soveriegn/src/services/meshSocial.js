@@ -11,6 +11,7 @@
 // No I/O here (sovereignMesh.js stores and sends), so the rules are unit tested.
 
 import { ed25519 } from '@noble/curves/ed25519.js';
+import { MESH_PAYLOAD_BYTES } from '../config/meshLimits.js';
 
 export const SOCIAL_LIMITS = {
   title: 300,
@@ -20,7 +21,7 @@ export const SOCIAL_LIMITS = {
   name: 60,
   handle: 40,
   mediaUrl: 2048,
-  inlineImageChars: 40000,  // a data: image (packets over the relay are at most 64 KB)
+  inlineImageChars: 12 * 1024 * 1024, // a data: image (about 9 MB); a post must still fit one packet
   gallery: 6,
   chapters: 30,
   commentsPerPost: 300,
@@ -31,7 +32,8 @@ export const SOCIAL_LIMITS = {
   storiesPerAuthor: 20,
   storyLifetimeMs: 24 * 60 * 60 * 1000,
   clockSkewMs: 5 * 60 * 1000,
-  packetBudget: 56000,      // serialized size kept under the relay's 64 KB frame
+  packetBudget: MESH_PAYLOAD_BYTES, // one post, story or sync batch per mesh packet
+  syncBytes: 64 * 1024 * 1024,      // one feed/stories sync answer, newest first
 };
 
 export const POST_TYPES = ['wall', 'reddit', 'video', 'image', 'link'];
@@ -367,17 +369,23 @@ export function overflowIds(items, { perAuthor, total, timeKey = 'timestamp' }) 
   return drop;
 }
 
-/** Splits items into batches whose JSON stays under the packet budget (oversized single items are skipped). */
-export function packetBatches(items, budget = SOCIAL_LIMITS.packetBudget) {
+/**
+ * Splits items into batches whose JSON stays under the packet budget (oversized
+ * single items are skipped), stopping once `total` bytes are batched.
+ */
+export function packetBatches(items, budget = SOCIAL_LIMITS.packetBudget, total = Infinity) {
   const batches = [];
   let current = [];
   let size = 0;
+  let all = 0;
   for (const it of items) {
     const n = JSON.stringify(it).length + 1;
     if (n > budget) continue;
+    if (all + n > total) break;
     if (size + n > budget && current.length) { batches.push(current); current = []; size = 0; }
     current.push(it);
     size += n;
+    all += n;
   }
   if (current.length) batches.push(current);
   return batches;

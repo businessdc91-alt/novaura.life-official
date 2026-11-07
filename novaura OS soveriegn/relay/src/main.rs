@@ -1,7 +1,8 @@
 // novaura_relay.rs — Headless Sovereign WAN Relay, Room Roster & NAT Hole-Punching Server
 // Fortified Production Grade Architecture:
 // - Non-blocking asynchronous bounded queues per session (eliminates head-of-line blocking DoS)
-// - Bounded line reading (strict 64KB cap to prevent memory exhaustion)
+// - Packets up to 16 MB (files of any size travel in chunks); every buffered byte
+//   counts against one memory budget, and a broadcast shares one copy between recipients
 // - Connection concurrency limits (global max + per-IP ceiling)
 // - Room capacity caps & token-bucket rate limiting
 // - Socket-derived WAN IP enforcement (anti-reflection & peer poisoning defense)
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -27,14 +28,21 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 
 // ---- Hardened Limits & Operational Parameters -------------------------------
-pub const MAX_LINE_BYTES: usize = 65536;             // 64 KB per frame ceiling
+pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;  // 16 MB per packet; files of any size go in chunks
 pub const MAX_GLOBAL_CONNS: usize = 2048;            // Global server connection cap
 pub const MAX_CONNS_PER_IP: usize = 4;               // Max sockets per remote IP
 pub const MAX_ROOM_PEERS: usize = 128;               // Max members per swarm room
 pub const RATE_LIMIT_BURST: u32 = 30;                // Max burst packet allowance
 pub const RATE_LIMIT_REFILL_PER_SEC: f64 = 15.0;     // Token refill rate per second
+pub const BYTE_RATE_BURST: f64 = 64.0 * 1024.0 * 1024.0;  // Bytes a socket may send at once...
+pub const BYTE_RATE_PER_SEC: f64 = 16.0 * 1024.0 * 1024.0; // ...then per second (reading pauses; nothing is dropped)
 pub const CLIENT_QUEUE_CAPACITY: usize = 128;        // Bounded outbound mpsc capacity
-pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;        // Outbound socket write timeout
+pub const CLIENT_QUEUE_BYTES: usize = 96 * 1024 * 1024;   // Outbound backlog per socket before packets to it are dropped
+pub const REPLAY_BACKLOG_BYTES: usize = 8 * 1024 * 1024;  // An archive replay waits while the socket has this much queued
+pub const DEFAULT_MEMORY_BUDGET_MB: usize = 1536;    // All buffered packet bytes at once (NOVAURA_RELAY_MEMORY_MB)
+pub const MEMORY_WAIT_SECS: u64 = 30;                // A reader waits this long for budget before giving up
+pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;        // Outbound socket write timeout, plus the time...
+pub const MIN_RECEIVE_BYTES_PER_SEC: u64 = 64 * 1024; // ...a receiver this slow needs for the packet
 pub const DEFAULT_TURN_TTL_SECS: u64 = 86_400;       // TURN credential lifetime
 pub const ARCHIVE_SYNC_INTERVAL_MS: u64 = 30_000;    // Min gap between catch-up syncs per socket
 
@@ -81,13 +89,179 @@ impl TokenBucket {
     }
 }
 
+/// Bytes per socket: a burst, then a steady rate. Over it the reader pauses, so
+/// TCP slows the sender down instead of the relay dropping its packets.
+struct ByteBucket {
+    tokens: f64,
+    last_update_ms: u64,
+}
+
+impl ByteBucket {
+    fn new() -> Self {
+        Self { tokens: BYTE_RATE_BURST, last_update_ms: current_timestamp_ms() }
+    }
+
+    /// Charges `n` bytes and returns how long to pause before reading on.
+    fn take(&mut self, n: usize) -> Duration {
+        let now = current_timestamp_ms();
+        let elapsed_sec = now.saturating_sub(self.last_update_ms) as f64 / 1000.0;
+        self.last_update_ms = now;
+        self.tokens = (self.tokens + elapsed_sec * BYTE_RATE_PER_SEC).min(BYTE_RATE_BURST) - n as f64;
+        if self.tokens >= 0.0 {
+            Duration::ZERO
+        } else {
+            Duration::from_secs_f64(-self.tokens / BYTE_RATE_PER_SEC)
+        }
+    }
+}
+
+/// Every packet byte the relay holds (lines being read, packets waiting in
+/// queues) counts against one budget, so big packets can't exhaust memory.
+struct MemoryBudget {
+    used: AtomicUsize,
+    limit: usize,
+}
+
+impl MemoryBudget {
+    fn new(limit: usize) -> Self {
+        Self { used: AtomicUsize::new(0), limit }
+    }
+
+    fn from_env() -> Self {
+        let mb = std::env::var("NOVAURA_RELAY_MEMORY_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&mb| mb >= 64)
+            .unwrap_or(DEFAULT_MEMORY_BUDGET_MB);
+        Self::new(mb * 1024 * 1024)
+    }
+
+    fn try_reserve(&self, n: usize) -> bool {
+        let mut cur = self.used.load(Ordering::Relaxed);
+        loop {
+            if cur + n > self.limit {
+                return false;
+            }
+            match self.used.compare_exchange_weak(cur, cur + n, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    fn release(&self, n: usize) {
+        self.used.fetch_sub(n, Ordering::AcqRel);
+    }
+}
+
+/// One outbound line. A broadcast shares a single Frame between all of its
+/// recipients; its bytes go back to the budget when the last one has it written.
+struct Frame {
+    line: String,
+    reserved: usize,
+    budget: Option<Arc<MemoryBudget>>,
+}
+
+impl Frame {
+    /// Lines the relay writes itself (rosters, errors, archive items).
+    fn unmetered(line: String) -> Arc<Frame> {
+        Arc::new(Frame { line, reserved: 0, budget: None })
+    }
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        if let Some(budget) = &self.budget {
+            budget.release(self.reserved);
+        }
+    }
+}
+
+/// A socket's outbound queue, bounded by packet count and by bytes.
+#[derive(Clone)]
+struct Outbox {
+    tx: mpsc::Sender<Arc<Frame>>,
+    queued: Arc<AtomicUsize>,
+}
+
+impl Outbox {
+    /// Queues without waiting; false when the socket is too far behind.
+    fn offer(&self, frame: &Arc<Frame>) -> bool {
+        let n = frame.line.len();
+        if self.queued.load(Ordering::Relaxed) + n > CLIENT_QUEUE_BYTES {
+            return false;
+        }
+        self.queued.fetch_add(n, Ordering::Relaxed);
+        if self.tx.try_send(Arc::clone(frame)).is_err() {
+            self.queued.fetch_sub(n, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    /// Queues once the socket's backlog is under `max_backlog` bytes (paces a replay).
+    async fn send(&self, frame: Arc<Frame>, max_backlog: usize) -> bool {
+        while self.queued.load(Ordering::Relaxed) > max_backlog {
+            if self.tx.is_closed() {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let n = frame.line.len();
+        self.queued.fetch_add(n, Ordering::Relaxed);
+        if self.tx.send(frame).await.is_err() {
+            self.queued.fetch_sub(n, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+}
+
+/// The line being read from a socket. Its bytes count against the memory budget
+/// as they arrive, and move with the line when it is forwarded.
+struct LineBuf {
+    bytes: Vec<u8>,
+    reserved: usize,
+    budget: Arc<MemoryBudget>,
+}
+
+impl LineBuf {
+    fn new(budget: Arc<MemoryBudget>) -> Self {
+        Self { bytes: Vec::new(), reserved: 0, budget }
+    }
+
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.budget.release(std::mem::take(&mut self.reserved));
+    }
+
+    /// Hands the line, and its share of the budget, to an outbound frame.
+    fn take_frame(&mut self) -> Arc<Frame> {
+        let mut bytes = std::mem::take(&mut self.bytes);
+        if bytes.last() != Some(&b'\n') {
+            bytes.push(b'\n');
+        }
+        Arc::new(Frame {
+            line: String::from_utf8(bytes).unwrap_or_default(),
+            reserved: std::mem::take(&mut self.reserved),
+            budget: Some(Arc::clone(&self.budget)),
+        })
+    }
+}
+
+impl Drop for LineBuf {
+    fn drop(&mut self) {
+        self.budget.release(self.reserved);
+    }
+}
+
 struct ClientSession {
     pub node_id: Option<String>,
     pub node_name: Option<String>,
     pub room: String,
     pub ip: IpAddr,
     pub tcp_port: u16,
-    pub tx: mpsc::Sender<String>,
+    pub outbox: Outbox,
 }
 
 struct RelayState {
@@ -244,47 +418,43 @@ fn identity_signature_valid(packet: &RelayPacket) -> bool {
     key.verify(canonical.as_bytes(), &Signature::from_bytes(&sig_bytes)).is_ok()
 }
 
-// Bounded line reader preventing memory exhaustion
+/// Reads one newline-terminated line of at most `max_bytes` into `line`. Bytes stay
+/// raw until the caller checks the whole line, so a character split across two
+/// reads arrives intact. When the memory budget is used up, reading waits for it.
 async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
-    buf: &mut String,
+    line: &mut LineBuf,
     max_bytes: usize,
 ) -> std::io::Result<usize> {
-    buf.clear();
-    let mut total_read = 0;
+    line.clear();
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
-            return Ok(total_read);
+            return Ok(line.bytes.len());
         }
-        if let Some(newline_pos) = available.iter().position(|&b| b == b'\n') {
-            let chunk_len = newline_pos + 1;
-            if total_read + chunk_len > max_bytes {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "LINE_TOO_LARGE: Inbound frame exceeded 64KB maximum limit.",
-                ));
+        let (chunk_len, complete) = match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => (pos + 1, true),
+            None => (available.len(), false),
+        };
+        if line.bytes.len() + chunk_len > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("LINE_TOO_LARGE: packet over the {} MB limit.", max_bytes / (1024 * 1024)),
+            ));
+        }
+        let mut waited_ms = 0;
+        while !line.budget.try_reserve(chunk_len) {
+            if waited_ms >= MEMORY_WAIT_SECS * 1000 {
+                return Err(std::io::Error::new(std::io::ErrorKind::OutOfMemory, "RELAY_BUSY: packet memory budget in use."));
             }
-            let chunk = &available[..chunk_len];
-            let s = std::str::from_utf8(chunk)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            buf.push_str(s);
-            reader.consume(chunk_len);
-            total_read += chunk_len;
-            return Ok(total_read);
-        } else {
-            let chunk_len = available.len();
-            if total_read + chunk_len > max_bytes {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "LINE_TOO_LARGE: Inbound frame exceeded 64KB maximum limit.",
-                ));
-            }
-            let s = std::str::from_utf8(available)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            buf.push_str(s);
-            reader.consume(chunk_len);
-            total_read += chunk_len;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            waited_ms += 50;
+        }
+        line.reserved += chunk_len;
+        line.bytes.extend_from_slice(&reader.fill_buf().await?[..chunk_len]);
+        reader.consume(chunk_len);
+        if complete {
+            return Ok(line.bytes.len());
         }
     }
 }
@@ -314,7 +484,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("═════════════════════════════════════════════════════════════════════");
     println!("  NovAura Sovereign OS — Fortified Headless WAN Relay v2.0.0        ");
     println!("  Listening on TCP: {}                                              ", addr);
-    println!("  Bounded Non-Blocking MPSC Queues • 64KB Frame Limit • Zero DoS     ");
+    println!("  Bounded Non-Blocking MPSC Queues • 16 MB Packets • Zero DoS        ");
     println!("  Socket-Derived WAN IPs • Anti-Spoofing • In-Memory Roster Only    ");
     println!("═════════════════════════════════════════════════════════════════════");
 
@@ -338,6 +508,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ip_counts: HashMap::new(),
     }));
 
+    let memory = Arc::new(MemoryBudget::from_env());
+    println!("  Packets up to {} MB; {} MB of memory for packets in flight (NOVAURA_RELAY_MEMORY_MB)",
+        MAX_LINE_BYTES / (1024 * 1024), memory.limit / (1024 * 1024));
+
     loop {
         // A failed accept (e.g. out of file descriptors) must not stop the relay.
         let (stream, peer_addr) = match listener.accept().await {
@@ -352,6 +526,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state_clone = Arc::clone(&shared_state);
         let turn = Arc::clone(&turn);
         let archive = Arc::clone(&archive);
+        let budget = Arc::clone(&memory);
 
         // 1. Connection Limits & Concurrency Preflight
         {
@@ -373,15 +548,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         tokio::spawn(async move {
             let (reader, mut writer) = stream.into_split();
-            let (tx, mut rx) = mpsc::channel::<String>(CLIENT_QUEUE_CAPACITY);
+            let (tx, mut rx) = mpsc::channel::<Arc<Frame>>(CLIENT_QUEUE_CAPACITY);
+            let outbox = Outbox { tx, queued: Arc::new(AtomicUsize::new(0)) };
+            let writer_queued = Arc::clone(&outbox.queued);
 
             // 2. Dedicated Writer Task with Strict Timeout (Never blocks global state)
             let writer_handle = tokio::spawn(async move {
-                while let Some(msg) = rx.recv().await {
+                while let Some(frame) = rx.recv().await {
+                    let len = frame.line.len();
+                    // A slow link (a phone hotspot) gets the time a large packet needs.
                     let write_res = tokio::time::timeout(
-                        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS),
-                        writer.write_all(msg.as_bytes())
+                        Duration::from_secs(CLIENT_WRITE_TIMEOUT_SECS + len as u64 / MIN_RECEIVE_BYTES_PER_SEC),
+                        writer.write_all(frame.line.as_bytes())
                     ).await;
+                    writer_queued.fetch_sub(len, Ordering::Relaxed);
+                    drop(frame);
                     if write_res.is_err() || write_res.unwrap().is_err() {
                         break; // Connection stalled or failed
                     }
@@ -398,24 +579,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     room: "general".to_string(),
                     ip: peer_ip,
                     tcp_port: 43889,
-                    tx: tx.clone(),
+                    outbox: outbox.clone(),
                 });
             }
 
             println!("[Relay] New connection from {}", peer_addr);
 
             let mut buf_reader = BufReader::new(reader);
-            let mut line = String::new();
+            let mut line = LineBuf::new(Arc::clone(&budget));
             let mut rate_limiter = TokenBucket::new();
+            let mut byte_limiter = ByteBucket::new();
             let mut last_sync_ms: u64 = 0;
 
-            // 3. Inbound Reader Loop with 64KB Frame Bounds
-            while let Ok(n) = read_bounded_line(&mut buf_reader, &mut line, MAX_LINE_BYTES).await {
-                if n == 0 {
-                    break;
+            // 3. Inbound Reader Loop, packets up to MAX_LINE_BYTES
+            loop {
+                let n = match read_bounded_line(&mut buf_reader, &mut line, MAX_LINE_BYTES).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("[Relay] Closing {}: {}", peer_addr, e);
+                        break;
+                    }
+                };
+
+                // A sender over its byte rate waits here; TCP slows it down.
+                let pause = byte_limiter.take(n);
+                if !pause.is_zero() {
+                    tokio::time::sleep(pause).await;
                 }
 
-                let trimmed = line.trim();
+                let trimmed = std::str::from_utf8(&line.bytes).map(str::trim).unwrap_or("");
                 if trimmed.is_empty() {
                     line.clear();
                     continue;
@@ -499,7 +692,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 timestamp_ms: current_timestamp_ms(),
                             };
                             if let Ok(err_json) = serde_json::to_string(&err_pkt) {
-                                let _ = tx.try_send(format!("{}\n", err_json));
+                                outbox.offer(&Frame::unmetered(format!("{}\n", err_json)));
                             }
                             line.clear();
                             continue;
@@ -530,7 +723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "last_seen_ms": current_timestamp_ms(),
                                             "is_connected": true,
                                         }));
-                                        peers_to_notify.push(s.tx.clone());
+                                        peers_to_notify.push(s.outbox.clone());
                                     }
                                 }
                             }
@@ -558,7 +751,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     if let Ok(roster_json) = serde_json::to_string(&roster_pkt) {
-                        let _ = tx.try_send(format!("{}\n", roster_json));
+                        outbox.offer(&Frame::unmetered(format!("{}\n", roster_json)));
                     }
 
                     // Broadcast MESH_PEER_JOINED_ROOM to existing peers in the room
@@ -589,9 +782,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         if let Ok(join_json) = serde_json::to_string(&join_pkt) {
-                            let join_line = format!("{}\n", join_json);
-                            for peer_tx in peers_to_notify {
-                                let _ = peer_tx.try_send(join_line.clone());
+                            let join_frame = Frame::unmetered(format!("{}\n", join_json));
+                            for peer in peers_to_notify {
+                                peer.offer(&join_frame);
                             }
                         }
                     }
@@ -621,7 +814,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             timestamp_ms: now_ms,
                         };
                         if let Ok(reply_json) = serde_json::to_string(&reply) {
-                            let _ = tx.try_send(format!("{}\n", reply_json));
+                            outbox.offer(&Frame::unmetered(format!("{}\n", reply_json)));
                         }
                     }
                     line.clear();
@@ -645,15 +838,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let (mut until, mut sent) = (since, 0usize);
                             for entry in entries {
                                 let item = serde_json::json!({ "packet": entry.packet, "archived_ms": entry.archived_ms });
-                                // Awaiting send (not try_send) paces the replay to the socket.
-                                if tx.send(supervisor_line(&node_id, "MESH_ARCHIVE_ITEM", item)).await.is_err() {
+                                // Awaiting send (not offer) paces the replay to the socket.
+                                let frame = Frame::unmetered(supervisor_line(&node_id, "MESH_ARCHIVE_ITEM", item));
+                                if !outbox.send(frame, REPLAY_BACKLOG_BYTES).await {
                                     break;
                                 }
                                 until = entry.archived_ms;
                                 sent += 1;
                             }
                             let done = serde_json::json!({ "until_ms": until, "count": sent });
-                            let _ = tx.send(supervisor_line(&node_id, "MESH_ARCHIVE_DONE", done)).await;
+                            outbox.send(Frame::unmetered(supervisor_line(&node_id, "MESH_ARCHIVE_DONE", done)), REPLAY_BACKLOG_BYTES).await;
                         }
                     }
                     line.clear();
@@ -661,9 +855,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // 7. Route Regular Packets
-                let mut target_senders: Vec<mpsc::Sender<String>> = Vec::new();
+                let mut target_senders: Vec<Outbox> = Vec::new();
                 let mut accepted = false;
-                let out_line = format!("{}\n", trimmed);
 
                 {
                     let state = state_clone.lock().await;
@@ -692,14 +885,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Broadcast strictly within the same room
                                 for (&addr, s) in state.sessions.iter() {
                                     if addr != peer_addr && &s.room == sender_room {
-                                        target_senders.push(s.tx.clone());
+                                        target_senders.push(s.outbox.clone());
                                     }
                                 }
                             } else {
                                 // Directed routing: deliver strictly to the session owning this node_id
                                 for (&_addr, s) in state.sessions.iter() {
                                     if s.node_id.as_ref() == Some(target_id) {
-                                        target_senders.push(s.tx.clone());
+                                        target_senders.push(s.outbox.clone());
                                         break;
                                     }
                                 }
@@ -708,7 +901,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Unspecified recipient = room broadcast
                             for (&addr, s) in state.sessions.iter() {
                                 if addr != peer_addr && &s.room == sender_room {
-                                    target_senders.push(s.tx.clone());
+                                    target_senders.push(s.outbox.clone());
                                 }
                             }
                         }
@@ -735,8 +928,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                for target_tx in target_senders {
-                    let _ = target_tx.try_send(out_line.clone());
+                // One copy of the packet, shared by every recipient's queue.
+                if !target_senders.is_empty() {
+                    let frame = line.take_frame();
+                    for target in target_senders {
+                        target.offer(&frame);
+                    }
                 }
 
                 line.clear();
@@ -758,7 +955,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut list = Vec::new();
                     for (&addr, s) in state.sessions.iter() {
                         if addr != peer_addr && s.room == session.room {
-                            list.push(s.tx.clone());
+                            list.push(s.outbox.clone());
                         }
                     }
                     (session.node_id, session.room, list)
@@ -787,9 +984,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 if let Ok(leave_json) = serde_json::to_string(&leave_pkt) {
-                    let leave_line = format!("{}\n", leave_json);
-                    for peer_tx in peers_to_notify {
-                        let _ = peer_tx.try_send(leave_line.clone());
+                    let leave_frame = Frame::unmetered(format!("{}\n", leave_json));
+                    for peer in peers_to_notify {
+                        peer.offer(&leave_frame);
                     }
                 }
             } else {
@@ -821,5 +1018,81 @@ mod tests {
         assert_eq!(p["expires_at_ms"], 1_700_000_000_000u64);
         assert_eq!(p["credential"], turn_credential("north-star", "1700000000:NODE-ab12x"));
         assert_eq!(p["urls"][0], "turn:203.0.113.7:3478?transport=udp");
+    }
+
+    #[tokio::test]
+    async fn reads_a_large_line_with_characters_split_across_reads() {
+        // A 6 MB packet full of 4-byte characters, read through a 7-byte buffer, so
+        // characters straddle every read boundary.
+        let text = format!("{{\"x\":\"{}\"}}", "🜂".repeat(1_500_000));
+        let wire = format!("{}\nnext\n", text);
+        let mut reader = BufReader::with_capacity(7, wire.as_bytes());
+        let budget = Arc::new(MemoryBudget::new(64 * 1024 * 1024));
+        let mut line = LineBuf::new(Arc::clone(&budget));
+        let n = read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES).await.unwrap();
+        assert_eq!(n, text.len() + 1);
+        assert_eq!(std::str::from_utf8(&line.bytes).unwrap().trim(), text);
+        assert_eq!(budget.used.load(Ordering::Relaxed), n);
+        read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES).await.unwrap();
+        assert_eq!(line.bytes, b"next\n");
+        drop(line);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_line_over_the_limit() {
+        let wire = vec![b'a'; 2048];
+        let mut reader = BufReader::with_capacity(256, &wire[..]);
+        let budget = Arc::new(MemoryBudget::new(1024 * 1024));
+        let mut line = LineBuf::new(Arc::clone(&budget));
+        assert!(read_bounded_line(&mut reader, &mut line, 1024).await.is_err());
+        line.clear();
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn a_shared_frame_returns_its_bytes_when_every_recipient_is_done() {
+        let budget = Arc::new(MemoryBudget::new(1024 * 1024));
+        let mut reader = BufReader::new(&b"{\"hello\":1}\n"[..]);
+        let mut line = LineBuf::new(Arc::clone(&budget));
+        read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES).await.unwrap();
+        let frame = line.take_frame();
+        assert_eq!(line.reserved, 0);
+        let (tx_a, mut rx_a) = mpsc::channel(4);
+        let (tx_b, mut rx_b) = mpsc::channel(4);
+        let a = Outbox { tx: tx_a, queued: Arc::new(AtomicUsize::new(0)) };
+        let b = Outbox { tx: tx_b, queued: Arc::new(AtomicUsize::new(0)) };
+        assert!(a.offer(&frame) && b.offer(&frame));
+        drop(frame);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 12);
+        let got_a = rx_a.recv().await.unwrap();
+        let got_b = rx_b.recv().await.unwrap();
+        assert!(Arc::ptr_eq(&got_a, &got_b));
+        assert_eq!(got_a.line, "{\"hello\":1}\n");
+        drop(got_a);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 12);
+        drop(got_b);
+        drop(line);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn outbox_refuses_more_than_its_byte_backlog() {
+        let (tx, _rx) = mpsc::channel(CLIENT_QUEUE_CAPACITY);
+        let outbox = Outbox { tx, queued: Arc::new(AtomicUsize::new(0)) };
+        let big = Frame::unmetered("x".repeat(MAX_LINE_BYTES));
+        let fits = CLIENT_QUEUE_BYTES / MAX_LINE_BYTES;
+        for _ in 0..fits {
+            assert!(outbox.offer(&big));
+        }
+        assert!(!outbox.offer(&big));
+    }
+
+    #[test]
+    fn byte_bucket_pauses_instead_of_dropping() {
+        let mut bucket = ByteBucket::new();
+        assert!(bucket.take(BYTE_RATE_BURST as usize).is_zero());
+        let pause = bucket.take(BYTE_RATE_PER_SEC as usize);
+        assert!(pause >= Duration::from_millis(900) && pause <= Duration::from_millis(1100));
     }
 }

@@ -3,7 +3,8 @@ import { Play, Heart, MoreHorizontal, Image as ImageIcon, Globe, Download, Trash
 import { generateCover, updateTrack, deleteTrack, addToAlbum, publishTrack, unpublishTrack, getBlob } from '../../../services/music/musicStudio.js';
 import { buildZip, downloadBytes } from '../../../services/cybeni/projectStore.js';
 import { withImageModel } from '../../../services/engines/imageGen.js';
-import { getConnectedPeers, sendFileToPeer } from '../../../services/sovereignMesh.js';
+import { getConnectedPeers } from '../../../services/sovereignMesh.js';
+import { sendFileToPeer } from '../../../services/meshTransfers.js';
 import { Cover, fmtTime } from './shared.jsx';
 
 const FILTERS = [['all', 'All'], ['liked', 'Liked'], ['song', 'Songs'], ['instrumental', 'Instrumentals'], ['acapella', 'A cappella'], ['loop', 'Game loops'], ['imported', 'Imported']];
@@ -37,9 +38,11 @@ function SendDialog({ track, onClose, say }) {
     setBusy(peer.id);
     try {
       const { blob, name } = await trackFile(track);
-      const ok = await sendFileToPeer(peer.id, new File([blob], name, { type: blob.type }));
-      say(ok ? `Sent "${track.title}" to ${peer.name}.` : `Could not reach ${peer.name}.`, ok ? 'good' : 'bad');
-      if (ok) onClose();
+      await sendFileToPeer(peer.id, new File([blob], name, { type: blob.type }));
+      say(`Offered "${track.title}" to ${peer.name}. It sends once they accept (progress in Sovereign Network → Transfers).`, 'good');
+      onClose();
+    } catch (err) {
+      say(err.message || `Could not reach ${peer.name}.`, 'bad');
     } finally {
       setBusy('');
     }

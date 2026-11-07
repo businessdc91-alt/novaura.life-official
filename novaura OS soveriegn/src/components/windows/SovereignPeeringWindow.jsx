@@ -4,7 +4,7 @@ import {
   Wifi, Server, ArrowUpRight, CheckCircle2, AlertCircle, Clock,
   ExternalLink, Zap, Terminal, Activity, Unplug, BookOpen, Mail,
   Share2, ChevronRight, Laptop, HelpCircle, Users, MessageSquare, Hash,
-  Cpu, Paperclip, Download, Upload, Trash2, ShieldCheck, ShieldAlert
+  Cpu, Paperclip, Upload, Trash2, ShieldCheck, ShieldAlert
 } from 'lucide-react';
 import {
   getPhysicalMeshStatus,
@@ -21,16 +21,17 @@ import {
   isSharingInference,
   setInferenceSharing,
   requestPeerInference,
-  sendFileToPeer,
   getOutbox,
-  getTransfers,
 } from '../../services/sovereignMesh.js';
+import { sendFileToPeer, listTransfers } from '../../services/meshTransfers.js';
+import { formatBytes } from '../../config/meshLimits.js';
+import TransfersPanel from './peering/TransfersPanel.jsx';
 import { useKernel } from '../../kernel/useKernel.js';
 
-export default function SovereignPeeringWindow() {
+export default function SovereignPeeringWindow({ initialTab } = {}) {
   const { kernel } = useKernel();
   const [meshStatus, setMeshStatus] = useState(null);
-  const [activeTab, setActiveTab] = useState('lobby'); // 'lobby' | 'trust' | 'compute' | 'connect' | 'peers' | 'relay' | 'diagnostics'
+  const [activeTab, setActiveTab] = useState(initialTab || 'lobby'); // 'lobby' | 'trust' | 'compute' | 'transfers' | 'connect' | 'peers' | 'relay' | 'diagnostics'
   const [remoteAddressInput, setRemoteAddressInput] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionResult, setConnectionResult] = useState(null);
@@ -95,7 +96,7 @@ export default function SovereignPeeringWindow() {
 
   const fetchTransfersData = async () => {
     try {
-      const t = await getTransfers();
+      const t = await listTransfers();
       setTransfersList(t || []);
     } catch (e) {
       console.warn('Error fetching transfers:', e);
@@ -392,39 +393,17 @@ export default function SovereignPeeringWindow() {
   const handleFileChosen = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !targetPeerForFile) return;
-    addLog(`[AIRDROP] Sending ${file.name} (${Math.round(file.size / 1024)} KB) to peer ${targetPeerForFile.substring(0, 8)}...`);
+    addLog(`[AIRDROP] Offering ${file.name} (${formatBytes(file.size)}) to peer ${targetPeerForFile.substring(0, 8)}...`);
     try {
       const res = await sendFileToPeer(targetPeerForFile, file);
-      addLog(`[AIRDROP_QUEUED] Transfer started: ${res.fileName} (ID: ${res.transferId.substring(0, 8)})`);
+      addLog(`[AIRDROP_QUEUED] Offer sent: ${res.fileName} (ID: ${res.transferId.substring(0, 11)}). It sends once they accept; see Transfers.`);
       fetchTransfersData();
+      setActiveTab('transfers');
     } catch (err) {
       addLog(`[AIRDROP_ERROR] Transfer failed: ${err.message || err}`);
     } finally {
       e.target.value = '';
       setTargetPeerForFile(null);
-    }
-  };
-
-  const handleSaveReceivedFile = (transfer) => {
-    try {
-      const byteCharacters = atob(transfer.dataBase64 || '');
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: transfer.mimeType || 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = transfer.fileName || 'sovereign_file';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      addLog(`[AIRDROP] Saved ${transfer.fileName} to local downloads.`);
-    } catch (err) {
-      addLog(`[AIRDROP_ERROR] Failed to save file: ${err.message || err}`);
     }
   };
 
@@ -609,6 +588,18 @@ export default function SovereignPeeringWindow() {
         >
           <Cpu className="w-3.5 h-3.5" />
           <span>Swarm AI & Outbox</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('transfers')}
+          className={`flex items-center gap-2 px-4 py-2 border-b-2 text-xs font-semibold transition-all cursor-pointer ${
+            activeTab === 'transfers'
+              ? 'border-cyan-400 text-cyan-400 bg-cyan-500/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Upload className="w-3.5 h-3.5" />
+          <span>Transfers{transfersList.some(t => t.status === 'offered') ? ` (${transfersList.filter(t => t.status === 'offered').length} waiting)` : ''}</span>
         </button>
 
         <button
@@ -1339,79 +1330,10 @@ export default function SovereignPeeringWindow() {
               )}
             </div>
 
-            {/* Section 3: P2P Air-Drop Binary Transfers */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <span>Sovereign Air-Drop P2P Transfers</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-800 text-slate-300">
-                      {transfersList.length} Files
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Direct chunked Base64 stream between nodes with zero intermediate cloud servers
-                  </p>
-                </div>
-                <button
-                  onClick={fetchTransfersData}
-                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 transition-colors cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {transfersList.length === 0 ? (
-                <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-xs text-slate-500">
-                  No files transferred yet. Use the paperclip icon in the Universe Lobby or Web of Trust to air-drop files.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {transfersList.map(t => (
-                    <div
-                      key={t.id}
-                      className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
-                          t.direction === 'incoming' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-cyan-500/10 text-cyan-400'
-                        }`}>
-                          {t.direction === 'incoming' ? <Download className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-200">{t.fileName}</div>
-                          <div className="text-[10px] font-mono text-slate-500">
-                            {Math.round((t.size || 0) / 1024)} KB • Peer: {t.peerId ? t.peerId.substring(0, 10) : 'unknown'}...
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                          t.status === 'COMPLETED'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : 'bg-amber-500/20 text-amber-300'
-                        }`}>
-                          {t.status}
-                        </span>
-
-                        {t.direction === 'incoming' && t.status === 'COMPLETED' && t.dataBase64 && (
-                          <button
-                            onClick={() => handleSaveReceivedFile(t)}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1 cursor-pointer"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>Save</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
         )}
+
+        {activeTab === 'transfers' && <TransfersPanel peers={peersList} />}
 
         {activeTab === 'connect' && (
           <div className="space-y-6 max-w-4xl mx-auto">

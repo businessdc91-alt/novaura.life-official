@@ -46,7 +46,7 @@ const OFFER_INTERVAL_MS = 120000;
 const HOST_ONLINE_WINDOW_MS = 6 * 60000;
 const PACKET_MAX_AGE_MS = 5 * 60000;
 const MAX_MESSAGES = 40;
-const MAX_PROMPT_CHARS = 32000;
+const MAX_PROMPT_CHARS = 1_000_000; // long-context prompts; hosts cap tokens per key
 const MAX_CONCURRENT_JOBS = 2;
 const DEFAULT_CALL_TIMEOUT_MS = 120000;
 

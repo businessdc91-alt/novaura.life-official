@@ -17,6 +17,7 @@ import {
   wirePost as wireSocialPost,
 } from './meshSocial.js';
 import { isPopoutWindow } from './popoutWindows.js';
+import { MESH_PAYLOAD_BYTES, formatBytes } from '../config/meshLimits.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
   FEEDBACK_INBOX_VAULT_KEY,
@@ -25,9 +26,11 @@ import {
 
 const STORAGE_KEY = 'novaura_sovereign_identity';
 const MAIL_STORAGE = 'novaura_sovereign_mailstore';
-// Sealed mail is hex-encoded (twice its size) and must fit a 64 KB relay frame.
-const MAX_MAIL_PACKET_CHARS = 60000;
-export const MAX_MAIL_ATTACHMENT_BYTES = 20 * 1024;
+// Sealed mail travels in one mesh packet: attachments are base64 inside the
+// sealed body (4/3 their size) and the sealed body is hex (twice that), so they
+// get about a third of a packet.
+const MAX_MAIL_PACKET_CHARS = MESH_PAYLOAD_BYTES;
+export const MAX_MAIL_ATTACHMENT_BYTES = Math.floor(MESH_PAYLOAD_BYTES / 3);
 const SOCIAL_STORAGE = 'novaura_sovereign_socialstore';
 
 function generateId() {
@@ -287,7 +290,6 @@ async function hydrateFromDatabase() {
   }
 }
 
-const _incomingFileTransfers = new Map();
 const _blockedPeersCache = new Set();
 
 if (typeof window !== 'undefined') {
@@ -591,64 +593,7 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
       break;
     }
 
-    case 'MESH_FILE_OFFER': {
-      const { fileId, fileName, size, mimeType, senderName, totalChunks } = payload || packet?.payload || {};
-      if (fileId) {
-        _incomingFileTransfers.set(fileId, {
-          fileName, size, mimeType, senderName, totalChunks,
-          chunks: new Array(totalChunks),
-          receivedCount: 0,
-          startedAt: Date.now()
-        });
-        dispatchMeshToast({
-          type: 'transfer',
-          title: 'Incoming P2P Transfer',
-          message: `${senderName || 'Peer'} is transferring "${fileName}" (${Math.round((size || 0) / 1024)} KB)...`
-        });
-      }
-      break;
-    }
-
-    case 'MESH_FILE_CHUNK': {
-      const { fileId, chunkIndex, data } = payload || packet?.payload || {};
-      const transfer = _incomingFileTransfers.get(fileId);
-      if (transfer && transfer.chunks) {
-        if (!transfer.chunks[chunkIndex]) {
-          transfer.chunks[chunkIndex] = data;
-          transfer.receivedCount++;
-        }
-      }
-      break;
-    }
-
-    case 'MESH_FILE_COMPLETE': {
-      const { fileId } = payload || packet?.payload || {};
-      const transfer = _incomingFileTransfers.get(fileId);
-      if (transfer) {
-        const base64Data = (transfer.chunks || []).join('');
-        const record = {
-          id: fileId,
-          fileId,
-          direction: 'inbound',
-          peerId: packet?.sender_id || 'remote_peer',
-          fileName: transfer.fileName,
-          mimeType: transfer.mimeType,
-          size: transfer.size,
-          dataBase64: base64Data,
-          status: 'completed',
-          createdAt: new Date().toISOString()
-        };
-        db.mesh_transfers.put(record).catch(() => {});
-        _incomingFileTransfers.delete(fileId);
-        window.dispatchEvent(new CustomEvent('novaura:file_received', { detail: record }));
-        dispatchMeshToast({
-          type: 'transfer',
-          title: 'P2P File Transfer Complete',
-          message: `Received "${transfer.fileName}" from ${transfer.senderName || 'Peer'}`
-        });
-      }
-      break;
-    }
+    // MESH_XFER_* (files of any size) are handled in meshTransfers.js.
 
     case 'MESH_PEER_JOINED_ROOM': {
       // The relay sends { peer: { id, name } }; older builds sent node_id/node_name.
@@ -1017,10 +962,13 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
   'MESH_JOIN_ROOM',
   'MESH_INFERENCE_REQUEST',
   'MESH_INFERENCE_RESPONSE',
-  'MESH_FILE_OFFER',
-  'MESH_FILE_ACCEPT',
-  'MESH_FILE_CHUNK',
-  'MESH_FILE_COMPLETE',
+  'MESH_XFER_OFFER',
+  'MESH_XFER_ACCEPT',
+  'MESH_XFER_CHUNK',
+  'MESH_XFER_ACK',
+  'MESH_XFER_DONE',
+  'MESH_XFER_RESULT',
+  'MESH_XFER_CANCEL',
   'MESH_MARKETPLACE_LISTING',
   'MESH_ARCHIVE_SYNC',
   'MESH_HOSTED_SITE',
@@ -1061,7 +1009,16 @@ const ALLOWED_MESH_PACKET_TYPES = new Set([
 // Public by design and built from validated fields (sites, names, search, call
 // setup, template license acceptances), so the credential word scan below would only block ordinary words in
 // them: a page that mentions a "secret", a name like vault.nova, SDP from a call.
+// File transfers are files the user chose to send, encrypted end to end; random
+// ciphertext spells "vault" somewhere in about one 4 MB piece in six.
 const LEAK_SCAN_EXEMPT_TYPES = new Set([
+  'MESH_XFER_OFFER',
+  'MESH_XFER_ACCEPT',
+  'MESH_XFER_CHUNK',
+  'MESH_XFER_ACK',
+  'MESH_XFER_DONE',
+  'MESH_XFER_RESULT',
+  'MESH_XFER_CANCEL',
   'MESH_HOSTED_SITE',
   'MESH_SITE_RESPONSE',
   'MESH_CALL_SIGNAL',
@@ -1395,9 +1352,9 @@ export function sendMail({ to, subject, body, attachments = [], threadId = null,
           timestamp: plainMail.timestamp,
           ...encryptedEnvelope,
         };
-        // Relays carry packets of at most 64 KB; a larger one would be dropped silently.
+        // Mail is one mesh packet; a larger one would be dropped by the relay.
         if (JSON.stringify(meshMail).length > MAX_MAIL_PACKET_CHARS) {
-          markUndelivered(`Too large to send over the mesh (attachments are limited to about ${Math.round(MAX_MAIL_ATTACHMENT_BYTES / 1024)} KB in total). Remove or shrink the attachments and resend.`);
+          markUndelivered(`Too large to send as mail (attachments are limited to about ${formatBytes(MAX_MAIL_ATTACHMENT_BYTES)} in total). Send big files from Sovereign Network → Transfers, which has no size limit.`);
           return;
         }
         broadcastMeshPacket('MESH_MAIL', { mail: meshMail });
@@ -1608,13 +1565,14 @@ function shareablePosts(limit) {
     .map(wireSocialPost);
 }
 
-// One feed/stories sync answer per requester every 30 s, in packets that fit the relay.
+// One feed/stories sync answer per requester every 30 s, in packets that fit the
+// relay, newest first and at most SOCIAL_LIMITS.syncBytes in all.
 const _socialSyncServedAt = new Map();
 function sendSocialBatches(requesterId, type, key, items) {
   const last = _socialSyncServedAt.get(`${type}:${requesterId}`) || 0;
   if (Date.now() - last < 30000 || !items.length) return;
   _socialSyncServedAt.set(`${type}:${requesterId}`, Date.now());
-  for (const batch of socialPacketBatches(items).slice(0, 8)) {
+  for (const batch of socialPacketBatches(items, SOCIAL_LIMITS.packetBudget, SOCIAL_LIMITS.syncBytes)) {
     sendDirectMeshPacket(requesterId, type, { [key]: batch });
   }
 }
@@ -2195,7 +2153,7 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
   });
 }
 
-const LEGACY_INFERENCE_MAX_PROMPT = 16000;
+const LEGACY_INFERENCE_MAX_PROMPT = 1_000_000;
 const LEGACY_INFERENCE_MAX_TOKENS = 1024;
 let _legacyInferenceBusy = false;
 
@@ -2264,96 +2222,8 @@ async function handleIncomingInferenceRequest(jobId, prompt, role, maxTokens, re
   }
 }
 
-// ── Ecosystem: Direct P2P File Dropper (Chunked Binary Transfers) ──────────
-
-export async function sendFileToPeer(peerId, fileOrData) {
-  if (!peerId || !fileOrData) return false;
-
-  let name = fileOrData.name || fileOrData.fileName || 'sovereign_file';
-  let size = fileOrData.size || 0;
-  let type = fileOrData.type || fileOrData.mimeType || 'application/octet-stream';
-  let dataBase64 = fileOrData.dataBase64 || '';
-
-  // If passed a browser File / Blob, convert to Base64
-  if (!dataBase64 && typeof fileOrData.arrayBuffer === 'function') {
-    const buffer = await fileOrData.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    dataBase64 = btoa(binary);
-  }
-
-  if (!dataBase64) {
-    throw new Error('Unable to extract Base64 data from file payload.');
-  }
-
-  const fileId = 'file_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
-  const CHUNK_SIZE = 32 * 1024; // 32KB per chunk
-  const totalChunks = Math.ceil(dataBase64.length / CHUNK_SIZE);
-  const myId = getLocalIdentity();
-
-  // 1. Send Offer
-  await sendDirectMeshPacket(peerId, 'MESH_FILE_OFFER', {
-    fileId,
-    fileName: name,
-    size: size || dataBase64.length,
-    mimeType: type,
-    senderName: myId.displayName,
-    totalChunks
-  });
-
-  // 2. Stream chunks
-  for (let i = 0; i < totalChunks; i++) {
-    const chunkData = dataBase64.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-    await sendDirectMeshPacket(peerId, 'MESH_FILE_CHUNK', {
-      fileId,
-      chunkIndex: i,
-      data: chunkData
-    });
-  }
-
-  // 3. Send Complete
-  await sendDirectMeshPacket(peerId, 'MESH_FILE_COMPLETE', {
-    fileId,
-    fileName: name,
-    size: size || dataBase64.length
-  });
-
-  // Record outbound transfer
-  const transferRecord = {
-    id: fileId,
-    fileId,
-    direction: 'outbound',
-    peerId,
-    fileName: name,
-    mimeType: type,
-    size: size || dataBase64.length,
-    dataBase64,
-    status: 'completed',
-    createdAt: new Date().toISOString()
-  };
-  await db.mesh_transfers.put(transferRecord);
-
-  window.dispatchEvent(new CustomEvent('novaura:transfer_updated', { detail: transferRecord }));
-  dispatchMeshToast({
-    type: 'transfer',
-    title: 'File Delivered',
-    message: `"${name}" successfully transmitted to peer.`
-  });
-
-  return { transferId: fileId, fileName: name };
-}
-
-export async function getTransfers() {
-  try {
-    return await db.mesh_transfers.orderBy('createdAt').reverse().toArray();
-  } catch {
-    return [];
-  }
-}
+// File transfers of any size: meshTransfers.js (it imports this module, so it
+// is not re-exported here).
 
 // ── Decentralized Web Hosting & Domain Resolution Layer ─────────────────────
 
@@ -2380,7 +2250,7 @@ export async function publishHostedSite(siteData) {
   // Deterministic SHA-256 digest of the HTML that is actually stored and sent (CIDv1 formatted)
   const publishedHtml = siteData.htmlContent || '<!DOCTYPE html><html><body><h1>Decentralized Site</h1></body></html>';
   if (publishedHtml.length > MAX_SITE_HTML_CHARS) {
-    throw new Error(`Site is too large: ${Math.round(publishedHtml.length / 1024)} KB (limit ${MAX_SITE_HTML_CHARS / 1024} KB of HTML).`);
+    throw new Error(`Site is too large: ${formatBytes(publishedHtml.length)} (limit ${formatBytes(MAX_SITE_HTML_CHARS)} of HTML, one mesh packet).`);
   }
   const hashHex = await sha256Hex(publishedHtml);
   const cid = `bafy2bzace${hashHex.substring(0, 32)}`;
@@ -2428,7 +2298,8 @@ export async function publishHostedSite(siteData) {
 // size, and does not take over a domain that someone else already published.
 // Names: .nova, .aura, .novaura, .catalyst (web/novaNames.js).
 const NOVA_DOMAIN_RE = { test: (d) => isMeshName(d) };
-const MAX_SITE_HTML_CHARS = 512 * 1024;
+// A site is answered in one packet next to its record and signature.
+const MAX_SITE_HTML_CHARS = MESH_PAYLOAD_BYTES - 64 * 1024;
 const MAX_SITE_CLOCK_SKEW_MS = 10 * 60 * 1000;
 // Portals shipped inside every node across both Nova and Aura factions.
 const BUILTIN_NOVA_DOMAINS = new Set([

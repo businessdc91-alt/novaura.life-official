@@ -8,6 +8,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
@@ -44,10 +45,18 @@ fn save_relay_setting(relay_address: &Option<String>) {
         log::warn!("[SovereignMesh] Could not save the relay setting: {}", e);
     }
 }
-pub const MAX_PACKET_BYTES: usize = 256 * 1024; // 256 KB memory exhaustion ceiling
+/// One packet at most; files of any size travel as a series of chunk packets.
+pub const MAX_PACKET_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_PEERS_PER_ROOM: usize = 100;
 pub const MAX_CONCURRENT_SOCKETS_PER_IP: usize = 8;
 pub const RELAY_OUTBOUND_QUEUE: usize = 256;
+/// Unsent bytes allowed in the relay tunnel before a send waits, so a big upload
+/// paces itself to the link instead of piling up in memory.
+pub const RELAY_BACKLOG_BYTES: usize = 16 * 1024 * 1024;
+/// How long a send waits for room in the tunnel before reporting failure.
+pub const RELAY_SEND_WAIT_SECS: u64 = 180;
+/// An inbound connection with no bytes at all for this long is closed.
+pub const INBOUND_IDLE_SECS: u64 = 30;
 pub const DIRECT_CONNECT_TIMEOUT_SECS: u64 = 3;
 
 static PACKET_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -199,6 +208,17 @@ pub fn verify_packet_signature(packet: &MeshPacket) -> bool {
     verifying_key.verify(canonical.as_bytes(), &signature).is_ok()
 }
 
+/// Queues a small control line (heartbeat, TURN request) on the relay tunnel.
+/// A full queue just skips it; false means the tunnel is gone.
+fn queue_control(control: &mpsc::WeakSender<String>, queued: &AtomicUsize, line: &str) -> bool {
+    let Some(tx) = control.upgrade() else { return false };
+    queued.fetch_add(line.len(), std::sync::atomic::Ordering::Relaxed);
+    if tx.try_send(line.to_string()).is_err() {
+        queued.fetch_sub(line.len(), std::sync::atomic::Ordering::Relaxed);
+    }
+    true
+}
+
 /// One-shot direct TCP delivery with a short connect timeout, so an unreachable
 /// WAN peer behind NAT does not stall sends for the OS default (~20s).
 async fn write_direct(addr: &str, line: &str) -> bool {
@@ -213,50 +233,41 @@ async fn write_direct(addr: &str, line: &str) -> bool {
     }
 }
 
+/// Appends bytes to `out` up to the next newline (not included) and returns the
+/// line's length, or 0 at end of stream. The caller clears `out` after using a
+/// line. Bytes stay raw until the line is complete, so a character split across
+/// two reads arrives intact, and the read is cancel-safe: if a select or timeout
+/// drops it mid-line, the bytes so far stay in `out` and the next call goes on.
 pub async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
-    out: &mut String,
+    out: &mut Vec<u8>,
     max_bytes: usize,
 ) -> std::io::Result<usize> {
-    out.clear();
-    let mut total_read = 0;
-
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
-            return Ok(total_read);
+            return Ok(if out.is_empty() { 0 } else { out.len() });
         }
-
-        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-            let to_take = pos + 1;
-            let chunk = &available[..pos];
-            total_read += to_take;
-            if out.len() + chunk.len() > max_bytes {
-                reader.consume(to_take);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "FRAME_OVERFLOW: Inbound packet line exceeded 256KB cap.",
-                ));
+        let (chunk_len, take, complete) = match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => (pos, pos + 1, true),
+            None => (available.len(), available.len(), false),
+        };
+        if out.len() + chunk_len > max_bytes {
+            reader.consume(take);
+            out.clear();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("FRAME_OVERFLOW: packet over the {} MB limit.", max_bytes / (1024 * 1024)),
+            ));
+        }
+        out.extend_from_slice(&available[..chunk_len]);
+        reader.consume(take);
+        if complete {
+            // An empty line (a bare newline) is skipped, not mistaken for end of stream.
+            if out.is_empty() {
+                continue;
             }
-            if let Ok(s) = std::str::from_utf8(chunk) {
-                out.push_str(s);
-            }
-            reader.consume(to_take);
-            return Ok(total_read);
-        } else {
-            let chunk_len = available.len();
-            total_read += chunk_len;
-            if out.len() + chunk_len > max_bytes {
-                reader.consume(chunk_len);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "FRAME_OVERFLOW: Inbound packet line exceeded 256KB cap without newline.",
-                ));
-            }
-            if let Ok(s) = std::str::from_utf8(available) {
-                out.push_str(s);
-            }
-            reader.consume(chunk_len);
+            return Ok(out.len());
         }
     }
 }
@@ -376,9 +387,16 @@ struct MeshInner {
     /// Outbound queue into the single registered relay tunnel. The relay only
     /// forwards frames from a registered socket, so every relay-bound packet
     /// must travel through this tunnel rather than a fresh connection.
-    pub relay_tx: Option<mpsc::Sender<String>>,
+    pub relay_tx: Option<RelayTunnel>,
     pub active_connections_per_ip: HashMap<IpAddr, usize>,
     turn: Option<TurnGrant>,
+}
+
+/// The relay tunnel's outbound queue and how many of its bytes are still unsent.
+#[derive(Clone)]
+pub struct RelayTunnel {
+    tx: mpsc::Sender<String>,
+    queued: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -526,24 +544,22 @@ impl MeshManager {
         let ip = addr.ip();
         let (reader, _) = stream.into_split();
         let mut buf_reader = BufReader::new(reader);
-        let mut line = String::new();
+        let mut line: Vec<u8> = Vec::new();
 
         loop {
+            let before = line.len();
             let read_res = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(INBOUND_IDLE_SECS),
                 read_bounded_line(&mut buf_reader, &mut line, MAX_PACKET_BYTES),
             ).await;
 
             match read_res {
                 Ok(Ok(0)) => break, // Clean EOF
                 Ok(Ok(_)) => {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        if let Ok(packet) = serde_json::from_str::<MeshPacket>(trimmed) {
-                            self.process_incoming_packet(packet, Some(addr.to_string())).await;
-                        } else {
-                            log::warn!("[SovereignMesh] Malformed JSON packet from {}", addr);
-                        }
+                    if let Ok(packet) = serde_json::from_slice::<MeshPacket>(&line) {
+                        self.process_incoming_packet(packet, Some(addr.to_string())).await;
+                    } else {
+                        log::warn!("[SovereignMesh] Malformed JSON packet from {}", addr);
                     }
                     line.clear();
                 }
@@ -551,8 +567,10 @@ impl MeshManager {
                     log::warn!("[SovereignMesh] Bounded frame violation or read error from {}: {}", addr, err);
                     break;
                 }
+                // A large packet on a slow link is still arriving; only a silent socket is closed.
+                Err(_) if line.len() > before => continue,
                 Err(_) => {
-                    log::debug!("[SovereignMesh] Inbound TCP stream from {} timed out (idle 30s).", addr);
+                    log::debug!("[SovereignMesh] Inbound TCP stream from {} timed out (idle {}s).", addr, INBOUND_IDLE_SECS);
                     break;
                 }
             }
@@ -685,10 +703,14 @@ impl MeshManager {
         };
 
         let (relay_tx, mut relay_rx) = mpsc::channel::<String>(RELAY_OUTBOUND_QUEUE);
+        let relay_queued = Arc::new(AtomicUsize::new(0));
+        // Heartbeats and TURN requests use a weak handle, so dropping the tunnel
+        // in set_relay() still closes the queue and ends this connection.
+        let control = relay_tx.downgrade();
         {
             let mut state = self.inner.write().await;
             state.relay_connected = true;
-            state.relay_tx = Some(relay_tx);
+            state.relay_tx = Some(RelayTunnel { tx: relay_tx, queued: Arc::clone(&relay_queued) });
             log::info!("[SovereignMesh] Established active WAN relay tunnel to {}", relay_addr);
         }
 
@@ -751,9 +773,24 @@ impl MeshManager {
             let _ = handle.emit("novaura://mesh-relay-connected", relay_addr);
         }
 
-        // 2. Read incoming packets routed from other WAN nodes with bounded buffer
+        // 2. Writes run in their own task, so reading never stalls behind a large
+        //    upload (the relay closes a socket that stops taking its packets).
+        let writer_queued = Arc::clone(&relay_queued);
+        let mut writer_task = tokio::spawn(async move {
+            // Ends with None when set_relay() drops the tunnel handle: reconnect to the new address.
+            while let Some(frame) = relay_rx.recv().await {
+                let written = writer.write_all(frame.as_bytes()).await;
+                writer_queued.fetch_sub(frame.len(), std::sync::atomic::Ordering::Relaxed);
+                if written.is_err() {
+                    log::warn!("[SovereignMesh] WAN relay tunnel write failed; reconnecting.");
+                    break;
+                }
+            }
+        });
+
+        // 3. Read incoming packets routed from other WAN nodes with bounded buffer
         let mut buf_reader = BufReader::new(reader);
-        let mut line = String::new();
+        let mut line: Vec<u8> = Vec::new();
 
         loop {
             tokio::select! {
@@ -764,56 +801,43 @@ impl MeshManager {
                             break;
                         }
                         Ok(_) => {
-                            let trimmed = line.trim();
-                            if !trimmed.is_empty() {
-                                if let Ok(packet) = serde_json::from_str::<MeshPacket>(trimmed) {
-                                    match packet.packet_type.as_str() {
-                                        // Relay-only packets. The relay never forwards client packets
-                                        // claiming its reserved sender ID, so this check is sound here.
-                                        "MESH_TURN_CREDENTIALS" | "MESH_ARCHIVE_ITEM" | "MESH_ARCHIVE_DONE" => {
-                                            if packet.sender_id == "relay_supervisor" {
-                                                self.handle_relay_packet(packet, relay_addr).await;
-                                            }
+                            if let Ok(packet) = serde_json::from_slice::<MeshPacket>(&line) {
+                                match packet.packet_type.as_str() {
+                                    // Relay-only packets. The relay never forwards client packets
+                                    // claiming its reserved sender ID, so this check is sound here.
+                                    "MESH_TURN_CREDENTIALS" | "MESH_ARCHIVE_ITEM" | "MESH_ARCHIVE_DONE" => {
+                                        if packet.sender_id == "relay_supervisor" {
+                                            self.handle_relay_packet(packet, relay_addr).await;
                                         }
-                                        _ => self.process_incoming_packet(packet, Some(relay_addr.to_string())).await,
                                     }
+                                    _ => self.process_incoming_packet(packet, Some(relay_addr.to_string())).await,
                                 }
                             }
                             line.clear();
                         }
                     }
                 }
-                outbound = relay_rx.recv() => {
-                    // None means set_relay() dropped the tunnel handle: reconnect to the new address.
-                    match outbound {
-                        Some(frame) => {
-                            if writer.write_all(frame.as_bytes()).await.is_err() {
-                                log::warn!("[SovereignMesh] WAN relay tunnel write failed; reconnecting.");
-                                break;
-                            }
-                        }
-                        None => break,
-                    }
-                }
+                _ = &mut writer_task => break,
                 _ = turn_check.tick() => {
                     // The first tick fires at once, which sends the initial request.
                     let wanted = {
                         let state = self.inner.read().await;
                         state.turn.as_ref().map_or(true, |t| t.needs_refresh())
                     };
-                    if wanted && !turn_request.is_empty() && writer.write_all(turn_request.as_bytes()).await.is_err() {
+                    if wanted && !turn_request.is_empty() && !queue_control(&control, &relay_queued, &turn_request) {
                         break;
                     }
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
                     // Periodic heartbeat ping to keep NAT port bindings open in home router
                     let hb = format!("{}\n", serde_json::json!({ "packet_type": "MESH_HEARTBEAT", "timestamp_ms": current_timestamp_ms() }));
-                    if writer.write_all(hb.as_bytes()).await.is_err() {
+                    if !queue_control(&control, &relay_queued, &hb) {
                         break;
                     }
                 }
             }
         }
+        writer_task.abort();
 
         let mut state = self.inner.write().await;
         state.relay_connected = false;
@@ -859,13 +883,29 @@ impl MeshManager {
         }
     }
 
-    /// Queue a serialized frame into the live relay tunnel. Returns false when no
-    /// tunnel is up or its queue is full, so callers never report a false delivery.
+    /// Queue a serialized frame into the live relay tunnel, waiting while the
+    /// tunnel already holds RELAY_BACKLOG_BYTES unsent (a large upload paces
+    /// itself to the link). Returns false when no tunnel is up or it stays
+    /// blocked, so callers never report a false delivery.
     async fn send_via_relay(&self, line: &str) -> bool {
-        let tx = { self.inner.read().await.relay_tx.clone() };
-        match tx {
-            Some(tx) => tx.try_send(line.to_string()).is_ok(),
-            None => false,
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(tunnel) = ({ self.inner.read().await.relay_tx.clone() }) else {
+            return false;
+        };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(RELAY_SEND_WAIT_SECS);
+        while tunnel.queued.load(Relaxed) > RELAY_BACKLOG_BYTES {
+            if tunnel.tx.is_closed() || tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tunnel.queued.fetch_add(line.len(), Relaxed);
+        match tokio::time::timeout_at(deadline, tunnel.tx.send(line.to_string())).await {
+            Ok(Ok(())) => true,
+            _ => {
+                tunnel.queued.fetch_sub(line.len(), Relaxed);
+                false
+            }
         }
     }
 
