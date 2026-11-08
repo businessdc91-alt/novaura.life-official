@@ -159,6 +159,29 @@
 }
 
 /* === AURORA THEME === */
+[data-theme="cyberstorm"] {
+  --theme-name: 'cyberstorm';
+  --background: 233 50% 4%;
+  --foreground: 220 60% 96%;
+  --primary: 185 100% 50%;
+  --primary-foreground: 233 50% 4%;
+  --primary-glow: 185 100% 62%;
+  --secondary: 312 100% 58%;
+  --secondary-foreground: 233 50% 4%;
+  --accent: 239 84% 67%;
+  --accent-foreground: 233 50% 4%;
+  --window-bg: 235 45% 6%;
+  --window-border: 260 70% 55%;
+  --window-header: 235 45% 5%;
+  --card: 235 40% 8%;
+  --muted: 240 30% 17%;
+  --border: 245 35% 22%;
+  --input: 240 30% 14%;
+  --ring: 185 100% 50%;
+  --shadow-glow-cyan: 0 0 25px hsl(185 100% 50% / 0.35), 0 0 50px hsl(185 100% 50% / 0.15);
+  --shadow-glow-purple: 0 0 25px hsl(312 100% 58% / 0.35), 0 0 50px hsl(312 100% 58% / 0.15);
+  --shadow-window: 0 8px 32px hsl(233 50% 2% / 0.9), 0 0 0 1px hsl(260 70% 55% / 0.3);
+}
 [data-theme="aurora"] {
   --theme-name: 'aurora';
   --background: 220 35% 8%;

@@ -12,6 +12,7 @@
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
+import { runPacedLoop } from './backgroundPacing';
 
 export const MESH_THEME_PALETTES = {
   cosmic: {
@@ -41,6 +42,13 @@ export const MESH_THEME_PALETTES = {
     glowColor: '#94a3b8',
     particleColor: '#cbd5e1',
     accentColor: '#8b5cf6',
+  },
+  cyberstorm: {
+    baseColor: '#05060f',
+    lineColor: '#6366f1',
+    glowColor: '#ff2bd6',
+    particleColor: '#00f0ff',
+    accentColor: '#d946ef',
   },
   aurora: {
     baseColor: '#0a0f1a',
@@ -83,9 +91,10 @@ export default function MeshWaterBackground({
   waveSpeed = 0.55,
   showParticles = true,
   gravityStrength = 1.0,
+  calm = false,
 }) {
   const canvasRef = useRef(null);
-  const animRef = useRef(null);
+  const calmRef = useRef(calm);
   const mouseRef = useRef({ x: -1000, y: -1000, vx: 0, vy: 0, down: false });
   const pointsRef = useRef({ points: [], cols: 0, rows: 0 });
   const particlesRef = useRef([]);
@@ -93,6 +102,10 @@ export default function MeshWaterBackground({
   const dimensionsRef = useRef({ width: 0, height: 0 });
 
   const palette = MESH_THEME_PALETTES[theme] || MESH_THEME_PALETTES.meshwater;
+
+  useEffect(() => {
+    calmRef.current = calm;
+  }, [calm]);
 
   // Initialize 2D grid matrix
   const initGrid = useCallback((width, height) => {
@@ -493,19 +506,23 @@ export default function MeshWaterBackground({
     window.addEventListener('mouseup', handleMouseUp);
     window.addEventListener('mouseleave', handleMouseLeave);
 
-    const animate = (time) => {
+    const step = (time, veil) => {
       const { points, cols, rows } = pointsRef.current;
 
       if (points && points.length > 0) {
         updatePhysics(points, cols, rows, canvas.width, canvas.height);
-        updateParticles(particlesRef.current, canvas.width, canvas.height, time);
+        updateParticles(particlesRef.current, canvas.width, canvas.height, time * 1000);
         draw(ctx, points, cols, rows, particlesRef.current);
+        if (veil > 0.005) {
+          ctx.globalAlpha = veil;
+          ctx.fillStyle = palette.baseColor;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.globalAlpha = 1;
+        }
       }
-
-      animRef.current = requestAnimationFrame(animate);
     };
 
-    animRef.current = requestAnimationFrame(animate);
+    const stopLoop = runPacedLoop(step, () => calmRef.current);
 
     return () => {
       window.removeEventListener('resize', resize);
@@ -513,9 +530,9 @@ export default function MeshWaterBackground({
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('mouseleave', handleMouseLeave);
-      cancelAnimationFrame(animRef.current);
+      stopLoop();
     };
-  }, [initGrid, initParticles, updatePhysics, updateParticles, draw]);
+  }, [initGrid, initParticles, updatePhysics, updateParticles, draw, palette]);
 
   return (
     <canvas

@@ -43,6 +43,7 @@ const PARTICLE_THEMES = [
   { id: 'blue-night', name: 'Blue Night', gradient: 'linear-gradient(135deg, #0f1729, #1e293b)', preview: ['#60a5fa', '#fbbf24', '#f97316'] },
   { id: 'matrix', name: 'Matrix Rain', gradient: 'linear-gradient(135deg, #000a00, #001400)', preview: ['#00ff00', '#00f500', '#39ff14'] },
   { id: 'stormy', name: 'Stormy Rain', gradient: 'linear-gradient(135deg, #0d1117, #1a1f29)', preview: ['#64748b', '#60a5fa', '#a855f7'] },
+  { id: 'cyberstorm', name: 'Cyber Storm', gradient: 'linear-gradient(135deg, #05060f, #1a1240, #3a0d3f)', preview: ['#00f0ff', '#ff2bd6', '#6366f1'] },
   { id: 'aurora', name: 'Aurora Borealis', gradient: 'linear-gradient(135deg, #0a0f1a, #1a1f3a)', preview: ['#22d3ee', '#a855f7', '#4ade80'] },
   { id: 'meshwater', name: 'Mesh Water', gradient: 'linear-gradient(135deg, #0c1a2d, #1a2d4a)', preview: ['#0ea5e9', '#22d3ee', '#67e8f9'] },
   { id: 'blaze', name: 'Blaze & Embers', gradient: 'linear-gradient(135deg, #1a0f05, #2d1a0a)', preview: ['#fbbf24', '#f97316', '#ef4444'] },

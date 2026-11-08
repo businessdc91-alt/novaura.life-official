@@ -128,6 +128,15 @@ export function GraphicsProvider({ children }) {
     }
   });
 
+  // Dim and slow the background while app windows are open over it
+  const [calmBehindWindows, setCalmBehindWindowsState] = useState(() => {
+    try {
+      return localStorage.getItem('novaura-calm-background') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
   const [detectedLevel, setDetectedLevel] = useState(null);
 
   const detectHardwareCapability = useCallback(() => {
@@ -195,6 +204,13 @@ export function GraphicsProvider({ children }) {
     } catch {}
   }, []);
 
+  const setCalmBehindWindows = useCallback((enabled) => {
+    setCalmBehindWindowsState(Boolean(enabled));
+    try {
+      localStorage.setItem('novaura-calm-background', Boolean(enabled).toString());
+    } catch {}
+  }, []);
+
   const settings = GRAPHICS_PRESETS[graphicsLevel] || GRAPHICS_PRESETS[GRAPHICS_LEVELS.MEDIUM];
 
   return (
@@ -212,6 +228,8 @@ export function GraphicsProvider({ children }) {
       setGravityStrength,
       shockwavesEnabled,
       setShockwavesEnabled,
+      calmBehindWindows,
+      setCalmBehindWindows,
     }}>
       {children}
     </GraphicsContext.Provider>
@@ -235,6 +253,8 @@ export function useGraphics() {
       setGravityStrength: () => {},
       shockwavesEnabled: true,
       setShockwavesEnabled: () => {},
+      calmBehindWindows: true,
+      setCalmBehindWindows: () => {},
     };
   }
   return context;

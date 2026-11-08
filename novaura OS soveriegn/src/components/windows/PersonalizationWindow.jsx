@@ -41,6 +41,14 @@ export const THEMES = [
     particleColors: ['#64748b', '#60a5fa', '#a855f7'],
   },
   {
+    id: 'cyberstorm',
+    name: 'Cyber Storm',
+    description: 'Neon-lit storm clouds, RGB lightning & flocks of birds',
+    icon: Zap,
+    preview: 'linear-gradient(135deg, #05060f 0%, #1a1240 60%, #3a0d3f 100%)',
+    particleColors: ['#00f0ff', '#ff2bd6', '#6366f1'],
+  },
+  {
     id: 'aurora',
     name: 'Aurora Borealis',
     description: 'Dancing northern light ribbons & starry sky',
@@ -142,6 +150,8 @@ export default function PersonalizationWindow({ onThemeChange, currentTheme = 'c
     setGravityStrength,
     shockwavesEnabled,
     setShockwavesEnabled,
+    calmBehindWindows,
+    setCalmBehindWindows,
   } = useGraphics();
 
   const handleSelectTheme = (themeId) => {
@@ -304,6 +314,25 @@ export default function PersonalizationWindow({ onThemeChange, currentTheme = 'c
                 <div
                   className={`w-4 h-4 bg-white rounded-full transition-transform absolute top-1 ${
                     shockwavesEnabled ? 'left-7' : 'left-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+              <div>
+                <span className="text-xs font-medium text-slate-200">Calm Background Behind Windows</span>
+                <p className="text-[10px] text-slate-400">Dims the background and slows it to half speed while app windows are open. It always pauses while Sovereign is minimized or another app has focus.</p>
+              </div>
+              <button
+                onClick={() => setCalmBehindWindows(!calmBehindWindows)}
+                className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer ${
+                  calmBehindWindows ? 'bg-cyan-500' : 'bg-slate-700'
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 bg-white rounded-full transition-transform absolute top-1 ${
+                    calmBehindWindows ? 'left-7' : 'left-1'
                   }`}
                 />
               </button>

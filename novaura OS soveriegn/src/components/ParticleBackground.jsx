@@ -13,19 +13,25 @@
  *   - Mouse down intensifies gravitational focus
  *   - Click triggers radial gravitational shockwave pulses that blast particles outward
  *   - Constellation links with distance attenuation and mouse link glow
- * - 8 Complete Themes:
- *   cosmic, blue-night, matrix, stormy, aurora, meshwater, blaze, light
+ * - 9 Complete Themes:
+ *   cosmic, blue-night, matrix, stormy, cyberstorm, aurora, meshwater, blaze, light
  * - Micro dust luminescence, rain splash physics, heat convection embers
  * - Matrix: glowing gravity bodies plunge through (and off) the screen, pulling particles along,
  *   while the micro particles swim in schools like fish. Bodies that meet merge, absorb
  *   particles and grow into ringed planets, which in time collapse and burst back into bodies.
  *   Orange serpents shove the green particles aside, and a neon pink hunter preys on the fish
  *   until a gravity body pulls it in.
+ * - Cyber Storm: layered storm clouds drift past on the wind, lit from inside by RGB-split
+ *   lightning that forks down through them or crawls between them, while flocks of birds
+ *   wheel through and scatter from the strikes and the cursor.
+ * - Pacing (backgroundPacing.js): at most 60 steps a second on any screen, half pace under a
+ *   dimming veil behind open windows, and paused while the app is minimized or unfocused.
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
 import { useGraphics, GRAVITY_MODES } from '../contexts/GraphicsContext';
 import MeshWaterBackground from './backgrounds/MeshWaterBackground';
+import { runPacedLoop } from './backgrounds/backgroundPacing';
 
 // ============================================
 // THEME CONFIGURATIONS
@@ -161,7 +167,40 @@ export const THEME_CONFIGS = {
     rainCount: 160,
     fontFamily: "'Cinzel', 'Playfair Display', serif",
   },
-  
+
+  cyberstorm: {
+    background: '#05060f',
+    colors: [
+      '#00f0ff', '#22d3ee', '#38bdf8',
+      '#6366f1', '#818cf8', '#8b5cf6',
+      '#a855f7', '#d946ef', '#ff2bd6',
+      '#f472b6', '#60a5fa', '#c084fc',
+    ],
+    microColors: [
+      '#67e8f9', '#a5f3fc', '#93c5fd',
+      '#c7d2fe', '#ddd6fe', '#f0abfc',
+      '#f9a8d4', '#e9d5ff', '#bae6fd',
+    ],
+    linkColor: '120, 130, 255',
+    mouseLinkColor: '255, 43, 214',
+    particleSizeMultiplier: 0.7,
+    flowSpeed: 0.9,
+    glowIntensity: 1.4,
+    // Layers of storm clouds drift past on the wind, lit from inside by RGB lightning that
+    // forks down through them or crawls between them. Frames between strikes, at random:
+    storm: { clouds: 18, strikeEvery: [100, 320] },
+    // The clouds and birds are the scenery, so fewer particles drift in front of them
+    particleShare: 0.45,
+    // Flocks of birds wheel through the storm and scatter from strikes and the cursor
+    flocks: { count: 3, perFlock: 26 },
+    // A light slanted drizzle (the particles don't fall with it, as they do in Stormy)
+    drizzle: true,
+    rainCount: 110,
+    rainColor: '150, 170, 255',
+    rainSlant: -0.22,
+    fontFamily: "'Orbitron', 'Inter', sans-serif",
+  },
+
   aurora: {
     background: '#0a0f1a',
     colors: [
@@ -254,6 +293,29 @@ const SERPENT_SHOVE = 0.45;
 const HUNTER_CAP = 40;
 const HUNTER_SIGHT = 260;
 const HUNTER_DEATH_FRAMES = 50;
+// Cyber Storm cloud layers, far to near: size, opacity, wind speed (px a frame) and the
+// band of the screen's height they drift in
+const CLOUD_LAYERS = [
+  { scale: 0.55, alpha: 0.6, wind: 0.12, top: 0, bottom: 0.42 },
+  { scale: 0.8, alpha: 0.8, wind: 0.24, top: 0.04, bottom: 0.52 },
+  { scale: 1.1, alpha: 0.92, wind: 0.4, top: 0.08, bottom: 0.62 },
+];
+// Hues a strike starts at (red, green, blue, magenta, cyan, violet); it then shifts as it flickers
+const STRIKE_HUES = [355, 125, 222, 312, 185, 268];
+// Fewest frames between two strikes lighting up the clouds, which keeps big flashes under
+// three a second
+const FLASH_GAP = 20;
+// How far a strike scares birds off
+const STRIKE_SCARE = 260;
+
+// 'r, g, b' (the way shockwave colours are written) for a fully saturated hue at 60% lightness
+const hueRgb = (h) => {
+  const f = (n) => {
+    const k = (n + h / 30) % 12;
+    return Math.round(255 * (0.6 - 0.4 * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return `${f(0)}, ${f(8)}, ${f(4)}`;
+};
 
 // ============================================
 // PARTICLE CANVAS WITH GRAVITY & PHYSICS ENGINE
@@ -265,9 +327,9 @@ function ParticleBackgroundCanvas({
   gravityMode = GRAVITY_MODES.WELL,
   gravityStrength = 1.0,
   shockwavesEnabled = true,
+  calm = false,
 }) {
   const canvasRef = useRef(null);
-  const animRef = useRef(null);
   const particlesRef = useRef([]);
   const microRef = useRef([]);
   const mouseRef = useRef({ x: -1000, y: -1000, vx: 0, vy: 0, down: false });
@@ -280,8 +342,15 @@ function ParticleBackgroundCanvas({
   const schoolsRef = useRef([]);
   const serpentsRef = useRef([]);
   const huntersRef = useRef([]);
+  const stormRef = useRef(null);
+  const flocksRef = useRef([]);
   const spritesRef = useRef(new Map());
   const themeRef = useRef(theme);
+  const calmRef = useRef(calm);
+
+  useEffect(() => {
+    calmRef.current = calm;
+  }, [calm]);
 
   useEffect(() => {
     themeRef.current = theme;
@@ -308,8 +377,10 @@ function ParticleBackgroundCanvas({
     const colors = themeConfig.colors;
     const microColors = themeConfig.microColors;
 
-    const particleCount = settings.particles.count;
-    const microCount = settings.particles.microCount;
+    // A theme with its own scenery can ask for a share of the preset's particles
+    const particleShare = themeConfig.particleShare || 1;
+    const particleCount = Math.round(settings.particles.count * particleShare);
+    const microCount = Math.round(settings.particles.microCount * particleShare);
     const enableLinks = settings.particles.links;
     const enableColorCycling = settings.particles.colorCycling;
 
@@ -320,6 +391,13 @@ function ParticleBackgroundCanvas({
     const serpentCfg = themeConfig.serpents;
     // Hunters need fish to hunt
     const hunterCfg = schoolCfg && themeConfig.hunters;
+    const stormCfg = themeConfig.storm;
+    const flockCfg = themeConfig.flocks;
+    // How busy the graphics preset is next to Medium, for sizing the storm and the flocks
+    const busy = Math.max(0.6, Math.min(1.4, settings.particles.count / 220));
+    // With reduced motion asked for, lightning lights the clouds less and nothing flashes or glitches
+    const reduceMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const microTotal = schoolCfg ? Math.round(microCount * schoolCfg.density) : microCount;
 
     const resize = () => {
@@ -421,8 +499,8 @@ function ParticleBackgroundCanvas({
       }
     }
 
-    // Initialize stormy rain
-    if (themeConfig.hasRain && rainRef.current.length === 0) {
+    // Initialize stormy rain (or Cyber Storm's drizzle)
+    if ((themeConfig.hasRain || themeConfig.drizzle) && rainRef.current.length === 0) {
       const count = themeConfig.rainCount || 150;
       rainRef.current = [];
       for (let i = 0; i < count; i++) {
@@ -605,6 +683,190 @@ function ParticleBackgroundCanvas({
         const h = {};
         spawnHunter(h);
         return h;
+      });
+    }
+
+    // A storm cloud, drawn once at half size (it's soft, so scaling up costs nothing): many
+    // overlapping soft puffs, big and small, piled on a flat base, then lit from above, with
+    // billows along the crown, a neon glow along the base and faint scanlines. The mask is a
+    // white copy at quarter size, which lightning tints to light the cloud from inside.
+    const makeCloud = (w, h) => {
+      const sprite = document.createElement('canvas');
+      sprite.width = Math.ceil(w / 2);
+      sprite.height = Math.ceil(h / 2);
+      const g = sprite.getContext('2d');
+      g.scale(0.5, 0.5);
+      const mask = document.createElement('canvas');
+      mask.width = Math.ceil(w / 4);
+      mask.height = Math.ceil(h / 4);
+      const m = mask.getContext('2d');
+      m.scale(0.25, 0.25);
+
+      const base = h * 0.76;
+      const puffs = [];
+      const n = 50 + Math.floor(Math.random() * 30);
+      for (let i = 0; i < n; i++) {
+        const u = (Math.random() + Math.random()) / 2; // bunched toward the middle
+        const centre = 1 - Math.abs(u - 0.5) * 2; // 1 in the middle, 0 at the ends
+        const big = Math.random() < 0.5;
+        const r = h * (big ? 0.13 + Math.random() * 0.13 : 0.05 + Math.random() * 0.06) * (0.55 + centre * 0.6);
+        const y = base - r * 0.5 - Math.random() * Math.pow(centre, 0.8) * Math.max(0, base - r * 1.5 - 4);
+        puffs.push({ x: w * (0.08 + u * 0.84), y, r });
+      }
+      for (const p of puffs) {
+        const grad = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+        grad.addColorStop(0, 'rgba(20, 22, 48, 0.6)');
+        grad.addColorStop(0.5, 'rgba(20, 22, 48, 0.42)');
+        grad.addColorStop(1, 'rgba(20, 22, 48, 0)');
+        g.fillStyle = grad;
+        g.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+        const mg = m.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+        mg.addColorStop(0, 'rgba(255, 255, 255, 0.7)');
+        mg.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        m.fillStyle = mg;
+        m.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+      }
+      // Shear off everything under the base
+      for (const c of [g, m]) {
+        c.globalCompositeOperation = 'destination-out';
+        const cut = c.createLinearGradient(0, base - h * 0.04, 0, base + h * 0.08);
+        cut.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        cut.addColorStop(1, 'rgba(0, 0, 0, 1)');
+        c.fillStyle = cut;
+        c.fillRect(0, 0, w, h);
+      }
+      // Everything from here is painted only onto the cloud itself: light from above, darker
+      // underneath, billows along the crown, the neon underglow, and the scanlines
+      g.globalCompositeOperation = 'source-atop';
+      const shade = g.createLinearGradient(0, 0, 0, base);
+      shade.addColorStop(0, 'rgba(120, 130, 200, 0.5)');
+      shade.addColorStop(0.45, 'rgba(50, 54, 105, 0.25)');
+      shade.addColorStop(1, 'rgba(0, 0, 8, 0.35)');
+      g.fillStyle = shade;
+      g.fillRect(0, 0, w, h);
+      for (const p of puffs) {
+        if (p.y > base * 0.6) continue;
+        const hl = g.createRadialGradient(p.x, p.y - p.r * 0.45, 0, p.x, p.y - p.r * 0.45, p.r * 0.7);
+        hl.addColorStop(0, 'rgba(170, 175, 235, 0.13)');
+        hl.addColorStop(1, 'rgba(170, 175, 235, 0)');
+        g.fillStyle = hl;
+        g.fillRect(p.x - p.r, p.y - p.r * 1.2, p.r * 2, p.r * 1.5);
+      }
+      const neon = ['255, 43, 214', '0, 200, 255', '140, 90, 255'][Math.floor(Math.random() * 3)];
+      const under = g.createLinearGradient(0, base - h * 0.3, 0, base);
+      under.addColorStop(0, `rgba(${neon}, 0)`);
+      under.addColorStop(1, `rgba(${neon}, 0.3)`);
+      g.fillStyle = under;
+      g.fillRect(0, 0, w, h);
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.fillStyle = 'rgba(0, 0, 0, 0.2)';
+      for (let y = 0; y < sprite.height; y += 2) g.fillRect(0, y, sprite.width, 1);
+      g.globalCompositeOperation = 'source-over';
+      return { sprite, mask };
+    };
+
+    // A cloud's height on screen, somewhere in its layer's band
+    const placeCloud = (c) => {
+      const L = CLOUD_LAYERS[c.layer];
+      c.y = canvas.height * (L.top + Math.random() * (L.bottom - L.top)) - c.h * 0.5;
+    };
+
+    if (stormCfg && !stormRef.current) {
+      const W = canvas.width;
+      const sizeScale = Math.max(0.7, Math.min(1.5, W / 1600));
+      const total = Math.round(stormCfg.clouds * busy);
+      const clouds = [];
+      let maskW = 1;
+      let maskH = 1;
+      for (let i = 0; i < total; i++) {
+        // About 40% far, 35% middle, 25% near
+        const f = i / total;
+        const layer = f < 0.4 ? 0 : f < 0.75 ? 1 : 2;
+        const w = Math.round((480 + Math.random() * 620) * CLOUD_LAYERS[layer].scale * sizeScale);
+        const h = Math.round(w * (0.36 + Math.random() * 0.12));
+        const { sprite, mask } = makeCloud(w, h);
+        maskW = Math.max(maskW, mask.width);
+        maskH = Math.max(maskH, mask.height);
+        const c = {
+          layer, sprite, mask, w, h,
+          x: Math.random() * (W + w) - w * 0.5,
+          y: 0,
+          bob: Math.random() * Math.PI * 2,
+          light: 0, // how brightly lightning lights it, fading
+          lx: 0, // where the light comes from, in the cloud's own pixels
+          ly: 0,
+          hue: 0,
+          glitch: 0, // frames left sliced up and knocked sideways
+          cuts: [],
+        };
+        placeCloud(c);
+        clouds.push(c);
+      }
+      const scratch = document.createElement('canvas');
+      scratch.width = maskW;
+      scratch.height = maskH;
+      stormRef.current = {
+        clouds,
+        strikes: [],
+        next: 50 + Math.random() * 100, // frames to the next strike
+        frame: 0,
+        lastFlash: -FLASH_GAP,
+        sky: 0, // the faint wash over the whole sky from the latest strike
+        skyHue: 0,
+        scratch,
+        scratchCtx: scratch.getContext('2d'),
+        skyGrad: null,
+        skyGradH: 0,
+      };
+    }
+
+    // A flock picks somewhere new to head for: usually in the sky, now and then off one side,
+    // to leave for a while
+    const retargetFlock = (fl) => {
+      const W = canvas.width;
+      const H = canvas.height;
+      if (Math.random() < 0.25) {
+        fl.tx = Math.random() < 0.5 ? -180 : W + 180;
+        fl.ty = H * (0.1 + Math.random() * 0.5);
+      } else {
+        fl.tx = W * (0.1 + Math.random() * 0.8);
+        fl.ty = H * (0.08 + Math.random() * 0.55);
+      }
+      fl.retarget = 360 + Math.random() * 600;
+    };
+
+    if (flockCfg && flocksRef.current.length === 0) {
+      const W = canvas.width;
+      const H = canvas.height;
+      const depths = [0.6, 0.85, 1.05];
+      flocksRef.current = Array.from({ length: flockCfg.count }, (_, i) => {
+        const depth = depths[i % depths.length] * (0.9 + Math.random() * 0.2);
+        const cx = Math.random() * W;
+        const cy = H * (0.12 + Math.random() * 0.45);
+        const dir = Math.random() < 0.5 ? -1 : 1;
+        const fl = {
+          depth,
+          // Drawn just after this cloud layer, so nearer clouds pass in front of farther flocks
+          layer: depth < 0.75 ? 0 : depth < 0.95 ? 1 : 2,
+          phase: Math.random() * Math.PI * 2,
+          rim: ['0, 240, 255', '255, 43, 214', '160, 120, 255'][i % 3],
+          tx: 0,
+          ty: 0,
+          retarget: 0,
+          birds: Array.from({ length: Math.round(flockCfg.perFlock * busy * (0.7 + Math.random() * 0.6)) }, () => ({
+            x: cx + (Math.random() - 0.5) * 90,
+            y: cy + (Math.random() - 0.5) * 45,
+            vx: dir * (1.6 + Math.random() * 0.6) * depth,
+            vy: (Math.random() - 0.5) * 0.4,
+            phase: Math.random() * Math.PI * 2,
+            flapSpeed: 0.26 + Math.random() * 0.12,
+            size: 0.8 + Math.random() * 0.5,
+            glide: 0, // frames left gliding instead of flapping
+            scared: 0, // frames left fleeing
+          })),
+        };
+        retargetFlock(fl);
+        return fl;
       });
     }
 
@@ -1583,6 +1845,425 @@ function ParticleBackgroundCanvas({
     };
 
     // Update wandering attractors
+    // ============================================
+    // CYBER STORM: CLOUDS, LIGHTNING AND FLOCKS
+    // ============================================
+
+    // One channel of a lightning bolt, jagged by midpoint displacement, with forks that are
+    // thinner and dimmer channels of their own
+    const bolt = (out, x0, y0, x1, y1, rough, depth, width, bright) => {
+      let pts = [x0, y0, x1, y1];
+      let disp = Math.hypot(x1 - x0, y1 - y0) * rough;
+      for (let k = 0; k < 6; k++) {
+        const next = [pts[0], pts[1]];
+        for (let i = 2; i < pts.length; i += 2) {
+          const ax = pts[i - 2];
+          const ay = pts[i - 1];
+          const bx = pts[i];
+          const by = pts[i + 1];
+          const l = Math.hypot(bx - ax, by - ay) || 1;
+          const off = (Math.random() - 0.5) * disp;
+          next.push((ax + bx) / 2 - ((by - ay) / l) * off, (ay + by) / 2 + ((bx - ax) / l) * off, bx, by);
+        }
+        pts = next;
+        disp *= 0.5;
+      }
+      const path = new Path2D();
+      path.moveTo(pts[0], pts[1]);
+      for (let i = 2; i < pts.length; i += 2) path.lineTo(pts[i], pts[i + 1]);
+      out.push({ pts, path, width, bright });
+      if (depth <= 0) return;
+      const n = pts.length / 2;
+      const forks = 1 + Math.floor(Math.random() * 3);
+      for (let f = 0; f < forks; f++) {
+        const i = Math.floor(n * (0.15 + Math.random() * 0.6));
+        const ax = pts[i * 2];
+        const ay = pts[i * 2 + 1];
+        const dir = Math.atan2(y1 - ay, x1 - ax) + (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.6);
+        const len = Math.hypot(x1 - ax, y1 - ay) * (0.25 + Math.random() * 0.35);
+        bolt(out, ax, ay, ax + Math.cos(dir) * len, ay + Math.sin(dir) * len, rough * 1.1, depth - 1, width * 0.55, bright * 0.6);
+      }
+    };
+
+    const startGlitch = (c, frames) => {
+      c.glitch = Math.round(frames);
+      c.cuts = Array.from({ length: 6 }, () => (Math.random() < 0.4 ? 0 : (Math.random() - 0.5) * 26));
+    };
+
+    // A strike lights the clouds around where it starts (and, for one crawling between
+    // clouds, where it ends), and washes the sky faintly in its colour
+    const lightUp = (s, amount) => {
+      const st = stormRef.current;
+      st.lastFlash = st.frame;
+      st.sky = Math.max(st.sky, amount);
+      st.skyHue = s.hue;
+      const ends = s.kind === 'crawl' ? [[s.x0, s.y0], [s.x1, s.y1]] : [[s.x0, s.y0]];
+      for (const c of st.clouds) {
+        for (const [ex, ey] of ends) {
+          const d = Math.hypot(c.x + c.w / 2 - ex, c.y + c.h / 2 - ey);
+          const near = Math.max(0, 1 - d / (c.w * 0.5 + 360));
+          const a = amount * near * (c.layer === s.layer ? 1 : 0.7);
+          if (a > c.light) {
+            c.light = a;
+            c.lx = ex - c.x;
+            c.ly = ey - c.y;
+            c.hue = s.hue;
+          }
+        }
+      }
+    };
+
+    // A strike leaves a cloud on screen, nearer layers likelier: down through the sky below,
+    // crawling across to a neighbouring cloud, or arcing inside its own cloud
+    const fireStrike = () => {
+      const st = stormRef.current;
+      const W = canvas.width;
+      const H = canvas.height;
+      const onScreen = st.clouds.filter((c) => c.x + c.w * 0.5 > 0 && c.x + c.w * 0.5 < W);
+      if (!onScreen.length) return;
+      const weighted = onScreen.flatMap((c) => Array(c.layer + 1).fill(c));
+      const src = weighted[Math.floor(Math.random() * weighted.length)];
+      const x0 = src.x + src.w * (0.25 + Math.random() * 0.5);
+      const y0 = src.y + src.h * (0.45 + Math.random() * 0.25);
+      const roll = Math.random();
+      const neighbours = onScreen.filter((c) => c !== src && Math.abs(c.layer - src.layer) <= 1
+        && Math.abs(c.x + c.w / 2 - x0) < 750);
+      let kind = 'arc';
+      let x1 = x0 + (Math.random() < 0.5 ? -1 : 1) * src.w * (0.2 + Math.random() * 0.25);
+      let y1 = y0 + (Math.random() - 0.5) * src.h * 0.3;
+      if (roll < 0.45) {
+        kind = 'down';
+        x1 = x0 + (Math.random() - 0.5) * W * 0.25;
+        y1 = y0 + H * (0.3 + Math.random() * 0.45);
+      } else if (roll < 0.85 && neighbours.length) {
+        kind = 'crawl';
+        const t = neighbours[Math.floor(Math.random() * neighbours.length)];
+        x1 = t.x + t.w * (0.2 + Math.random() * 0.6);
+        y1 = t.y + t.h * (0.4 + Math.random() * 0.3);
+      }
+      const segs = [];
+      bolt(segs, x0, y0, x1, y1, kind === 'down' ? 0.28 : 0.2, kind === 'arc' ? 1 : 2, kind === 'down' ? 2.7 : 1.9, 1);
+      const restroke = 21 + Math.floor(Math.random() * 8);
+      const s = {
+        kind, layer: src.layer, segs, x0, y0, x1, y1,
+        hue: STRIKE_HUES[Math.floor(Math.random() * STRIKE_HUES.length)],
+        age: 0,
+        lead: 4, // frames the bolt takes to reach its full length
+        restroke, // when it strikes again down the same channel
+        life: restroke + 14,
+      };
+      st.strikes.push(s);
+      if (st.frame - st.lastFlash >= FLASH_GAP) lightUp(s, 1);
+      if (!reduceMotion) startGlitch(src, 8);
+      if (kind === 'down' && shockwavesEnabled) {
+        shockwavesRef.current.push({
+          x: x1,
+          y: y1,
+          radius: 6,
+          speed: 7,
+          maxRadius: 220,
+          intensity: 0.6,
+          color: hueRgb(s.hue),
+        });
+      }
+    };
+
+    // Brightness of a strike's bolt this frame: full while it reaches out, then fading with a
+    // fast flicker, then the second stroke. Bolts are thin, so the flicker is no big flash.
+    const strikeIntensity = (s) => {
+      if (s.age < s.lead) return 1;
+      let i = Math.exp(-(s.age - s.lead) / 7);
+      if (s.age >= s.restroke) i = Math.max(i, Math.exp(-(s.age - s.restroke) / 5) * 0.9);
+      return i * (s.age % 4 < 2 ? 1 : 0.55);
+    };
+
+    const updateStorm = () => {
+      const st = stormRef.current;
+      const W = canvas.width;
+      st.frame++;
+      for (const c of st.clouds) {
+        c.x -= CLOUD_LAYERS[c.layer].wind;
+        if (c.x + c.w < -40) {
+          c.x = W + 40 + Math.random() * 240;
+          placeCloud(c);
+        }
+        c.light *= 0.92;
+        c.hue = (c.hue + 6) % 360; // the light shifts colour as it fades
+        if (c.glitch > 0) {
+          c.glitch--;
+          if (c.glitch % 3 === 0) startGlitch(c, c.glitch);
+        } else if (!reduceMotion && Math.random() < 0.0004) {
+          startGlitch(c, 6 + Math.random() * 6);
+        }
+      }
+      st.sky *= 0.9;
+      st.skyHue = (st.skyHue + 6) % 360;
+      for (let i = st.strikes.length - 1; i >= 0; i--) {
+        const s = st.strikes[i];
+        s.age++;
+        if (s.age === s.restroke && st.frame - st.lastFlash >= FLASH_GAP) lightUp(s, 0.75);
+        if (s.age > s.life) st.strikes.splice(i, 1);
+      }
+      if (--st.next <= 0) {
+        fireStrike();
+        const [lo, hi] = stormCfg.strikeEvery;
+        // Now and then a second strike follows close behind
+        st.next = Math.random() < 0.2 ? FLASH_GAP + 4 + Math.random() * 16 : lo + Math.random() * (hi - lo);
+      }
+    };
+
+    // A dark sky with a magenta haze rising from below, like a city's glow
+    const drawSky = () => {
+      const st = stormRef.current;
+      const H = canvas.height;
+      if (!st.skyGrad || st.skyGradH !== H) {
+        st.skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+        st.skyGrad.addColorStop(0, 'rgba(8, 10, 30, 0.9)');
+        st.skyGrad.addColorStop(0.55, 'rgba(14, 10, 40, 0.5)');
+        st.skyGrad.addColorStop(1, 'rgba(80, 16, 85, 0.24)');
+        st.skyGradH = H;
+      }
+      ctx.fillStyle = st.skyGrad;
+      ctx.fillRect(0, 0, canvas.width, H);
+    };
+
+    // Tints a cloud's mask with the light's colour, brightest where the strike is, and adds
+    // it over the cloud
+    const lightCloud = (c, y, L) => {
+      const st = stormRef.current;
+      const g = st.scratchCtx;
+      const mw = c.mask.width;
+      const mh = c.mask.height;
+      g.globalCompositeOperation = 'source-over';
+      g.clearRect(0, 0, mw, mh);
+      g.drawImage(c.mask, 0, 0);
+      g.globalCompositeOperation = 'source-in';
+      const gx = c.lx / 4;
+      const gy = c.ly / 4;
+      const grad = g.createRadialGradient(gx, gy, 0, gx, gy, mw * 0.75);
+      grad.addColorStop(0, `hsla(${c.hue}, 100%, 88%, 1)`);
+      grad.addColorStop(0.3, `hsla(${c.hue}, 100%, 62%, 0.75)`);
+      grad.addColorStop(1, `hsla(${c.hue}, 100%, 50%, 0)`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, mw, mh);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = c.light * (reduceMotion ? 0.35 : 0.9) * L.alpha;
+      ctx.drawImage(st.scratch, 0, 0, mw, mh, c.x, y, c.w, c.h);
+      ctx.globalCompositeOperation = 'source-over';
+    };
+
+    const drawCloudLayer = (li, time) => {
+      const st = stormRef.current;
+      const L = CLOUD_LAYERS[li];
+      const W = canvas.width;
+      for (const c of st.clouds) {
+        if (c.layer !== li || c.x > W || c.x + c.w < 0) continue;
+        const y = c.y + Math.sin(time * 0.3 + c.bob) * 4 * L.scale;
+        ctx.globalAlpha = L.alpha;
+        if (c.glitch > 0) {
+          // Sliced into strips, some knocked sideways
+          const sh = c.h / c.cuts.length;
+          const ss = c.sprite.height / c.cuts.length;
+          for (let k = 0; k < c.cuts.length; k++) {
+            ctx.drawImage(c.sprite, 0, k * ss, c.sprite.width, ss, c.x + c.cuts[k], y + k * sh, c.w, sh);
+          }
+        } else {
+          ctx.drawImage(c.sprite, c.x, y, c.w, c.h);
+        }
+        if (c.light > 0.02) lightCloud(c, y, L);
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    // The bolt glows in the strike's (shifting) colour around a core split into red, green
+    // and blue copies a pixel or two apart, which add up to white where they overlap
+    const drawBolt = (s) => {
+      const I = strikeIntensity(s);
+      if (I < 0.02) return;
+      const hue = s.hue + s.age * 6;
+      const reveal = s.age < s.lead ? (s.age + 1) / s.lead : 1;
+      const split = 1.2 + Math.random() * 1.6;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 1;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const seg of s.segs) {
+        let path = seg.path;
+        if (reveal < 1) {
+          path = new Path2D();
+          const n = Math.max(2, Math.ceil((seg.pts.length / 2) * reveal));
+          path.moveTo(seg.pts[0], seg.pts[1]);
+          for (let i = 1; i < n; i++) path.lineTo(seg.pts[i * 2], seg.pts[i * 2 + 1]);
+        }
+        const a = I * seg.bright;
+        ctx.strokeStyle = `hsla(${hue}, 100%, 60%, ${a * 0.12})`;
+        ctx.lineWidth = seg.width * 9;
+        ctx.stroke(path);
+        ctx.strokeStyle = `hsla(${hue}, 100%, 62%, ${a * 0.3})`;
+        ctx.lineWidth = seg.width * 3.5;
+        ctx.stroke(path);
+        ctx.lineWidth = seg.width;
+        ctx.translate(split, 0);
+        ctx.strokeStyle = `rgba(255, 30, 60, ${a * 0.9})`;
+        ctx.stroke(path);
+        ctx.translate(-split, 0);
+        ctx.strokeStyle = `rgba(30, 255, 110, ${a * 0.9})`;
+        ctx.stroke(path);
+        ctx.translate(-split, 0);
+        ctx.strokeStyle = `rgba(40, 90, 255, ${a * 0.9})`;
+        ctx.stroke(path);
+        ctx.translate(split, 0);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${a * 0.8})`;
+        ctx.lineWidth = seg.width * 0.45;
+        ctx.stroke(path);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    };
+
+    // Boids: each bird keeps clear of its closest neighbours, matches their heading and
+    // drifts toward their middle, while the flock heads for its target. Strikes and the
+    // cursor scatter them, and they flap faster while they flee.
+    const updateFlocks = (time) => {
+      const H = canvas.height;
+      const mouse = mouseRef.current;
+      const strikes = stormRef.current ? stormRef.current.strikes : [];
+      for (const fl of flocksRef.current) {
+        const birds = fl.birds;
+        let cx = 0;
+        let cy = 0;
+        for (const b of birds) { cx += b.x; cy += b.y; }
+        cx /= birds.length;
+        cy /= birds.length;
+        if (--fl.retarget <= 0 || Math.hypot(fl.tx - cx, fl.ty - cy) < 90) retargetFlock(fl);
+        // The flock slowly tightens and loosens, so its shape keeps changing
+        const tight = 0.6 + 0.6 * Math.sin(time * 0.25 + fl.phase);
+        for (const b of birds) {
+          let n = 0;
+          let avx = 0;
+          let avy = 0;
+          let px = 0;
+          let py = 0;
+          let sx = 0;
+          let sy = 0;
+          for (const o of birds) {
+            if (o === b) continue;
+            const dx = o.x - b.x;
+            const dy = o.y - b.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > 4900) continue;
+            n++;
+            avx += o.vx;
+            avy += o.vy;
+            px += o.x;
+            py += o.y;
+            if (d2 < 625) {
+              sx -= dx / (d2 + 1);
+              sy -= dy / (d2 + 1);
+            }
+          }
+          let ax = sx * 2.2;
+          let ay = sy * 2.2;
+          if (n) {
+            ax += (avx / n - b.vx) * 0.04 + (px / n - b.x) * 0.0015 * tight;
+            ay += (avy / n - b.vy) * 0.04 + (py / n - b.y) * 0.0015 * tight;
+          }
+          const tdx = fl.tx - b.x;
+          const tdy = fl.ty - b.y;
+          const td = Math.hypot(tdx, tdy) || 1;
+          ax += (tdx / td) * 0.025;
+          ay += (tdy / td) * 0.025;
+          if (b.y < H * 0.05) ay += 0.05;
+          else if (b.y > H * 0.8) ay -= 0.05;
+          for (const s of strikes) {
+            if (s.age > 30) continue;
+            for (const [ex, ey] of [[s.x0, s.y0], [s.x1, s.y1], [(s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2]]) {
+              const dx = b.x - ex;
+              const dy = b.y - ey;
+              const d = Math.hypot(dx, dy) || 1;
+              if (d < STRIKE_SCARE) {
+                const k = (1 - d / STRIKE_SCARE) * 0.5;
+                ax += (dx / d) * k;
+                ay += (dy / d) * k;
+                b.scared = 50;
+              }
+            }
+          }
+          const mdx = b.x - mouse.x;
+          const mdy = b.y - mouse.y;
+          const md = Math.hypot(mdx, mdy) || 1;
+          if (md < 120) {
+            const k = (1 - md / 120) * 0.4;
+            ax += (mdx / md) * k;
+            ay += (mdy / md) * k;
+            b.scared = Math.max(b.scared, 20);
+          }
+          b.vx += ax;
+          b.vy += ay;
+          const speed = Math.hypot(b.vx, b.vy) || 1;
+          const max = (b.scared > 0 ? 4.4 : 2.7) * fl.depth;
+          const min = 1.3 * fl.depth;
+          if (speed > max) { b.vx *= max / speed; b.vy *= max / speed; }
+          else if (speed < min) { b.vx *= min / speed; b.vy *= min / speed; }
+          b.x += b.vx;
+          b.y += b.vy;
+          if (b.scared > 0) b.scared--;
+          // Wings flap, or now and then hold still in a glide
+          if (b.glide > 0) {
+            b.glide--;
+          } else {
+            b.phase += b.flapSpeed * (b.scared > 0 ? 1.7 : 1);
+            if (b.scared === 0 && Math.random() < 0.004) b.glide = 40 + Math.random() * 60;
+          }
+        }
+      }
+    };
+
+    // Birds as flapping gull-wing strokes, tilted with their climb or dive: a dark silhouette
+    // under a thin neon rim, so they show against both the dark sky and lit clouds
+    const drawFlock = (fl) => {
+      ctx.beginPath();
+      for (const b of fl.birds) {
+        const span = (5 + b.size * 3) * fl.depth;
+        const f = b.glide > 0 ? 0.3 : Math.sin(b.phase);
+        const tipY = -f * span * 0.6;
+        const midY = span * 0.2 - f * span * 0.1;
+        const tilt = Math.atan2(b.vy, Math.abs(b.vx)) * 0.5 * (b.vx >= 0 ? 1 : -1);
+        const c = Math.cos(tilt);
+        const s = Math.sin(tilt);
+        const X = (px, py) => b.x + px * c - py * s;
+        const Y = (px, py) => b.y + px * s + py * c;
+        ctx.moveTo(X(-span, tipY), Y(-span, tipY));
+        ctx.quadraticCurveTo(X(-span * 0.45, midY), Y(-span * 0.45, midY), b.x, b.y);
+        ctx.quadraticCurveTo(X(span * 0.45, midY), Y(span * 0.45, midY), X(span, tipY), Y(span, tipY));
+      }
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#04050c';
+      ctx.lineWidth = 2.8 * fl.depth;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = `rgba(${fl.rim}, 0.55)`;
+      ctx.lineWidth = 1.1 * fl.depth;
+      ctx.stroke();
+    };
+
+    const drawStorm = (time) => {
+      const st = stormRef.current;
+      drawSky();
+      for (let li = 0; li < CLOUD_LAYERS.length; li++) {
+        drawCloudLayer(li, time);
+        for (const s of st.strikes) if (s.layer === li) drawBolt(s);
+        if (flockCfg) for (const fl of flocksRef.current) if (fl.layer === li) drawFlock(fl);
+      }
+      if (st.sky > 0.01 && !reduceMotion) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = `hsla(${st.skyHue}, 100%, 55%, ${st.sky * 0.06})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    };
+
     const updateAttractors = () => {
       const arr = attractorsRef.current;
       for (let a = 0; a < arr.length; a++) {
@@ -1609,10 +2290,10 @@ function ParticleBackgroundCanvas({
       }
     };
 
-    // Main animation loop
-    const animate = () => {
+    // One frame of the simulation, drawn. `time` is the simulation clock in seconds, and
+    // `veil` dims the frame while windows are open over it (see backgroundPacing).
+    const step = (time, veil) => {
       const currentTheme = getThemeConfig();
-      const time = Date.now() * 0.001;
       const mouse = mouseRef.current;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1659,14 +2340,25 @@ function ParticleBackgroundCanvas({
         }
       }
 
-      // Render Stormy Rain with interactive cursor wind deflection
-      if (currentTheme.hasRain) {
+      if (stormCfg) {
+        updateStorm();
+        if (flockCfg) updateFlocks(time);
+        drawStorm(time);
+      }
+
+      // Render Stormy Rain (or a slanted drizzle, lit by lightning) with interactive cursor wind deflection
+      if (currentTheme.hasRain || currentTheme.drizzle) {
         const rain = rainRef.current;
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+        const slant = currentTheme.rainSlant || 0;
+        const rainLight = currentTheme.drizzle ? 0.6 * (1 + (stormRef.current?.sky || 0) * 1.5) : 1;
+        ctx.strokeStyle = `rgba(${currentTheme.rainColor || '148, 163, 184'}, 0.45)`;
         ctx.lineWidth = 1;
         for (let i = 0; i < rain.length; i++) {
           const r = rain[i];
           r.y += r.speed;
+          r.x += r.speed * slant;
+          if (r.x < -40) r.x += canvas.width + 80;
+          else if (r.x > canvas.width + 40) r.x -= canvas.width + 80;
 
           // Wind deflection near mouse
           const rdx = r.x - mouse.x;
@@ -1681,10 +2373,10 @@ function ParticleBackgroundCanvas({
             r.x = Math.random() * canvas.width;
           }
 
-          ctx.globalAlpha = r.opacity;
+          ctx.globalAlpha = Math.min(1, r.opacity * rainLight);
           ctx.beginPath();
           ctx.moveTo(r.x, r.y);
-          ctx.lineTo(r.x + Math.sin(time + i) * 1.5, r.y + r.length);
+          ctx.lineTo(r.x + r.length * slant + Math.sin(time + i) * 1.5, r.y + r.length);
           ctx.stroke();
         }
       }
@@ -1940,13 +2632,19 @@ function ParticleBackgroundCanvas({
         }
       }
 
-      animRef.current = requestAnimationFrame(animate);
+      // Behind open windows, a veil of the background colour dims the frame
+      if (veil > 0.005) {
+        ctx.globalAlpha = veil;
+        ctx.fillStyle = currentTheme.background;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalAlpha = 1;
+      }
     };
 
-    animRef.current = requestAnimationFrame(animate);
+    const stopLoop = runPacedLoop(step, () => calmRef.current);
 
     return () => {
-      cancelAnimationFrame(animRef.current);
+      stopLoop();
       window.removeEventListener('resize', resize);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
@@ -1967,14 +2665,16 @@ function ParticleBackgroundCanvas({
 // MAIN COMPONENT EXPORT
 // ============================================
 
-export default function ParticleBackground({ theme = 'cosmic' }) {
+export default function ParticleBackground({ theme = 'cosmic', windowsOpen = false }) {
   const {
     settings,
     graphicsLevel,
     gravityMode,
     gravityStrength,
     shockwavesEnabled,
+    calmBehindWindows,
   } = useGraphics();
+  const calm = calmBehindWindows && windowsOpen;
 
   // If theme is 'meshwater' or physics mode is 'mesh', route to spring mesh physics
   if (theme === 'meshwater' || gravityMode === GRAVITY_MODES.MESH) {
@@ -1982,6 +2682,7 @@ export default function ParticleBackground({ theme = 'cosmic' }) {
       <MeshWaterBackground
         theme={theme}
         gravityStrength={gravityStrength}
+        calm={calm}
       />
     );
   }
@@ -2006,6 +2707,7 @@ export default function ParticleBackground({ theme = 'cosmic' }) {
       gravityMode={gravityMode}
       gravityStrength={gravityStrength}
       shockwavesEnabled={shockwavesEnabled}
+      calm={calm}
     />
   );
 }

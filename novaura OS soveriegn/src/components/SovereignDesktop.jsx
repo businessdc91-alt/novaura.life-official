@@ -35,7 +35,7 @@ import SovereignRightSidebar from './SovereignRightSidebar';
 import SovereignChatBar from './SovereignChatBar';
 import { useGraphics } from '../contexts/GraphicsContext';
 
-const VALID_THEMES = ['cosmic', 'blue-night', 'matrix', 'stormy', 'aurora', 'meshwater', 'blaze', 'light'];
+const VALID_THEMES = ['cosmic', 'blue-night', 'matrix', 'stormy', 'cyberstorm', 'aurora', 'meshwater', 'blaze', 'light'];
 
 // Shown while a lazily loaded app window's code is fetched.
 function WindowLoading({ color = '#00f0ff' }) {
@@ -332,10 +332,11 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-background font-sans select-none flex flex-col">
-      {/* 1. Dynamic High-Fidelity Particle Background with 8-Theme Support */}
+      {/* 1. Dynamic High-Fidelity Particle Background, calmed while windows are open over it */}
       <ParticleBackground
         theme={theme}
         config="idle"
+        windowsOpen={windows.some((w) => w.state !== 'minimized')}
       />
 
       {/* 2. Top System Bar with Active & Minimized Windows Taskbar Tray */}
