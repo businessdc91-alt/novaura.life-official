@@ -17,7 +17,8 @@
  *   cosmic, blue-night, matrix, stormy, aurora, meshwater, blaze, light
  * - Micro dust luminescence, rain splash physics, heat convection embers
  * - Matrix: glowing gravity bodies plunge through (and off) the screen, pulling particles along,
- *   while the micro particles swim in schools like fish
+ *   while the micro particles swim in schools like fish. Bodies that meet merge, absorb
+ *   particles and grow into ringed planets, which in time collapse and burst back into bodies.
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
@@ -120,7 +121,7 @@ export const THEME_CONFIGS = {
     flowSpeed: 0.75,
     glowIntensity: 1.6,
     // Visible gravity bodies wander across and off the screen; fish feel 35% of their pull
-    gravityBodies: { count: 3, fishPull: 0.35 },
+    gravityBodies: { count: 4, fishPull: 0.35 },
     // Micro particles swim in schools: 2.5x the preset's micro count, about 45 to a school
     schools: { density: 2.5, perSchool: 45 },
     // Particles carried off screen fade back in somewhere else, so swept areas fill again
@@ -226,6 +227,17 @@ export const THEME_CONFIGS = {
 const SCHOOL_SHAPES = ['shoal', 'ribbon', 'ball'];
 // How far off screen a gravity body may travel before it leaves
 const BODY_MARGIN = 220;
+// A body heavier than any newly spawned one (so one that has merged) absorbs particles.
+// Between PLANET_START and PLANET_FULL it turns from a glowing orb into a ringed planet,
+// and it stops growing at MAX_BODY_MASS.
+const ABSORB_MASS = 1.7;
+const PLANET_START = 2.2;
+const PLANET_FULL = 4.5;
+const MAX_BODY_MASS = 8;
+// Absorbed particles it takes to fill out a planet's rings
+const RING_FULL = 120;
+// Frames a planet's collapse takes before it bursts
+const COLLAPSE_FRAMES = 150;
 
 // ============================================
 // PARTICLE CANVAS WITH GRAVITY & PHYSICS ENGINE
@@ -455,6 +467,14 @@ function ParticleBackgroundCanvas({
       }
     }
 
+    // Size, reach and pull follow a body's mass. Reach and pull stop growing early, so a
+    // big planet can't drain the whole screen.
+    const sizeBody = (b) => {
+      b.core = 5 + b.mass * 5;
+      b.radius = 230 + Math.min(b.mass, 4) * 120;
+      b.pull = Math.min(b.mass, 5);
+    };
+
     // A gravity body either starts somewhere on screen, or just past a random edge
     // aimed at the middle of the screen, so it plunges across
     const spawnBody = (b, onScreen) => {
@@ -462,8 +482,7 @@ function ParticleBackgroundCanvas({
       const H = canvas.height;
       b.active = true;
       b.mass = 0.7 + Math.random() * 0.9;
-      b.core = 5 + b.mass * 5;
-      b.radius = 230 + b.mass * 120;
+      sizeBody(b);
       b.spin = Math.random() < 0.5 ? -1 : 1;
       b.phase = Math.random() * Math.PI * 2;
       b.pulseSpeed = 1.2 + Math.random() * 1.6;
@@ -472,6 +491,21 @@ function ParticleBackgroundCanvas({
       b.turn = 0;
       b.vx = 0;
       b.vy = 0;
+      b.gx = 0; // drift from the other bodies' pull
+      b.gy = 0;
+      b.growth = 0; // 0 for an orb, 1 for a full planet
+      b.flat = 1; // how round its disk looks: 1 face-on, smaller as it flattens into rings
+      b.sphere = 0;
+      b.ring = 0; // particles absorbed into its rings
+      b.flash = 0;
+      b.calm = 0; // frames it ignores the other bodies' pull, after a burst
+      b.life = 0; // frames a full planet has left before it collapses
+      b.collapse = 0;
+      // Its ring plane's tilt, and a fixed pattern of bright and faint bands with a gap
+      b.tilt = (Math.random() - 0.5) * 0.9;
+      b.tiltCos = Math.cos(b.tilt);
+      b.tiltSin = Math.sin(b.tilt);
+      b.bands = Array.from({ length: 9 }, (_, i) => (i === 6 ? 0.12 : 0.35 + Math.random() * 0.65));
       if (onScreen) {
         b.x = Math.random() * W;
         b.y = Math.random() * H;
@@ -494,6 +528,8 @@ function ParticleBackgroundCanvas({
         bodiesRef.current.push(b);
       }
     }
+    // The bodies far enough along to be drawn as planets, refreshed every frame
+    const planets = [];
 
     // Window Mouse Listeners — Continuous hover tracking + shockwave pulses
     const handleMouseMove = (e) => {
@@ -623,7 +659,7 @@ function ParticleBackgroundCanvas({
 
       // 3. Wandering Celestial Massive Bodies (the visible gravity bodies, when the theme has them)
       if (bodyCfg) {
-        pullTowardBodies(p, isMicro ? bodyCfg.fishPull : 1);
+        pullTowardBodies(p, isMicro ? bodyCfg.fishPull : 1, true, !isMicro);
         return;
       }
       const attractors = attractorsRef.current;
@@ -646,8 +682,10 @@ function ParticleBackgroundCanvas({
     // reach is also eased toward a circular orbit around it (bounce toward and away from
     // the body damped, sideways speed nudged to orbital speed), so captured particles
     // gather into a swirling disk that travels with the body and trails behind it when it
-    // plunges, instead of being slung off
-    const pullTowardBodies = (p, scale, orbit = true) => {
+    // plunges, instead of being slung off. The orbit is worked out in the body's ring plane,
+    // which tilts away as the body becomes a planet, so its disk flattens into rings.
+    // With `absorb`, a body that has merged takes particles in from its disk and grows.
+    const pullTowardBodies = (p, scale, orbit = true, absorb = false) => {
       const bodies = bodiesRef.current;
       for (let b = 0; b < bodies.length; b++) {
         const body = bodies[b];
@@ -657,72 +695,314 @@ function ParticleBackgroundCanvas({
         const distSq = dx * dx + dy * dy;
         if (distSq > body.radius * body.radius || distSq < 0.01) continue;
         const dist = Math.sqrt(distSq);
-        const soft = body.core * 4;
-        const force = (520 * body.mass * gravityStrength * scale) / (distSq + soft * soft);
-        const nx = dx / dist;
-        const ny = dy / dist;
-        p.vx += nx * force;
-        p.vy += ny * force;
+        const soft = body.core * (4 - body.growth * 2);
+        const force = (520 * body.pull * gravityStrength * scale) / (distSq + soft * soft);
+        p.vx += (dx / dist) * force;
+        p.vy += (dy / dist) * force;
         if (!orbit) continue;
 
-        const rvx = p.vx - body.vx;
-        const rvy = p.vy - body.vy;
+        // Into ring space (turned by the tilt and stretched across the ring plane),
+        // where a ring orbit is a circle
+        const c = body.tiltCos;
+        const s = body.tiltSin;
+        const k = body.flat;
+        const rx = dx * c + dy * s;
+        const ry = (dy * c - dx * s) / k;
+        const ld = Math.hypot(rx, ry);
+        if (ld < 0.01) continue;
+        const nx = rx / ld;
+        const ny = ry / ld;
+        const wvx = p.vx - body.vx;
+        const wvy = p.vy - body.vy;
+        const rvx = wvx * c + wvy * s;
+        const rvy = (wvy * c - wvx * s) / k;
         const radial = rvx * nx + rvy * ny;
         const tx = -ny * body.spin;
         const ty = nx * body.spin;
         const tangential = rvx * tx + rvy * ty;
-        const orbitSpeed = Math.sqrt(force * dist);
+        // The pull still points at the body in ring space, scaled by ld / dist
+        const orbitSpeed = ld * Math.sqrt(force / dist);
         const ease = 0.03 * scale * (1 - dist / body.radius);
-        p.vx += (tx * (orbitSpeed - tangential) - nx * radial) * ease;
-        p.vy += (ty * (orbitSpeed - tangential) - ny * radial) * ease;
-        // Each particle keeps its own orbit distance (3 to 12 core widths), so the
-        // captured particles spread into a disk instead of piling up on the core
-        const hold = body.core * (3 + (p.swirlOffset % 1) * 9);
-        if (dist < hold) {
-          const push = (hold - dist) * 0.02 * scale;
-          p.vx -= nx * push;
-          p.vy -= ny * push;
+        let ax = (tx * (orbitSpeed - tangential) - nx * radial) * ease;
+        let ay = (ty * (orbitSpeed - tangential) - ny * radial) * ease;
+        // Each particle keeps its own orbit distance, so the captured particles spread
+        // out instead of piling up on the core: 3 to 12 core widths round an orb,
+        // narrowing to a band 1.4 to 3 core widths out round a planet. A collapsing
+        // planet draws its rings in.
+        const squeeze = body.collapse > 0 ? 0.3 + 0.7 * (body.collapse / COLLAPSE_FRAMES) : 1;
+        const hold = body.core * squeeze *
+          (3 - 1.6 * body.growth + (p.swirlOffset % 1) * (9 - 7.4 * body.growth));
+        if (ld < hold) {
+          const push = (hold - ld) * 0.02 * scale;
+          ax -= nx * push;
+          ay -= ny * push;
+        } else if (body.growth > 0 && ld > hold * 1.6) {
+          // A planet draws its stragglers in to the ring
+          const tug = (ld - hold * 1.6) * 0.003 * body.growth * scale;
+          ax += nx * tug;
+          ay += ny * tug;
+        }
+        // Back to screen space
+        ay *= k;
+        p.vx += ax * c - ay * s;
+        p.vy += ax * s + ay * c;
+
+        if (!absorb) continue;
+        // Near a planet, and for a moment after (as when a burst scatters its rings), it
+        // is drawn without links, which would mat the crowd solid
+        if (body.growth > 0.4 && dist < body.radius * 0.45) p.ringed = 90;
+        if (ld < hold * 1.8 && body.mass >= ABSORB_MASS && body.collapse <= 0 && Math.random() < 0.0006) {
+          // Taken in: the body grows and its rings thicken, and the particle fades back
+          // in somewhere else
+          body.mass = Math.min(MAX_BODY_MASS, body.mass + 0.025);
+          body.ring++;
+          sizeBody(body);
+          p.x = Math.random() * canvas.width;
+          p.y = Math.random() * canvas.height;
+          p.vx = 0;
+          p.vy = 0;
+          p.fade = 0;
+          return;
         }
       }
     };
 
+    // Whether a point is hidden behind a planet: over its disc, on the far side of its
+    // ring plane
+    const behindPlanet = (x, y) => {
+      for (let i = 0; i < planets.length; i++) {
+        const b = planets[i];
+        const dx = x - b.x;
+        const dy = y - b.y;
+        if (dx * dx + dy * dy < b.sphere * b.sphere && dy * b.tiltCos - dx * b.tiltSin < 0) return true;
+      }
+      return false;
+    };
+
+    // The lighter body joins the heavier one, keeping their momentum. The merge flashes
+    // and sends a small ripple through the particles nearby.
+    const mergeBodies = (a, b) => {
+      const big = a.mass >= b.mass ? a : b;
+      const small = big === a ? b : a;
+      const total = a.mass + b.mass;
+      const vx = (a.vx * a.mass + b.vx * b.mass) / total;
+      const vy = (a.vy * a.mass + b.vy * b.mass) / total;
+      big.x = (a.x * a.mass + b.x * b.mass) / total;
+      big.y = (a.y * a.mass + b.y * b.mass) / total;
+      big.mass = Math.min(MAX_BODY_MASS, total);
+      big.ring += small.ring;
+      big.heading = Math.atan2(vy, vx);
+      big.speed = Math.hypot(vx, vy);
+      big.gx = 0;
+      big.gy = 0;
+      big.flash = 1;
+      sizeBody(big);
+      small.active = false;
+      small.wait = 240 + Math.random() * 360;
+      if (shockwavesEnabled) {
+        shockwavesRef.current.push({
+          x: big.x, y: big.y, radius: big.core, speed: 6, maxRadius: 260, intensity: 0.4,
+          color: themeConfig.mouseLinkColor,
+        });
+      }
+    };
+
+    // A planet's end: a shockwave, and two or three new bodies flung out from where it was
+    const burstPlanet = (b) => {
+      const bodies = bodiesRef.current;
+      const { x, y } = b;
+      if (shockwavesEnabled) {
+        shockwavesRef.current.push({
+          x, y, radius: b.core, speed: 10, maxRadius: Math.max(canvas.width, canvas.height) * 0.7,
+          intensity: 1.3, color: themeConfig.mouseLinkColor,
+        });
+      }
+      const shards = [b, ...bodies.filter((o) => !o.active).slice(0, 2)];
+      while (shards.length < 3 && bodies.length < bodyCfg.count + 2) {
+        const extra = {};
+        bodies.push(extra);
+        shards.push(extra);
+      }
+      const start = Math.random() * Math.PI * 2;
+      shards.forEach((s, i) => {
+        spawnBody(s, true);
+        s.x = x;
+        s.y = y;
+        s.heading = start + (i / shards.length) * Math.PI * 2;
+        s.speed = 2.5 + Math.random();
+        s.cruise = s.speed;
+        s.flash = 1;
+        s.calm = 600; // the shards fly apart before they feel each other's pull again
+      });
+    };
+
     // Gravity bodies wander with smooth random turns and changes of speed (a slow drift
-    // one moment, a plunge the next). Once one is well off screen it rests a while, then
-    // plunges in again from another edge.
+    // one moment, a plunge the next), and pull on each other. Two that meet merge, and a
+    // merged body absorbs particles and grows into a ringed planet, which slows, keeps
+    // to the screen, and in time collapses and bursts back into bodies. A body well off
+    // screen rests a while, then plunges in again from another edge.
     const updateBodies = (time) => {
       const W = canvas.width;
       const H = canvas.height;
       const bodies = bodiesRef.current;
+
+      // Mutual pull, weak enough that only close passes end in a merge, and capped for a
+      // planet so it doesn't sweep up every body that comes on screen. Two bodies close
+      // together nearly stop wandering, so they fall together instead of slinging apart.
+      for (let i = 0; i < bodies.length; i++) bodies[i].near = false;
+      for (let i = 0; i < bodies.length; i++) {
+        const a = bodies[i];
+        if (!a.active || a.calm > 0) continue;
+        for (let j = i + 1; j < bodies.length; j++) {
+          const b = bodies[j];
+          if (!b.active || b.calm > 0) continue;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq > 450 * 450) continue;
+          const dist = Math.sqrt(distSq) || 1;
+          if (dist < (a.core + b.core) * 0.9 && a.collapse <= 0 && b.collapse <= 0) {
+            mergeBodies(a, b);
+            if (!a.active) break;
+            continue;
+          }
+          const f = (90 * gravityStrength) / (distSq + 3600);
+          a.gx += (dx / dist) * f * Math.min(b.pull, 2.5);
+          a.gy += (dy / dist) * f * Math.min(b.pull, 2.5);
+          b.gx -= (dx / dist) * f * Math.min(a.pull, 2.5);
+          b.gy -= (dy / dist) * f * Math.min(a.pull, 2.5);
+          if (dist < 40 + (a.core + b.core) * 1.2) {
+            a.near = true;
+            b.near = true;
+          }
+        }
+      }
+
+      let activeCount = 0;
+      for (let i = 0; i < bodies.length; i++) if (bodies[i].active) activeCount++;
+      planets.length = 0;
       for (let i = 0; i < bodies.length; i++) {
         const b = bodies[i];
         if (!b.active) {
-          if (--b.wait <= 0) spawnBody(b, false);
+          // Bodies left over from a burst wait until the count drops back
+          if (--b.wait <= 0) {
+            if (activeCount < bodyCfg.count) { spawnBody(b, false); activeCount++; }
+            else b.wait = 120;
+          }
           continue;
         }
+        if (b.calm > 0) b.calm--;
+        b.flash *= 0.96;
+
+        // Growth eases toward what its mass makes it, so a merge doesn't snap it into a planet
+        const target = Math.min(1, Math.max(0, (b.mass - PLANET_START) / (PLANET_FULL - PLANET_START)));
+        b.growth += (target - b.growth) * 0.01;
+        b.flat = 1 - 0.72 * b.growth;
+        b.sphere = b.core * 0.9 * Math.sqrt(b.growth);
+        // A full planet lives 40 to 80 seconds, then collapses and bursts
+        if (b.growth > 0.97 && b.life === 0) b.life = 2400 + Math.random() * 2400;
+        if (b.life > 0 && --b.life <= 0) { b.life = -1; b.collapse = COLLAPSE_FRAMES; }
+        if (b.collapse > 0 && --b.collapse <= 0) { burstPlanet(b); continue; }
+
         b.turn += (Math.random() - 0.5) * 0.0016;
         b.turn *= 0.98;
+        if (b.growth > 0.5) {
+          // A planet turns back before it reaches the edge
+          if (b.x < W * 0.15 || b.x > W * 0.85 || b.y < H * 0.15 || b.y > H * 0.85) {
+            const home = Math.atan2(H / 2 - b.y, W / 2 - b.x) - b.heading;
+            b.turn += Math.atan2(Math.sin(home), Math.cos(home)) * 0.002;
+          }
+        }
         b.heading += b.turn + Math.sin(time * 0.7 + b.phase) * 0.0025;
         if (Math.random() < 0.004) b.cruise = 0.35 + Math.random() * 2.6;
-        b.speed += (b.cruise - b.speed) * 0.02;
-        b.vx = Math.cos(b.heading) * b.speed;
-        b.vy = Math.sin(b.heading) * b.speed;
+        // Heavier bodies drift slower
+        const cruise = b.near ? 0.1 : b.cruise * (1 - 0.75 * b.growth);
+        b.speed += (cruise - b.speed) * (b.near ? 0.05 : 0.02);
+        const drag = b.near ? 0.97 : 0.99;
+        b.gx *= drag;
+        b.gy *= drag;
+        b.vx = Math.cos(b.heading) * b.speed + b.gx;
+        b.vy = Math.sin(b.heading) * b.speed + b.gy;
         b.x += b.vx;
         b.y += b.vy;
         if (b.x < -BODY_MARGIN || b.x > W + BODY_MARGIN || b.y < -BODY_MARGIN || b.y > H + BODY_MARGIN) {
           b.active = false;
           b.wait = 90 + Math.random() * 420;
+          continue;
         }
+        if (b.growth > 0.4) planets.push(b);
       }
+    };
+
+    // A planet's rings: fine bands round it in its tilted ring plane, wider and brighter
+    // the more particles it has absorbed. Drawn in two halves, the far one behind the
+    // planet and the near one in front.
+    const drawRings = (b, from, to) => {
+      const fill = Math.min(1, b.ring / RING_FULL);
+      const inner = b.core * 1.45;
+      const outer = b.core * (1.7 + 1.3 * fill);
+      ctx.lineWidth = 1.3;
+      for (let i = 0; i < b.bands.length; i++) {
+        const r = inner + (outer - inner) * (i / (b.bands.length - 1));
+        ctx.strokeStyle = `rgba(150, 255, 170, ${b.growth * (0.05 + 0.25 * fill) * b.bands[i]})`;
+        ctx.beginPath();
+        ctx.ellipse(b.x, b.y, r, r * b.flat, b.tilt, from, to);
+        ctx.stroke();
+      }
+    };
+
+    // The planet: a sphere lit from the upper left, with cloud bands along its ring plane
+    // and a thin glowing atmosphere
+    const drawPlanet = (b) => {
+      const R = b.sphere;
+      const a = Math.min(1, b.growth * 1.5);
+      ctx.globalCompositeOperation = 'source-over';
+      const shade = ctx.createRadialGradient(b.x - R * 0.4, b.y - R * 0.45, R * 0.05, b.x, b.y, R);
+      shade.addColorStop(0, `rgba(190, 255, 200, ${a})`);
+      shade.addColorStop(0.3, `rgba(40, 170, 80, ${a})`);
+      shade.addColorStop(0.75, `rgba(6, 60, 24, ${a})`);
+      shade.addColorStop(1, `rgba(2, 20, 8, ${a})`);
+      ctx.fillStyle = shade;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, R, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bands of latitude, seen from just above the ring plane: the near half of each
+      // circle, raised toward the pole that tilts our way
+      ctx.save();
+      ctx.clip();
+      const lift = Math.sqrt(1 - b.flat * b.flat);
+      ctx.lineWidth = R * 0.1;
+      const lats = [-0.55, -0.2, 0.2, 0.55];
+      for (let i = 0; i < lats.length; i++) {
+        const up = R * lats[i] * lift;
+        const r = R * Math.sqrt(1 - lats[i] * lats[i]);
+        ctx.strokeStyle = i % 2 ? `rgba(120, 255, 150, ${0.12 * a})` : `rgba(0, 25, 10, ${0.4 * a})`;
+        ctx.beginPath();
+        ctx.ellipse(b.x + b.tiltSin * up, b.y - b.tiltCos * up, r, r * b.flat, b.tilt, 0, Math.PI);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      ctx.globalCompositeOperation = 'lighter';
+      const rim = ctx.createRadialGradient(b.x, b.y, R * 0.85, b.x, b.y, R * 1.3);
+      rim.addColorStop(0, 'rgba(57, 255, 20, 0)');
+      rim.addColorStop(0.3, `rgba(57, 255, 20, ${0.25 * a})`);
+      rim.addColorStop(1, 'rgba(57, 255, 20, 0)');
+      ctx.fillStyle = rim;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, R * 1.3, 0, Math.PI * 2);
+      ctx.fill();
     };
 
     const drawBodies = (time) => {
       const bodies = bodiesRef.current;
-      ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = 1;
       for (let i = 0; i < bodies.length; i++) {
         const b = bodies[i];
         if (!b.active) continue;
         const pulse = 0.85 + Math.sin(time * b.pulseSpeed + b.phase) * 0.15;
+        ctx.globalCompositeOperation = 'lighter';
 
         // Faint haze over its reach
         const haze = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.radius * 0.6);
@@ -733,14 +1013,15 @@ function ParticleBackgroundCanvas({
         ctx.arc(b.x, b.y, b.radius * 0.6, 0, Math.PI * 2);
         ctx.fill();
 
-        // Event-horizon ring
-        ctx.strokeStyle = `rgba(140, 255, 150, ${0.22 * pulse})`;
+        // The glowing orb, fading as a planet forms in its place, and brighter in a merge
+        const glow = Math.min(1, 1 - b.growth * 0.85 + b.flash * 0.5);
+        ctx.strokeStyle = `rgba(140, 255, 150, ${0.22 * pulse * glow})`;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(b.x, b.y, b.core * 3 * pulse, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Glowing core
+        ctx.globalAlpha = glow;
         const core = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.core * 2.4);
         core.addColorStop(0, 'rgba(240, 255, 240, 0.95)');
         core.addColorStop(0.3, 'rgba(90, 255, 100, 0.8)');
@@ -749,6 +1030,36 @@ function ParticleBackgroundCanvas({
         ctx.beginPath();
         ctx.arc(b.x, b.y, b.core * 2.4, 0, Math.PI * 2);
         ctx.fill();
+        ctx.globalAlpha = 1;
+
+        if (b.growth > 0.02) {
+          drawRings(b, Math.PI, Math.PI * 2);
+          drawPlanet(b);
+          drawRings(b, 0, Math.PI);
+        }
+
+        // A merge or burst sends a ring out
+        if (b.flash > 0.02) {
+          ctx.strokeStyle = `rgba(200, 255, 210, ${b.flash * 0.6})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.core * (1.5 + (1 - b.flash) * 8), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // A collapsing planet swells with light until it bursts
+        if (b.collapse > 0) {
+          const doom = 1 - b.collapse / COLLAPSE_FRAMES;
+          const r = Math.max(b.sphere, b.core) * (1.2 + doom * 1.5);
+          const blaze = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r);
+          blaze.addColorStop(0, `rgba(230, 255, 230, ${doom * 0.9})`);
+          blaze.addColorStop(0.4, `rgba(57, 255, 20, ${doom * 0.5})`);
+          blaze.addColorStop(1, 'rgba(57, 255, 20, 0)');
+          ctx.fillStyle = blaze;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       ctx.globalCompositeOperation = 'source-over';
     };
@@ -875,6 +1186,7 @@ function ParticleBackgroundCanvas({
         p.opacity += p.opacityDir * p.pulseSpeed;
         if (p.opacity > 0.9) { p.opacity = 0.9; p.opacityDir = -1; }
         if (p.opacity < 0.35) { p.opacity = 0.35; p.opacityDir = 1; }
+        if (planets.length && behindPlanet(p.x, p.y)) continue;
 
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(p.x - p.vx * 3, p.y - p.vy * 3);
@@ -1148,6 +1460,9 @@ function ParticleBackgroundCanvas({
             p.fade = 0;
           }
           if (p.fade < 1) p.fade = Math.min(1, p.fade + 0.01);
+          if (p.ringed > 0) p.ringed--;
+          p.hidden = planets.length > 0 && behindPlanet(p.x, p.y);
+          if (p.hidden) continue;
         } else {
           // Elastic screen boundaries bounce
           if (p.x < 0) { p.vx = Math.abs(p.vx) * 0.85; p.x = 1; }
@@ -1183,9 +1498,11 @@ function ParticleBackgroundCanvas({
       if (enableLinks) {
         ctx.globalAlpha = 1;
         for (let i = 0; i < particles.length; i++) {
+          if (particles[i].hidden || particles[i].ringed > 0) continue;
           for (let j = i + 1; j < particles.length; j++) {
             const a = particles[i];
             const b = particles[j];
+            if (b.hidden || b.ringed > 0) continue;
             const dx = a.x - b.x;
             const dy = a.y - b.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
