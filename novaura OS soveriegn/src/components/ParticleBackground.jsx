@@ -15,7 +15,9 @@
  *   - Constellation links with distance attenuation and mouse link glow
  * - 8 Complete Themes:
  *   cosmic, blue-night, matrix, stormy, aurora, meshwater, blaze, light
- * - Micro dust luminescence, rain splash physics, heat convection embers, and matrix deflection
+ * - Micro dust luminescence, rain splash physics, heat convection embers
+ * - Matrix: glowing gravity bodies plunge through (and off) the screen, pulling particles along,
+ *   while the micro particles swim in schools like fish
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
@@ -117,7 +119,14 @@ export const THEME_CONFIGS = {
     particleSizeMultiplier: 0.65,
     flowSpeed: 0.75,
     glowIntensity: 1.6,
-    isMatrixRain: true,
+    // Visible gravity bodies wander across and off the screen; fish feel 35% of their pull
+    gravityBodies: { count: 3, fishPull: 0.35 },
+    // Micro particles swim in schools: 2.5x the preset's micro count, about 45 to a school
+    schools: { density: 2.5, perSchool: 45 },
+    // Particles carried off screen fade back in somewhere else, so swept areas fill again
+    reappear: true,
+    // Strength of a slow, shifting current that keeps particles drifting across the screen
+    current: 0.008,
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
   },
   
@@ -213,6 +222,11 @@ export const THEME_CONFIGS = {
   },
 };
 
+// Patterns a school of fish switches between
+const SCHOOL_SHAPES = ['shoal', 'ribbon', 'ball'];
+// How far off screen a gravity body may travel before it leaves
+const BODY_MARGIN = 220;
+
 // ============================================
 // PARTICLE CANVAS WITH GRAVITY & PHYSICS ENGINE
 // ============================================
@@ -234,6 +248,9 @@ function ParticleBackgroundCanvas({
   const rainRef = useRef([]);
   const starsRef = useRef([]);
   const sparksRef = useRef([]);
+  const bodiesRef = useRef([]);
+  const schoolsRef = useRef([]);
+  const spritesRef = useRef(new Map());
   const themeRef = useRef(theme);
 
   useEffect(() => {
@@ -268,6 +285,9 @@ function ParticleBackgroundCanvas({
 
     const sizeMultiplier = themeConfig.particleSizeMultiplier || 1;
     const flowSpeedMult = themeConfig.flowSpeed || 1;
+    const bodyCfg = themeConfig.gravityBodies;
+    const schoolCfg = themeConfig.schools;
+    const microTotal = schoolCfg ? Math.round(microCount * schoolCfg.density) : microCount;
 
     const resize = () => {
       canvas.width = window.innerWidth;
@@ -300,16 +320,40 @@ function ParticleBackgroundCanvas({
           driftAngle: Math.random() * Math.PI * 2,
           driftSpeed: (0.15 + Math.random() * 0.45) * flowSpeedMult,
           swirlOffset: Math.random() * 1000,
-          fallBias: themeConfig.hasRain ? 2.5 : (theme === 'matrix' ? (Math.random() * 0.8 + 0.8) : 0),
+          fallBias: themeConfig.hasRain ? 2.5 : 0,
         });
       }
     }
 
-    // Initialize micro dust particles
-    if (microRef.current.length !== microCount) {
+    // Initialize micro dust particles (as schools of fish, of uneven size, when the theme has them)
+    if (microRef.current.length !== microTotal) {
+      const schoolCount = schoolCfg ? Math.max(3, Math.min(12, Math.round(microTotal / schoolCfg.perSchool))) : 0;
+      const schoolOf = Array.from({ length: schoolCount ? microTotal : 0 },
+        () => Math.floor(Math.pow(Math.random(), 1.6) * schoolCount));
+      const counts = new Array(schoolCount).fill(0);
+      for (const idx of schoolOf) counts[idx]++;
+      schoolsRef.current = counts.map((count) => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        heading: Math.random() * Math.PI * 2,
+        turn: 0,
+        speed: 1,
+        cruise: 0.8 + Math.random(),
+        dart: 0,
+        vx: 0, // drift from passing gravity bodies
+        vy: 0,
+        mx: 0, // the school's overall velocity, which every fish aligns with
+        my: 0,
+        shape: SCHOOL_SHAPES[Math.floor(Math.random() * SCHOOL_SHAPES.length)],
+        shapeTimer: 300 + Math.random() * 600,
+        spin: Math.random() < 0.5 ? -1 : 1,
+        length: 22 + Math.sqrt(count) * 8,
+      }));
+
       microRef.current = [];
-      for (let i = 0; i < microCount; i++) {
+      for (let i = 0; i < microTotal; i++) {
         const colorGroup = i % microColors.length;
+        const school = schoolCount ? schoolsRef.current[schoolOf[i]] : null;
         microRef.current.push({
           x: Math.random() * canvas.width,
           y: Math.random() * canvas.height,
@@ -326,6 +370,20 @@ function ParticleBackgroundCanvas({
           driftAngle: Math.random() * Math.PI * 2,
           driftSpeed: 0.1 + Math.random() * 0.3,
           swirlOffset: Math.random() * 1000,
+          // A fish starts at its school, at rest, with its own place in the school's shape
+          ...(school && {
+            school: schoolOf[i],
+            x: school.x + (Math.random() - 0.5) * school.length,
+            y: school.y + (Math.random() - 0.5) * school.length,
+            vx: 0,
+            vy: 0,
+            size: 0.7 + Math.random() * 0.9,
+            opacity: 0.4 + Math.random() * 0.4,
+            u: Math.random(),
+            v: Math.random(),
+            wobblePhase: Math.random() * Math.PI * 2,
+            wobbleSpeed: 4 + Math.random() * 4,
+          }),
         });
       }
     }
@@ -394,6 +452,46 @@ function ParticleBackgroundCanvas({
           maxLife: 250 + Math.random() * 350,
           hue: [190, 270, 320, 140][i % 4],
         });
+      }
+    }
+
+    // A gravity body either starts somewhere on screen, or just past a random edge
+    // aimed at the middle of the screen, so it plunges across
+    const spawnBody = (b, onScreen) => {
+      const W = canvas.width;
+      const H = canvas.height;
+      b.active = true;
+      b.mass = 0.7 + Math.random() * 0.9;
+      b.core = 5 + b.mass * 5;
+      b.radius = 230 + b.mass * 120;
+      b.spin = Math.random() < 0.5 ? -1 : 1;
+      b.phase = Math.random() * Math.PI * 2;
+      b.pulseSpeed = 1.2 + Math.random() * 1.6;
+      b.cruise = 0.5 + Math.random() * 1.6;
+      b.speed = b.cruise;
+      b.turn = 0;
+      b.vx = 0;
+      b.vy = 0;
+      if (onScreen) {
+        b.x = Math.random() * W;
+        b.y = Math.random() * H;
+        b.heading = Math.random() * Math.PI * 2;
+        return;
+      }
+      const m = BODY_MARGIN * 0.8;
+      const edge = Math.floor(Math.random() * 4);
+      b.x = edge === 0 ? -m : edge === 1 ? W + m : Math.random() * W;
+      b.y = edge === 2 ? -m : edge === 3 ? H + m : Math.random() * H;
+      b.heading = Math.atan2(H * (0.2 + Math.random() * 0.6) - b.y, W * (0.2 + Math.random() * 0.6) - b.x);
+    };
+
+    // Initialize the gravity bodies: two already on screen, the rest arriving soon
+    if (bodyCfg && bodiesRef.current.length === 0) {
+      for (let i = 0; i < bodyCfg.count; i++) {
+        const b = {};
+        if (i < 2) spawnBody(b, true);
+        else { b.active = false; b.wait = 60 + Math.random() * 240; }
+        bodiesRef.current.push(b);
       }
     }
 
@@ -523,7 +621,11 @@ function ParticleBackgroundCanvas({
         }
       }
 
-      // 3. Wandering Celestial Massive Bodies
+      // 3. Wandering Celestial Massive Bodies (the visible gravity bodies, when the theme has them)
+      if (bodyCfg) {
+        pullTowardBodies(p, isMicro ? bodyCfg.fishPull : 1);
+        return;
+      }
       const attractors = attractorsRef.current;
       for (let a = 0; a < attractors.length; a++) {
         const att = attractors[a];
@@ -538,6 +640,255 @@ function ParticleBackgroundCanvas({
           p.vy += (ady / adist) * aForce;
         }
       }
+    };
+
+    // Inverse-square pull toward each active gravity body. With `orbit`, a particle in its
+    // reach is also eased toward a circular orbit around it (bounce toward and away from
+    // the body damped, sideways speed nudged to orbital speed), so captured particles
+    // gather into a swirling disk that travels with the body and trails behind it when it
+    // plunges, instead of being slung off
+    const pullTowardBodies = (p, scale, orbit = true) => {
+      const bodies = bodiesRef.current;
+      for (let b = 0; b < bodies.length; b++) {
+        const body = bodies[b];
+        if (!body.active) continue;
+        const dx = body.x - p.x;
+        const dy = body.y - p.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq > body.radius * body.radius || distSq < 0.01) continue;
+        const dist = Math.sqrt(distSq);
+        const soft = body.core * 4;
+        const force = (520 * body.mass * gravityStrength * scale) / (distSq + soft * soft);
+        const nx = dx / dist;
+        const ny = dy / dist;
+        p.vx += nx * force;
+        p.vy += ny * force;
+        if (!orbit) continue;
+
+        const rvx = p.vx - body.vx;
+        const rvy = p.vy - body.vy;
+        const radial = rvx * nx + rvy * ny;
+        const tx = -ny * body.spin;
+        const ty = nx * body.spin;
+        const tangential = rvx * tx + rvy * ty;
+        const orbitSpeed = Math.sqrt(force * dist);
+        const ease = 0.03 * scale * (1 - dist / body.radius);
+        p.vx += (tx * (orbitSpeed - tangential) - nx * radial) * ease;
+        p.vy += (ty * (orbitSpeed - tangential) - ny * radial) * ease;
+        // Each particle keeps its own orbit distance (3 to 12 core widths), so the
+        // captured particles spread into a disk instead of piling up on the core
+        const hold = body.core * (3 + (p.swirlOffset % 1) * 9);
+        if (dist < hold) {
+          const push = (hold - dist) * 0.02 * scale;
+          p.vx -= nx * push;
+          p.vy -= ny * push;
+        }
+      }
+    };
+
+    // Gravity bodies wander with smooth random turns and changes of speed (a slow drift
+    // one moment, a plunge the next). Once one is well off screen it rests a while, then
+    // plunges in again from another edge.
+    const updateBodies = (time) => {
+      const W = canvas.width;
+      const H = canvas.height;
+      const bodies = bodiesRef.current;
+      for (let i = 0; i < bodies.length; i++) {
+        const b = bodies[i];
+        if (!b.active) {
+          if (--b.wait <= 0) spawnBody(b, false);
+          continue;
+        }
+        b.turn += (Math.random() - 0.5) * 0.0016;
+        b.turn *= 0.98;
+        b.heading += b.turn + Math.sin(time * 0.7 + b.phase) * 0.0025;
+        if (Math.random() < 0.004) b.cruise = 0.35 + Math.random() * 2.6;
+        b.speed += (b.cruise - b.speed) * 0.02;
+        b.vx = Math.cos(b.heading) * b.speed;
+        b.vy = Math.sin(b.heading) * b.speed;
+        b.x += b.vx;
+        b.y += b.vy;
+        if (b.x < -BODY_MARGIN || b.x > W + BODY_MARGIN || b.y < -BODY_MARGIN || b.y > H + BODY_MARGIN) {
+          b.active = false;
+          b.wait = 90 + Math.random() * 420;
+        }
+      }
+    };
+
+    const drawBodies = (time) => {
+      const bodies = bodiesRef.current;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 1;
+      for (let i = 0; i < bodies.length; i++) {
+        const b = bodies[i];
+        if (!b.active) continue;
+        const pulse = 0.85 + Math.sin(time * b.pulseSpeed + b.phase) * 0.15;
+
+        // Faint haze over its reach
+        const haze = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.radius * 0.6);
+        haze.addColorStop(0, `rgba(0, 255, 65, ${0.09 * pulse})`);
+        haze.addColorStop(1, 'rgba(0, 255, 65, 0)');
+        ctx.fillStyle = haze;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Event-horizon ring
+        ctx.strokeStyle = `rgba(140, 255, 150, ${0.22 * pulse})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.core * 3 * pulse, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Glowing core
+        const core = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.core * 2.4);
+        core.addColorStop(0, 'rgba(240, 255, 240, 0.95)');
+        core.addColorStop(0.3, 'rgba(90, 255, 100, 0.8)');
+        core.addColorStop(1, 'rgba(0, 255, 65, 0)');
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.core * 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    };
+
+    // Lead each school on a wandering path: random turns and speed changes, the odd
+    // startled dart, a new pattern every so often, and a turn for home once it strays
+    // past the edge
+    const updateSchools = () => {
+      const W = canvas.width;
+      const H = canvas.height;
+      const margin = 120;
+      const schools = schoolsRef.current;
+      for (let i = 0; i < schools.length; i++) {
+        const s = schools[i];
+        if (--s.shapeTimer <= 0) {
+          s.shape = SCHOOL_SHAPES[Math.floor(Math.random() * SCHOOL_SHAPES.length)];
+          s.shapeTimer = 360 + Math.random() * 720;
+          s.spin = Math.random() < 0.5 ? -1 : 1;
+        }
+        s.turn += (Math.random() - 0.5) * 0.004;
+        s.turn *= 0.96;
+        if (s.dart <= 0 && Math.random() < 0.0025) {
+          s.dart = 40 + Math.random() * 40;
+          s.turn += (Math.random() < 0.5 ? -1 : 1) * (0.03 + Math.random() * 0.04);
+        }
+        if (s.x < -margin || s.x > W + margin || s.y < -margin || s.y > H + margin) {
+          const home = Math.atan2(H / 2 - s.y, W / 2 - s.x) - s.heading;
+          s.turn += Math.atan2(Math.sin(home), Math.cos(home)) * 0.002;
+        }
+        s.heading += s.turn;
+        if (Math.random() < 0.006) s.cruise = 0.6 + Math.random() * 1.4;
+        const cruise = s.shape === 'ball' ? s.cruise * 0.35 : s.cruise;
+        s.speed += ((s.dart > 0 ? cruise * 2.4 : cruise) - s.speed) * 0.05;
+        if (s.dart > 0) s.dart--;
+
+        // Passing gravity bodies bend the whole school's path
+        if (bodyCfg) pullTowardBodies(s, 0.12, false);
+        s.vx *= 0.97;
+        s.vy *= 0.97;
+        s.mx = Math.cos(s.heading) * s.speed * flowSpeedMult + s.vx;
+        s.my = Math.sin(s.heading) * s.speed * flowSpeedMult + s.vy;
+        s.x += s.mx;
+        s.y += s.my;
+      }
+    };
+
+    // One soft glow per colour, drawn once and stamped for every fish
+    const getSprite = (color) => {
+      let sprite = spritesRef.current.get(color);
+      if (!sprite) {
+        sprite = document.createElement('canvas');
+        sprite.width = 32;
+        sprite.height = 32;
+        const g = sprite.getContext('2d');
+        const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+        grad.addColorStop(0, '#f0fff0');
+        grad.addColorStop(0.2, color);
+        grad.addColorStop(0.5, `${color}40`);
+        grad.addColorStop(1, `${color}00`);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 32, 32);
+        spritesRef.current.set(color, sprite);
+      }
+      return sprite;
+    };
+
+    // Each fish steers toward its place in its school's shape and matches the school's
+    // velocity, so a turn ripples back through the school, and a shockwave scatters it
+    // until it regroups
+    const swimSchools = (fish, mouse, time) => {
+      const schools = schoolsRef.current;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.beginPath();
+      for (let i = 0; i < fish.length; i++) {
+        const p = fish[i];
+        const s = schools[p.school];
+        const c = Math.cos(s.heading);
+        const sn = Math.sin(s.heading);
+        let tx;
+        let ty;
+        if (s.shape === 'ball') {
+          // A bait ball circling the school's centre
+          const a = p.u * Math.PI * 2 + time * (0.5 + p.v * 0.7) * s.spin;
+          const r = s.length * 0.55 * (0.3 + 0.7 * Math.sqrt(p.v));
+          tx = s.x + Math.cos(a) * r;
+          ty = s.y + Math.sin(a) * r;
+        } else {
+          let along;
+          let across;
+          if (s.shape === 'ribbon') {
+            // A long stream with a wave running down it
+            along = -p.u * s.length * 2.6;
+            across = Math.sin(p.u * 7 - time * 2.2) * s.length * 0.22 + (p.v - 0.5) * 8;
+          } else {
+            // A shoal: a teardrop trailing behind the lead fish
+            along = -Math.pow(p.u, 0.8) * s.length;
+            across = (p.v - 0.5) * s.length * 0.9 * (1 - p.u * 0.55);
+          }
+          tx = s.x + c * along - sn * across;
+          ty = s.y + sn * along + c * across;
+        }
+
+        let ax = (tx - p.x) * 0.008 + (s.mx - p.vx) * 0.1;
+        let ay = (ty - p.y) * 0.008 + (s.my - p.vy) * 0.1;
+        const beat = Math.sin(time * p.wobbleSpeed + p.wobblePhase) * 0.04;
+        ax -= sn * beat;
+        ay += c * beat;
+        const accel = Math.hypot(ax, ay);
+        if (accel > 0.35) { ax *= 0.35 / accel; ay *= 0.35 / accel; }
+        p.vx += ax;
+        p.vy += ay;
+
+        applyGravityLaws(p, mouse, time, true);
+
+        const vMax = 2.2 + s.speed * 2.2;
+        const v = Math.hypot(p.vx, p.vy);
+        if (v > vMax) { p.vx *= vMax / v; p.vy *= vMax / v; }
+        p.x += p.vx;
+        p.y += p.vy;
+
+        // Now and then a fish changes places, so the school churns
+        if (Math.random() < 0.002) p.u = Math.random();
+
+        p.opacity += p.opacityDir * p.pulseSpeed;
+        if (p.opacity > 0.9) { p.opacity = 0.9; p.opacityDir = -1; }
+        if (p.opacity < 0.35) { p.opacity = 0.35; p.opacityDir = 1; }
+
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - p.vx * 3, p.y - p.vy * 3);
+
+        const r = p.size * 4;
+        ctx.globalAlpha = p.opacity;
+        ctx.drawImage(getSprite(p.color), p.x - r, p.y - r, r * 2, r * 2);
+      }
+      // Every tail in one stroke
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(57, 255, 20, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
     };
 
     // Update wandering attractors
@@ -684,7 +1035,13 @@ function ParticleBackgroundCanvas({
         }
       }
 
-      updateAttractors();
+      if (bodyCfg) {
+        updateBodies(time);
+        drawBodies(time);
+      } else {
+        updateAttractors();
+      }
+      if (schoolCfg) updateSchools();
 
       // Render shockwave pulses
       const shockwaves = shockwavesRef.current;
@@ -708,37 +1065,41 @@ function ParticleBackgroundCanvas({
         }
       }
 
-      // Update & render Micro Dust Particles
+      // Update & render Micro Dust Particles (or the schools of fish)
       const micros = microRef.current;
-      for (let i = 0; i < micros.length; i++) {
-        const p = micros[i];
+      if (schoolCfg) {
+        swimSchools(micros, mouse, time);
+      } else {
+        for (let i = 0; i < micros.length; i++) {
+          const p = micros[i];
 
-        applyGravityLaws(p, mouse, time, true);
+          applyGravityLaws(p, mouse, time, true);
 
-        p.opacity += p.opacityDir * p.pulseSpeed;
-        if (p.opacity > 0.55) { p.opacity = 0.55; p.opacityDir = -1; }
-        if (p.opacity < 0.12) { p.opacity = 0.12; p.opacityDir = 1; }
+          p.opacity += p.opacityDir * p.pulseSpeed;
+          if (p.opacity > 0.55) { p.opacity = 0.55; p.opacityDir = -1; }
+          if (p.opacity < 0.12) { p.opacity = 0.12; p.opacityDir = 1; }
 
-        p.driftAngle += 0.004;
-        p.vx += Math.cos(p.driftAngle) * p.driftSpeed * 0.008;
-        p.vy += Math.sin(p.driftAngle) * p.driftSpeed * 0.008;
+          p.driftAngle += 0.004;
+          p.vx += Math.cos(p.driftAngle) * p.driftSpeed * 0.008;
+          p.vy += Math.sin(p.driftAngle) * p.driftSpeed * 0.008;
 
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vx *= 0.988;
-        p.vy *= 0.988;
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vx *= 0.988;
+          p.vy *= 0.988;
 
-        // Wrap
-        if (p.x < 0) p.x = canvas.width;
-        else if (p.x > canvas.width) p.x = 0;
-        if (p.y < 0) p.y = canvas.height;
-        else if (p.y > canvas.height) p.y = 0;
+          // Wrap
+          if (p.x < 0) p.x = canvas.width;
+          else if (p.x > canvas.width) p.x = 0;
+          if (p.y < 0) p.y = canvas.height;
+          else if (p.y > canvas.height) p.y = 0;
 
-        ctx.globalAlpha = p.opacity;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
+          ctx.globalAlpha = p.opacity;
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       // Update & render Main Particles
@@ -756,16 +1117,44 @@ function ParticleBackgroundCanvas({
         p.vx += Math.cos(p.driftAngle) * p.driftSpeed * 0.01;
         p.vy += Math.sin(p.driftAngle) * p.driftSpeed * 0.01 + (p.fallBias || 0);
 
+        if (currentTheme.current) {
+          // Large eddies that slide across the screen. The field has no sources or sinks,
+          // so particles keep circulating instead of pooling in one spot.
+          const A = p.x * 0.004 + time * 0.13;
+          const B = p.y * 0.004 - time * 0.09;
+          p.vx -= Math.sin(A) * Math.sin(B) * currentTheme.current;
+          p.vy -= Math.cos(A) * Math.cos(B) * currentTheme.current;
+        }
+
         p.x += p.vx;
         p.y += p.vy;
         p.vx *= 0.99;
         p.vy *= 0.99;
 
-        // Elastic screen boundaries bounce
-        if (p.x < 0) { p.vx = Math.abs(p.vx) * 0.85; p.x = 1; }
-        else if (p.x > canvas.width) { p.vx = -Math.abs(p.vx) * 0.85; p.x = canvas.width - 1; }
-        if (p.y < 0) { p.vy = Math.abs(p.vy) * 0.85; p.y = 1; }
-        else if (p.y > canvas.height) { p.vy = -Math.abs(p.vy) * 0.85; p.y = canvas.height - 1; }
+        if (bodyCfg) {
+          // A slingshot past a gravity body can't fling a particle across the screen in a frame
+          const speed = Math.hypot(p.vx, p.vy);
+          if (speed > 9) { p.vx *= 9 / speed; p.vy *= 9 / speed; }
+        }
+
+        if (currentTheme.reappear) {
+          // Free to be carried off screen; it then fades back in at a random spot
+          const m = 60;
+          if (p.x < -m || p.x > canvas.width + m || p.y < -m || p.y > canvas.height + m) {
+            p.x = Math.random() * canvas.width;
+            p.y = Math.random() * canvas.height;
+            p.vx = 0;
+            p.vy = 0;
+            p.fade = 0;
+          }
+          if (p.fade < 1) p.fade = Math.min(1, p.fade + 0.01);
+        } else {
+          // Elastic screen boundaries bounce
+          if (p.x < 0) { p.vx = Math.abs(p.vx) * 0.85; p.x = 1; }
+          else if (p.x > canvas.width) { p.vx = -Math.abs(p.vx) * 0.85; p.x = canvas.width - 1; }
+          if (p.y < 0) { p.vy = Math.abs(p.vy) * 0.85; p.y = 1; }
+          else if (p.y > canvas.height) { p.vy = -Math.abs(p.vy) * 0.85; p.y = canvas.height - 1; }
+        }
 
         let pColor = p.color;
         if (enableColorCycling) {
@@ -777,7 +1166,7 @@ function ParticleBackgroundCanvas({
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fillStyle = pColor;
-        ctx.globalAlpha = p.opacity;
+        ctx.globalAlpha = p.opacity * (p.fade ?? 1);
         ctx.fill();
 
         const glowMult = currentTheme.glowIntensity || 1;
@@ -801,7 +1190,7 @@ function ParticleBackgroundCanvas({
             const dy = a.y - b.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist < linkDistance) {
-              const alpha = (1 - dist / linkDistance) * 0.22;
+              const alpha = (1 - dist / linkDistance) * 0.22 * Math.min(a.fade ?? 1, b.fade ?? 1);
               ctx.beginPath();
               ctx.moveTo(a.x, a.y);
               ctx.lineTo(b.x, b.y);
