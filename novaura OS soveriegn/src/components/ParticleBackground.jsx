@@ -19,6 +19,8 @@
  * - Matrix: glowing gravity bodies plunge through (and off) the screen, pulling particles along,
  *   while the micro particles swim in schools like fish. Bodies that meet merge, absorb
  *   particles and grow into ringed planets, which in time collapse and burst back into bodies.
+ *   Orange serpents shove the green particles aside, and a neon pink hunter preys on the fish
+ *   until a gravity body pulls it in.
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
@@ -128,6 +130,12 @@ export const THEME_CONFIGS = {
     reappear: true,
     // Strength of a slow, shifting current that keeps particles drifting across the screen
     current: 0.008,
+    // Orange serpents slither (and now and then coil) through, shoving green particles out
+    // of their way, even ones held by a gravity body, and knocking aside bodies they hit
+    serpents: { count: 3 },
+    // Neon pink hunters roam after the fish and carry off the ones they catch. A gravity
+    // body that pulls one in kills it, and the fish it carried swim free.
+    hunters: { count: 1 },
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
   },
   
@@ -238,6 +246,14 @@ const MAX_BODY_MASS = 8;
 const RING_FULL = 120;
 // Frames a planet's collapse takes before it bursts
 const COLLAPSE_FRAMES = 150;
+const SERPENT_COLORS = ['#ff8c1a', '#ff6a00', '#ffa640'];
+// How far an orange serpent shoves green particles, and how hard (per segment)
+const SERPENT_REACH = 48;
+const SERPENT_SHOVE = 0.45;
+// Fish a hunter can carry, how far it sees them, and the frames its death takes
+const HUNTER_CAP = 40;
+const HUNTER_SIGHT = 260;
+const HUNTER_DEATH_FRAMES = 50;
 
 // ============================================
 // PARTICLE CANVAS WITH GRAVITY & PHYSICS ENGINE
@@ -262,6 +278,8 @@ function ParticleBackgroundCanvas({
   const sparksRef = useRef([]);
   const bodiesRef = useRef([]);
   const schoolsRef = useRef([]);
+  const serpentsRef = useRef([]);
+  const huntersRef = useRef([]);
   const spritesRef = useRef(new Map());
   const themeRef = useRef(theme);
 
@@ -299,6 +317,9 @@ function ParticleBackgroundCanvas({
     const flowSpeedMult = themeConfig.flowSpeed || 1;
     const bodyCfg = themeConfig.gravityBodies;
     const schoolCfg = themeConfig.schools;
+    const serpentCfg = themeConfig.serpents;
+    // Hunters need fish to hunt
+    const hunterCfg = schoolCfg && themeConfig.hunters;
     const microTotal = schoolCfg ? Math.round(microCount * schoolCfg.density) : microCount;
 
     const resize = () => {
@@ -531,6 +552,62 @@ function ParticleBackgroundCanvas({
     // The bodies far enough along to be drawn as planets, refreshed every frame
     const planets = [];
 
+    // Orange serpents: a head on a wandering, slithering path and a chain of segments
+    // that follow it at a fixed spacing
+    if (serpentCfg && serpentsRef.current.length === 0) {
+      serpentsRef.current = Array.from({ length: serpentCfg.count }, (_, i) => {
+        const x = Math.random() * canvas.width;
+        const y = Math.random() * canvas.height;
+        const heading = Math.random() * Math.PI * 2;
+        const spacing = 7 + Math.random() * 2;
+        return {
+          heading,
+          turn: 0,
+          speed: 1.8,
+          cruise: 1.4 + Math.random() * 1.2,
+          phase: Math.random() * Math.PI * 2,
+          freq: 3 + Math.random() * 2, // slither rate, radians a second
+          wiggle: 0.035 + Math.random() * 0.025,
+          coil: 0, // frames left curling up
+          coilDir: 1,
+          spacing,
+          color: SERPENT_COLORS[i % SERPENT_COLORS.length],
+          segs: Array.from({ length: 16 + Math.floor(Math.random() * 9) }, (_, k) => ({
+            x: x - Math.cos(heading) * k * spacing,
+            y: y - Math.sin(heading) * k * spacing,
+          })),
+          minX: x, maxX: x, minY: y, maxY: y, // bounding box, for a quick reach check
+        };
+      });
+    }
+
+    // A hunter comes in from just past a random edge, aimed at the middle of the screen
+    const spawnHunter = (h) => {
+      const W = canvas.width;
+      const H = canvas.height;
+      const m = 40;
+      const edge = Math.floor(Math.random() * 4);
+      h.x = edge === 0 ? -m : edge === 1 ? W + m : Math.random() * W;
+      h.y = edge === 2 ? -m : edge === 3 ? H + m : Math.random() * H;
+      h.heading = Math.atan2(H * (0.3 + Math.random() * 0.4) - h.y, W * (0.3 + Math.random() * 0.4) - h.x);
+      h.vx = Math.cos(h.heading) * 2;
+      h.vy = Math.sin(h.heading) * 2;
+      h.alive = true;
+      h.dying = 0;
+      h.wait = 0;
+      h.caught = 0;
+      h.killer = null;
+      h.trail = [];
+    };
+
+    if (hunterCfg && huntersRef.current.length === 0) {
+      huntersRef.current = Array.from({ length: hunterCfg.count }, () => {
+        const h = {};
+        spawnHunter(h);
+        return h;
+      });
+    }
+
     // Window Mouse Listeners — Continuous hover tracking + shockwave pulses
     const handleMouseMove = (e) => {
       const prevX = mouseRef.current.x;
@@ -657,6 +734,8 @@ function ParticleBackgroundCanvas({
         }
       }
 
+      if (serpentCfg) shoveFromSerpents(p);
+
       // 3. Wandering Celestial Massive Bodies (the visible gravity bodies, when the theme has them)
       if (bodyCfg) {
         pullTowardBodies(p, isMicro ? bodyCfg.fishPull : 1, true, !isMicro);
@@ -765,6 +844,279 @@ function ParticleBackgroundCanvas({
           return;
         }
       }
+    };
+
+    // Orange serpents push green particles out of their way, hard enough to tear them out
+    // of a gravity body's orbit
+    const shoveFromSerpents = (p) => {
+      const serpents = serpentsRef.current;
+      const R = SERPENT_REACH;
+      for (let s = 0; s < serpents.length; s++) {
+        const sp = serpents[s];
+        if (p.x < sp.minX - R || p.x > sp.maxX + R || p.y < sp.minY - R || p.y > sp.maxY + R) continue;
+        const segs = sp.segs;
+        for (let i = 0; i < segs.length; i++) {
+          const dx = p.x - segs[i].x;
+          const dy = p.y - segs[i].y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq > R * R || distSq < 0.01) continue;
+          const dist = Math.sqrt(distSq);
+          const t = 1 - dist / R;
+          p.vx += (dx / dist) * t * t * SERPENT_SHOVE;
+          p.vy += (dy / dist) * t * t * SERPENT_SHOVE;
+        }
+      }
+    };
+
+    // Serpents slither: the head's heading swings back and forth on a slow random path,
+    // and every so often it curls into a coil. Gravity doesn't hold them; one that runs
+    // into a gravity body knocks it aside and glances off.
+    const updateSerpents = (time) => {
+      const W = canvas.width;
+      const H = canvas.height;
+      const margin = 100;
+      const bodies = bodiesRef.current;
+      const serpents = serpentsRef.current;
+      for (let s = 0; s < serpents.length; s++) {
+        const sp = serpents[s];
+        const segs = sp.segs;
+        const head = segs[0];
+        if (sp.coil > 0) {
+          sp.coil--;
+          sp.heading += sp.coilDir * 0.055;
+        } else {
+          sp.turn += (Math.random() - 0.5) * 0.003;
+          sp.turn *= 0.97;
+          sp.heading += sp.turn + Math.sin(time * sp.freq + sp.phase) * sp.wiggle;
+          if (Math.random() < 0.0012) {
+            sp.coil = 80 + Math.random() * 100;
+            sp.coilDir = Math.random() < 0.5 ? -1 : 1;
+          }
+        }
+        if (head.x < -margin || head.x > W + margin || head.y < -margin || head.y > H + margin) {
+          const home = Math.atan2(H / 2 - head.y, W / 2 - head.x) - sp.heading;
+          sp.heading += Math.atan2(Math.sin(home), Math.cos(home)) * 0.02;
+        }
+        if (Math.random() < 0.005) sp.cruise = 1.2 + Math.random() * 1.6;
+        sp.speed += (sp.cruise - sp.speed) * 0.03;
+        head.x += Math.cos(sp.heading) * sp.speed;
+        head.y += Math.sin(sp.heading) * sp.speed;
+
+        // Each segment keeps its spacing behind the one ahead
+        let minX = head.x;
+        let maxX = head.x;
+        let minY = head.y;
+        let maxY = head.y;
+        for (let i = 1; i < segs.length; i++) {
+          const a = segs[i - 1];
+          const b = segs[i];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > sp.spacing) {
+            b.x = a.x + (dx / dist) * sp.spacing;
+            b.y = a.y + (dy / dist) * sp.spacing;
+          }
+          if (b.x < minX) minX = b.x; else if (b.x > maxX) maxX = b.x;
+          if (b.y < minY) minY = b.y; else if (b.y > maxY) maxY = b.y;
+        }
+        sp.minX = minX;
+        sp.maxX = maxX;
+        sp.minY = minY;
+        sp.maxY = maxY;
+
+        for (let b = 0; b < bodies.length; b++) {
+          const body = bodies[b];
+          if (!body.active) continue;
+          const reach = Math.max(body.core * 1.2, body.sphere) + 6;
+          if (body.x < minX - reach || body.x > maxX + reach || body.y < minY - reach || body.y > maxY + reach) continue;
+          for (let i = 0; i < segs.length; i += 2) {
+            const dx = body.x - segs[i].x;
+            const dy = body.y - segs[i].y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > reach || dist < 0.01) continue;
+            body.gx += (dx / dist) * 0.4 / body.mass;
+            body.gy += (dy / dist) * 0.4 / body.mass;
+            if (i === 0) {
+              sp.heading = Math.atan2(-dy, -dx) + (Math.random() - 0.5) * 0.8;
+              sp.turn = 0;
+              sp.coil = 0;
+            }
+          }
+        }
+      }
+    };
+
+    // A glowing worm: a faint body line through the segments, then a glow per segment,
+    // largest at the head
+    const drawSerpents = () => {
+      const serpents = serpentsRef.current;
+      ctx.globalCompositeOperation = 'lighter';
+      for (let s = 0; s < serpents.length; s++) {
+        const sp = serpents[s];
+        const segs = sp.segs;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = 'rgba(255, 120, 20, 0.35)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(segs[0].x, segs[0].y);
+        for (let i = 1; i < segs.length; i++) ctx.lineTo(segs[i].x, segs[i].y);
+        ctx.stroke();
+        const sprite = getSprite(sp.color, '#fff3e0');
+        for (let i = segs.length - 1; i >= 0; i--) {
+          const t = i / (segs.length - 1);
+          const r = i === 0 ? 14 : 10 * (1 - t * 0.6);
+          ctx.globalAlpha = 0.95 - t * 0.5;
+          ctx.drawImage(sprite, segs[i].x - r, segs[i].y - r, r * 2, r * 2);
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    };
+
+    // A hunter chases the nearest free fish it can see and carries off the ones it
+    // catches. It steers clear of gravity bodies, but less well and with a stronger pull
+    // on it the more it carries, so a greedy hunter gets drawn in. Caught by one, it dies:
+    // it's pulled into the core and the fish it carried swim free.
+    const updateHunters = () => {
+      const W = canvas.width;
+      const H = canvas.height;
+      const bodies = bodiesRef.current;
+      const fish = microRef.current;
+      const hunters = huntersRef.current;
+      for (let n = 0; n < hunters.length; n++) {
+        const h = hunters[n];
+        if (!h.alive) {
+          if (h.dying > 0) {
+            h.dying--;
+            h.x += (h.killer.x - h.x) * 0.12;
+            h.y += (h.killer.y - h.y) * 0.12;
+            if (h.dying === 0) h.wait = 300 + Math.random() * 600;
+          } else if (--h.wait <= 0) {
+            spawnHunter(h);
+          }
+          continue;
+        }
+
+        const agility = 1 / (1 + h.caught / 20);
+        const maxSpeed = 3.8 * (0.55 + 0.45 * agility);
+        let ax = 0;
+        let ay = 0;
+        let prey = null;
+        let preyDistSq = HUNTER_SIGHT * HUNTER_SIGHT;
+        if (h.caught < HUNTER_CAP) {
+          for (let i = 0; i < fish.length; i++) {
+            const f = fish[i];
+            if (f.caughtBy) continue;
+            const dx = f.x - h.x;
+            const dy = f.y - h.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq < preyDistSq) { prey = f; preyDistSq = distSq; }
+          }
+        }
+        if (prey) {
+          const dist = Math.sqrt(preyDistSq) || 1;
+          ax += ((prey.x - h.x) / dist * maxSpeed - h.vx) * 0.07;
+          ay += ((prey.y - h.y) / dist * maxSpeed - h.vy) * 0.07;
+          if (dist < 8 + h.caught * 0.12) {
+            prey.caughtBy = h;
+            prey.orbitA = Math.random() * Math.PI * 2;
+            prey.orbitR = 9 + h.caught * 0.12 + Math.random() * 10;
+            prey.orbitS = (0.04 + Math.random() * 0.05) * (Math.random() < 0.5 ? -1 : 1);
+            h.caught++;
+          }
+        } else {
+          // Nothing in sight (or full): prowl on a wandering heading
+          h.heading += (Math.random() - 0.5) * 0.12;
+          ax += (Math.cos(h.heading) * maxSpeed * 0.5 - h.vx) * 0.03;
+          ay += (Math.sin(h.heading) * maxSpeed * 0.5 - h.vy) * 0.03;
+        }
+        if (h.x < 0 || h.x > W || h.y < 0 || h.y > H) {
+          h.heading = Math.atan2(H / 2 - h.y, W / 2 - h.x);
+          ax += Math.cos(h.heading) * 0.08;
+          ay += Math.sin(h.heading) * 0.08;
+        }
+
+        for (let b = 0; b < bodies.length; b++) {
+          const body = bodies[b];
+          if (!body.active) continue;
+          const dx = body.x - h.x;
+          const dy = body.y - h.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          if (dist < Math.max(body.core * 1.1, body.sphere)) {
+            // Pulled in: it dies, and the fish it carried scatter
+            h.alive = false;
+            h.dying = HUNTER_DEATH_FRAMES;
+            h.killer = body;
+            body.flash = Math.max(body.flash, 0.6);
+            for (let i = 0; i < fish.length; i++) {
+              const f = fish[i];
+              if (f.caughtBy !== h) continue;
+              f.caughtBy = null;
+              const speed = 2 + Math.random() * 2;
+              f.vx = Math.cos(f.orbitA) * speed;
+              f.vy = Math.sin(f.orbitA) * speed;
+            }
+            break;
+          }
+          const danger = body.core * 3 + body.sphere * 1.5 + 50;
+          if (dist < danger) {
+            const k = (1 - dist / danger) * 0.35 * agility;
+            ax -= (dx / dist) * k;
+            ay -= (dy / dist) * k;
+          }
+        }
+        if (!h.alive) continue;
+
+        h.vx += ax;
+        h.vy += ay;
+        if (bodyCfg) pullTowardBodies(h, 0.5 + h.caught * 0.02, false);
+        const speed = Math.hypot(h.vx, h.vy);
+        const cap = maxSpeed * 1.6;
+        if (speed > cap) { h.vx *= cap / speed; h.vy *= cap / speed; }
+        h.x += h.vx;
+        h.y += h.vy;
+        h.trail.push(h.x, h.y);
+        if (h.trail.length > 32) h.trail.splice(0, 2);
+      }
+    };
+
+    // A neon pink glow with a pulsing ring and a short trail, larger the more it carries;
+    // a dying one shrinks into the body that caught it with a flash
+    const drawHunters = (time) => {
+      const hunters = huntersRef.current;
+      ctx.globalCompositeOperation = 'lighter';
+      for (let n = 0; n < hunters.length; n++) {
+        const h = hunters[n];
+        if (!h.alive && h.dying <= 0) continue;
+        const scale = h.alive ? 1 : h.dying / HUNTER_DEATH_FRAMES;
+        const r = (8 + h.caught * 0.12) * scale;
+        if (h.alive && h.trail.length > 3) {
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = 'rgba(255, 60, 220, 0.35)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(h.trail[0], h.trail[1]);
+          for (let i = 2; i < h.trail.length; i += 2) ctx.lineTo(h.trail[i], h.trail[i + 1]);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ctx.drawImage(getSprite('#ff2bd6', '#fff0fb'), h.x - r * 2, h.y - r * 2, r * 4, r * 4);
+        ctx.strokeStyle = `rgba(255, 90, 230, ${0.5 * scale})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, r * 1.4 * (1 + Math.sin(time * 6) * 0.1), 0, Math.PI * 2);
+        ctx.stroke();
+        if (!h.alive) {
+          ctx.strokeStyle = `rgba(255, 120, 235, ${scale})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, (1 - scale) * 70, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
     };
 
     // Whether a point is hidden behind a planet: over its disc, on the far side of its
@@ -1106,22 +1458,24 @@ function ParticleBackgroundCanvas({
       }
     };
 
-    // One soft glow per colour, drawn once and stamped for every fish
-    const getSprite = (color) => {
-      let sprite = spritesRef.current.get(color);
+    // One soft glow per colour (with a white-hot centre, `core`), drawn once and stamped
+    // for every fish
+    const getSprite = (color, core = '#f0fff0') => {
+      const key = color + core;
+      let sprite = spritesRef.current.get(key);
       if (!sprite) {
         sprite = document.createElement('canvas');
         sprite.width = 32;
         sprite.height = 32;
         const g = sprite.getContext('2d');
         const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
-        grad.addColorStop(0, '#f0fff0');
+        grad.addColorStop(0, core);
         grad.addColorStop(0.2, color);
         grad.addColorStop(0.5, `${color}40`);
         grad.addColorStop(1, `${color}00`);
         g.fillStyle = grad;
         g.fillRect(0, 0, 32, 32);
-        spritesRef.current.set(color, sprite);
+        spritesRef.current.set(key, sprite);
       }
       return sprite;
     };
@@ -1131,10 +1485,22 @@ function ParticleBackgroundCanvas({
     // until it regroups
     const swimSchools = (fish, mouse, time) => {
       const schools = schoolsRef.current;
+      const hunters = huntersRef.current;
       ctx.globalCompositeOperation = 'lighter';
       ctx.beginPath();
       for (let i = 0; i < fish.length; i++) {
         const p = fish[i];
+        if (p.caughtBy) {
+          // Carried by a hunter: it circles the hunter, tinted pink
+          const h = p.caughtBy;
+          p.orbitA += p.orbitS;
+          p.x = h.x + Math.cos(p.orbitA) * p.orbitR;
+          p.y = h.y + Math.sin(p.orbitA) * p.orbitR;
+          const r = p.size * 3;
+          ctx.globalAlpha = 0.85;
+          ctx.drawImage(getSprite('#ff4fd8', '#fff0fb'), p.x - r, p.y - r, r * 2, r * 2);
+          continue;
+        }
         const s = schools[p.school];
         const c = Math.cos(s.heading);
         const sn = Math.sin(s.heading);
@@ -1171,6 +1537,19 @@ function ParticleBackgroundCanvas({
         if (accel > 0.35) { ax *= 0.35 / accel; ay *= 0.35 / accel; }
         p.vx += ax;
         p.vy += ay;
+
+        // A fish that sees a hunter close by darts away from it
+        for (let n = 0; n < hunters.length; n++) {
+          const h = hunters[n];
+          if (!h.alive) continue;
+          const dx = p.x - h.x;
+          const dy = p.y - h.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq > 90 * 90 || distSq < 0.01) continue;
+          const dist = Math.sqrt(distSq);
+          p.vx += (dx / dist) * (1 - dist / 90) * 0.3;
+          p.vy += (dy / dist) * (1 - dist / 90) * 0.3;
+        }
 
         applyGravityLaws(p, mouse, time, true);
 
@@ -1354,6 +1733,8 @@ function ParticleBackgroundCanvas({
         updateAttractors();
       }
       if (schoolCfg) updateSchools();
+      if (serpentCfg) updateSerpents(time);
+      if (hunterCfg) updateHunters();
 
       // Render shockwave pulses
       const shockwaves = shockwavesRef.current;
@@ -1518,6 +1899,9 @@ function ParticleBackgroundCanvas({
           }
         }
       }
+
+      if (serpentCfg) drawSerpents();
+      if (hunterCfg) drawHunters(time);
 
       // Mouse Gravitational Links & Aura on HOVER
       if (mouse.x > 0 && mouse.y > 0) {
