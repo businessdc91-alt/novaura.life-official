@@ -3,6 +3,7 @@
 // for zero-latency UI reads, debounced persistence, and automatic local version tracking.
 
 import { db } from '../database/sovereignDatabase.js';
+import { ipc } from '../kernel/IPCBus.js';
 
 const LEGACY_STORAGE_KEY = 'novaura_sovereign_manuscripts_v1';
 const STATE_KEY = 'literature_workspace_state';
@@ -81,9 +82,44 @@ async function recordDocumentVersion(doc) {
         await db.manuscript_versions.delete(v.id);
       }
     }
+
+    // Cascading reactive sovereign event to OS & Chain Logic Weaver
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('novaura:document_saved', {
+        detail: {
+          id: doc.id,
+          name: doc.name,
+          content: plain,
+          wordCount,
+          timestamp: Date.now(),
+          source: 'manuscript_store',
+        },
+      }));
+    }
+    ipc.emit('document:saved', {
+      id: doc.id,
+      name: doc.name,
+      content: plain,
+      wordCount,
+      timestamp: Date.now(),
+      source: 'manuscript_store',
+    });
   } catch (err) {
     console.warn('[ManuscriptStore] Failed to record version snapshot:', err);
   }
+}
+
+/**
+ * Force immediate version snapshot and event broadcast
+ */
+export async function flushDocumentVersion(docId) {
+  const doc = _cache.files.find(f => f.id === docId);
+  if (!doc) return;
+  if (_versionTimers.has(docId)) {
+    clearTimeout(_versionTimers.get(docId));
+    _versionTimers.delete(docId);
+  }
+  await recordDocumentVersion(doc);
 }
 
 /**

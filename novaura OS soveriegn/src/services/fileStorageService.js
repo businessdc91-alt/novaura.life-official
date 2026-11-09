@@ -9,6 +9,7 @@
  */
 
 import { db } from '../database/sovereignDatabase.js';
+import { ipc } from '../kernel/IPCBus.js';
 import { compressZip, readZip, safeEntryPath } from './zipService.js';
 
 /** The vault folder shown on the desktop. */
@@ -215,6 +216,30 @@ export async function saveFile(path, content, mimeType = 'text/plain') {
 
     await db.documents.put(doc);
     notifyChange();
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('novaura:document_saved', {
+        detail: {
+          id: doc.id,
+          name: doc.name,
+          path: doc.path,
+          content: typeof content === 'string' ? content : '',
+          size,
+          timestamp: Date.now(),
+          source: 'file_storage',
+        },
+      }));
+    }
+    ipc.emit('document:saved', {
+      id: doc.id,
+      name: doc.name,
+      path: doc.path,
+      content: typeof content === 'string' ? content : '',
+      size,
+      timestamp: Date.now(),
+      source: 'file_storage',
+    });
+
     return doc;
   });
 }

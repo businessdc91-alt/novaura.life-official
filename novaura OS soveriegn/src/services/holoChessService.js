@@ -1038,3 +1038,91 @@ export function cleanChessPacket(data) {
   }
 }
 
+/**
+ * Validate standard 6-field FEN syntax and legality
+ */
+export function validateFEN(fen) {
+  if (typeof fen !== 'string') return { valid: false, error: 'FEN must be a string' };
+  const parts = fen.trim().split(/\s+/);
+  if (parts.length < 4) return { valid: false, error: 'FEN must contain at least 4 fields (board turn castling enPassant)' };
+  const rows = parts[0].split('/');
+  if (rows.length !== 8) return { valid: false, error: 'FEN board must have exactly 8 rows' };
+
+  let whiteKings = 0;
+  let blackKings = 0;
+
+  for (let r = 0; r < 8; r++) {
+    const rowStr = rows[r];
+    let colCount = 0;
+    for (let i = 0; i < rowStr.length; i++) {
+      const char = rowStr[i];
+      if (/[1-8]/.test(char)) {
+        colCount += parseInt(char, 10);
+      } else if (/[pnbrqkPNBRQK]/.test(char)) {
+        if (char === 'K') whiteKings++;
+        if (char === 'k') blackKings++;
+        colCount++;
+      } else {
+        return { valid: false, error: `Invalid character '${char}' in row ${r + 1}` };
+      }
+    }
+    if (colCount !== 8) {
+      return { valid: false, error: `Row ${r + 1} has ${colCount} squares instead of 8` };
+    }
+  }
+
+  if (whiteKings !== 1 || blackKings !== 1) {
+    return { valid: false, error: `Each side must have exactly 1 king (found White:${whiteKings}, Black:${blackKings})` };
+  }
+
+  const turn = parts[1];
+  if (turn !== 'w' && turn !== 'b') {
+    return { valid: false, error: "Active turn must be 'w' or 'b'" };
+  }
+
+  const castling = parts[2];
+  if (!/^[-KQkq]+$/.test(castling)) {
+    return { valid: false, error: 'Invalid castling rights field' };
+  }
+
+  const enPassant = parts[3];
+  if (enPassant !== '-' && !/^[a-h][36]$/.test(enPassant)) {
+    return { valid: false, error: 'Invalid en-passant square' };
+  }
+
+  return { valid: true, error: null };
+}
+
+/**
+ * Export game moves and metadata to official PGN (Portable Game Notation) format
+ */
+export function exportToPGN(moveHistory = [], meta = {}) {
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '.');
+  // Tag values are quoted strings: a peer's name can't break out of its tag.
+  const tag = (v) => String(v).replace(/[\\"]/g, '\\$&').replace(/[\r\n]/g, ' ');
+  const headers = [
+    `[Event "${tag(meta.event || 'NovAura Sovereign HoloChess Match')}"]`,
+    `[Site "${tag(meta.site || 'Decentralized Sovereign Mesh')}"]`,
+    `[Date "${tag(meta.date || dateStr)}"]`,
+    `[Round "${tag(meta.round || '1')}"]`,
+    `[White "${tag(meta.white || 'Nova Core')}"]`,
+    `[Black "${tag(meta.black || 'Aura Core')}"]`,
+    `[Result "${tag(meta.result || '*')}"]`,
+  ];
+  if (meta.initialFen && meta.initialFen !== INITIAL_FEN) {
+    headers.push(`[SetUp "1"]`);
+    headers.push(`[FEN "${tag(meta.initialFen)}"]`);
+  }
+
+  const movePairs = [];
+  for (let i = 0; i < moveHistory.length; i += 2) {
+    const moveNum = Math.floor(i / 2) + 1;
+    const w = moveHistory[i]?.san || `${moveHistory[i]?.from}-${moveHistory[i]?.to}`;
+    const b = moveHistory[i + 1] ? (moveHistory[i + 1].san || `${moveHistory[i + 1].from}-${moveHistory[i + 1].to}`) : '';
+    movePairs.push(`${moveNum}. ${w}${b ? ' ' + b : ''}`);
+  }
+
+  const movesText = movePairs.join(' ') + (meta.result && meta.result !== '*' ? ` ${meta.result}` : '');
+  return `${headers.join('\n')}\n\n${movesText}\n`;
+}
+

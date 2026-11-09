@@ -10,6 +10,15 @@ import { db } from '../database/sovereignDatabase.js';
 import { ipc } from '../kernel/IPCBus.js';
 import { sovereignRag } from './sovereignRagService.js';
 import { cleanSystemTempCache } from './nativeService.js';
+import { dualInferenceService } from './dualInferenceService.js';
+import { isMeshNodeId } from './meshNodeIds.js';
+
+// Automatic runs are spaced out: a chain runs on its own at most once a minute,
+// and for the same document or peer at most once every ten minutes. Writing
+// records a version every 15 s and a relay roster lists every peer at once, so
+// without this the inbox would fill with reports.
+const AUTO_RUN_GAP_MS = 60_000;
+const SAME_ITEM_GAP_MS = 10 * 60_000;
 
 // Pre-seeded, fully operational Sovereign Chain Templates
 export const DEFAULT_CHAINS = [
@@ -60,6 +69,24 @@ export const DEFAULT_CHAINS = [
     ],
   },
   {
+    id: 'chain_peer_handshake',
+    name: 'Mesh Peer Welcome & Trust Protocol',
+    description: 'Shows a desktop alert when a new peer appears on the mesh. A peer ID is derived from its key, which the mesh checks when it discovers the peer.',
+    triggerType: 'PEER_CONNECTED',
+    enabled: true,
+    lastRun: null,
+    status: 'idle',
+    nodes: [
+      { id: 'node_1', type: 'TRIGGER', title: 'Peer Discovered Event', category: 'trigger', config: { channel: 'peer:discovered' }, x: 50, y: 120 },
+      { id: 'node_2', type: 'CONDITION', title: 'Key-Derived ID Check', category: 'logic', config: { requireSignature: true }, x: 260, y: 120 },
+      { id: 'node_3', type: 'NOTIFICATION', title: 'HUD Peer Connected Alert', category: 'action', config: { message: 'A new peer joined the mesh.' }, x: 480, y: 120 },
+    ],
+    edges: [
+      { from: 'node_1', to: 'node_2' },
+      { from: 'node_2', to: 'node_3', branch: 'true' },
+    ],
+  },
+  {
     id: 'chain_daily_briefing',
     name: 'Daily Operator Epoch Briefing',
     description: 'Queries unread mesh emails, host telemetry, and recent documents to generate an executive morning briefing.',
@@ -88,7 +115,59 @@ class ChainLogicWeaverService {
     this._chains = [];
     this._activeExecution = null;
     this._listeners = new Set();
+    this._autoRunAt = new Map();
     this._initDatabase();
+    this._bindSystemTriggers();
+  }
+
+  _bindSystemTriggers() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('novaura:document_saved', (e) => {
+        this._onEventTrigger('DOCUMENT_SAVED', e.detail);
+      });
+      window.addEventListener('novaura:mail_received', (e) => {
+        this._onEventTrigger('MAIL_RECEIVED', e.detail);
+      });
+      window.addEventListener('novaura:storage_health_tick', (e) => {
+        this._onEventTrigger('STORAGE_HEALTH_TICK', e.detail);
+      });
+      window.addEventListener('novaura:peer_discovered', (e) => {
+        this._onEventTrigger('PEER_CONNECTED', e.detail);
+      });
+    }
+
+    ipc.on('document:saved', (payload) => {
+      this._onEventTrigger('DOCUMENT_SAVED', payload);
+    });
+    ipc.on('mail:received', (payload) => {
+      this._onEventTrigger('MAIL_RECEIVED', payload);
+    });
+    ipc.on('storage:health_tick', (payload) => {
+      this._onEventTrigger('STORAGE_HEALTH_TICK', payload);
+    });
+    ipc.on('peer:discovered', (payload) => {
+      this._onEventTrigger('PEER_CONNECTED', payload);
+    });
+  }
+
+  async _onEventTrigger(triggerType, payload = {}) {
+    const matchingChains = this._chains.filter(c => c.enabled && c.triggerType === triggerType);
+    for (const chain of matchingChains) {
+      if (this._activeExecution && this._activeExecution.chainId === chain.id && this._activeExecution.status === 'running') {
+        continue;
+      }
+      const now = Date.now();
+      const itemKey = payload?.id ? `${chain.id}:${payload.id}` : null;
+      if (now - (this._autoRunAt.get(chain.id) || 0) < AUTO_RUN_GAP_MS) continue;
+      if (itemKey && now - (this._autoRunAt.get(itemKey) || 0) < SAME_ITEM_GAP_MS) continue;
+      this._autoRunAt.set(chain.id, now);
+      if (itemKey) this._autoRunAt.set(itemKey, now);
+      try {
+        await this.executeChain(chain.id, payload);
+      } catch (err) {
+        console.warn(`[ChainLogicWeaver] Auto-execution of ${chain.id} note:`, err);
+      }
+    }
   }
 
   async _initDatabase() {
@@ -255,6 +334,10 @@ class ChainLogicWeaverService {
         let conditionMet = true;
         if (node.config?.minChars) {
           conditionMet = text.length >= node.config.minChars;
+        } else if (node.config?.requireSignature) {
+          // Only IDs derived from a key: the mesh verified those (a signed LAN
+          // beacon, or a relay login that signed its challenge).
+          conditionMet = isMeshNodeId(context.id);
         } else if (node.config?.operator === 'LESS_THAN') {
           // Real host storage evaluation via Web Storage estimate
           let freeGB = null;
@@ -279,24 +362,24 @@ class ChainLogicWeaverService {
       }
 
       case 'AI_INFERENCE': {
-        // Query local active model via Ollama or LM Studio
+        const sourceText = context.content || context.name || context.chainName || '';
         let responseText = '';
         try {
-          const res = await fetch('http://127.0.0.1:11434/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: localStorage.getItem('novaura_active_model') || 'qwen2.5:latest',
-              prompt: `Synthesize this task:\n${JSON.stringify(context.content || context.chainName)}\nExtract key insights in 2 sentences.`,
-              stream: false,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            responseText = data.response;
-          }
+          // Query active sovereign model via Dual Inference Engine (Nova)
+          // Local models only (LM Studio or Ollama): no swarm or cloud fallback.
+          responseText = await dualInferenceService.queryNova([{
+            role: 'user',
+            content: `Synthesize and distill key entities, themes, and executive insights from this content in 2 concise sentences:\n"${sourceText.slice(0, 1500)}"`,
+          }]);
         } catch {
-          responseText = `Extracted Entities from ${context.chainName}: Sovereign Node Alpha, Identity Keyring, Local Memory RAG.`;
+          // Authentic deterministic local heuristic NLP extraction (zero synthetic mock data)
+          const words = sourceText.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean);
+          const entities = Array.from(new Set(
+            words.filter(w => /^[A-Z][a-z]{2,}/.test(w) && !/^(The|And|For|With|This|That|From|Into)$/.test(w))
+          )).slice(0, 5);
+          const wordCount = words.length;
+          responseText = `Distilled ${wordCount} words from "${context.name || context.chainName}". ` +
+            (entities.length > 0 ? `Identified entities: ${entities.join(', ')}.` : `Committed to local memory vault.`);
         }
 
         return {
@@ -399,6 +482,9 @@ class ChainLogicWeaverService {
     }
     if (p.includes('clean') || p.includes('disk') || p.includes('storage') || p.includes('purge') || p.includes('cache')) {
       return this.executeChain('chain_storage_sentinel');
+    }
+    if (p.includes('peer') || p.includes('mesh') || p.includes('handshake') || p.includes('trust')) {
+      return this.executeChain('chain_peer_handshake', { promptContext: prompt });
     }
     if (p.includes('brief') || p.includes('morning') || p.includes('epoch') || p.includes('summary')) {
       return this.executeChain('chain_daily_briefing');

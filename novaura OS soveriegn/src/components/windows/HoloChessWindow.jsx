@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Bot, Users, RotateCcw, Volume2, VolumeX, Sparkles, Flag,
-  ShieldAlert, Crown, RefreshCw, Trophy, Radio, HelpCircle
+  ShieldAlert, Crown, RefreshCw, Trophy, Radio, HelpCircle,
+  Copy, Check, Download, FileText
 } from 'lucide-react';
 import HoloChessCanvas from './chess/HoloChessCanvas.jsx';
 import {
@@ -17,6 +18,8 @@ import {
   generateAiCommentary,
   playChessSound,
   newChessGameId,
+  validateFEN,
+  exportToPGN,
 } from '../../services/holoChessService.js';
 import { getConnectedPeers } from '../../services/sovereignMesh.js';
 import { sendChessPacket, getPendingChessInvites, dropChessInvite } from '../../services/holoChessMesh.js';
@@ -49,6 +52,14 @@ export default function HoloChessWindow() {
   const [invites, setInvites] = useState(getPendingChessInvites);
   const [waiting, setWaiting] = useState(null); // outgoing challenge { gameId, peerId, peerName }
   const [match, setMatch] = useState(null); // { gameId, peerId, did, myColor: 'w' | 'b', opponent }
+
+  // FEN & PGN Tools State. startFenRef is where the game began: the standard
+  // position, or a FEN the player loaded (undo goes back to it, PGN records it).
+  const startFenRef = useRef(INITIAL_FEN);
+  const [copiedFen, setCopiedFen] = useState(false);
+  const [showFenPrompt, setShowFenPrompt] = useState(false);
+  const [customFenInput, setCustomFenInput] = useState('');
+  const [fenError, setFenError] = useState('');
 
   // Derived Board Info
   const parsed = useMemo(() => parseFEN(fen), [fen]);
@@ -131,6 +142,7 @@ export default function HoloChessWindow() {
   }, [soundEnabled]);
 
   const resetBoard = useCallback(() => {
+    startFenRef.current = INITIAL_FEN;
     fenRef.current = INITIAL_FEN;
     plyRef.current = 0;
     setFen(INITIAL_FEN);
@@ -310,7 +322,7 @@ export default function HoloChessWindow() {
     if (gameMode !== 'ai' || moveHistory.length < drop || isAiThinking) return;
     const prevMoves = moveHistory.slice(0, -drop);
     const last = prevMoves[prevMoves.length - 1];
-    setFen(last ? last.fen : INITIAL_FEN);
+    setFen(last ? last.fen : startFenRef.current);
     setMoveHistory(prevMoves);
     setSelectedSquare(null);
     setLegalMovesForSelected([]);
@@ -373,6 +385,56 @@ export default function HoloChessWindow() {
     setInvites(getPendingChessInvites());
     sendChessPacket(inv.from, { kind: 'decline', gameId: inv.gameId });
   };
+
+  const handleCopyFen = useCallback(async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(fen);
+      }
+      setCopiedFen(true);
+      setTimeout(() => setCopiedFen(false), 2000);
+    } catch {
+      setCopiedFen(true);
+      setTimeout(() => setCopiedFen(false), 2000);
+    }
+  }, [fen]);
+
+  const handleExportPgn = useCallback(() => {
+    const pgnData = exportToPGN(moveHistory, {
+      white: match ? (match.myColor === 'w' ? 'Operator (Local)' : match.opponent) : 'Nova Core',
+      black: match ? (match.myColor === 'b' ? 'Operator (Local)' : match.opponent) : (gameMode === 'ai' ? 'Neural AI' : 'Opponent'),
+      result: isGameOver ? (inCheckmate ? (activeColor === 'w' ? '0-1' : '1-0') : '1/2-1/2') : '*',
+      initialFen: startFenRef.current,
+    });
+    const blob = new Blob([pgnData], { type: 'application/x-chess-pgn' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `holochess_${Date.now()}.pgn`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }, [moveHistory, match, isGameOver, inCheckmate, activeColor, gameMode]);
+
+  const handleLoadCustomFen = useCallback(() => {
+    if (!customFenInput.trim()) return;
+    const res = validateFEN(customFenInput.trim());
+    if (!res.valid) {
+      setFenError(res.error || 'Invalid FEN format');
+      return;
+    }
+    const cleanFen = customFenInput.trim();
+    startFenRef.current = cleanFen;
+    fenRef.current = cleanFen;
+    plyRef.current = 0;
+    setFen(cleanFen);
+    setMoveHistory([]);
+    setSelectedSquare(null);
+    setLegalMovesForSelected([]);
+    setLastMove(null);
+    setFenError('');
+    setShowFenPrompt(false);
+    setCustomFenInput('');
+  }, [customFenInput]);
 
   const incomingChallenge = liveMatch ? null : invites[0];
 
@@ -699,9 +761,62 @@ export default function HoloChessWindow() {
         {/* Move History Log */}
         <div className="flex-1 min-h-0 flex flex-col p-3">
           <div className="text-xs font-mono text-slate-400 mb-2 flex items-center justify-between">
-            <span>Algebraic Move Ledger</span>
-            <span>{moveHistory.length} plies</span>
+            <span className="font-semibold text-slate-300">Move Ledger</span>
+            <div className="flex items-center space-x-1">
+              <button
+                onClick={handleCopyFen}
+                title="Copy current position FEN to clipboard"
+                className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/50 text-[10px] text-slate-300 hover:text-cyan-300 transition-colors"
+              >
+                {copiedFen ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Copy className="w-2.5 h-2.5" />}
+                <span>FEN</span>
+              </button>
+              <button
+                onClick={handleExportPgn}
+                title="Export match to official PGN file"
+                className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/50 text-[10px] text-slate-300 hover:text-cyan-300 transition-colors"
+              >
+                <Download className="w-2.5 h-2.5" />
+                <span>PGN</span>
+              </button>
+              <button
+                onClick={() => { setShowFenPrompt(!showFenPrompt); setFenError(''); }}
+                disabled={liveMatch}
+                title="Load custom FEN position or endgame study"
+                className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 hover:border-cyan-500/50 text-[10px] text-slate-300 hover:text-cyan-300 disabled:opacity-40 transition-colors"
+              >
+                <FileText className="w-2.5 h-2.5" />
+                <span>Load</span>
+              </button>
+            </div>
           </div>
+
+          {/* Custom FEN Setup Drawer */}
+          {showFenPrompt && (
+            <div className="mb-2 p-2 rounded-lg bg-slate-950 border border-cyan-500/40 text-xs font-mono space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] text-cyan-400">
+                <span>Setup Custom FEN:</span>
+                <button onClick={() => setShowFenPrompt(false)} className="text-slate-500 hover:text-white">✕</button>
+              </div>
+              <input
+                type="text"
+                value={customFenInput}
+                onChange={(e) => setCustomFenInput(e.target.value)}
+                placeholder="Paste FEN (e.g. 8/8/8/4k3/8/8/4K3/8 w - - 0 1)"
+                className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-[11px] text-slate-200 focus:outline-none focus:border-cyan-400 font-mono"
+              />
+              {fenError && <div className="text-[10px] text-rose-400">{fenError}</div>}
+              <div className="flex justify-end space-x-1 pt-1">
+                <button
+                  onClick={handleLoadCustomFen}
+                  className="px-2.5 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold text-[10px] transition-colors"
+                >
+                  Set Board
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto space-y-1 font-mono text-xs pr-1">
             {moveHistory.length === 0 ? (
               <div className="text-slate-600 text-center py-6 text-xs">No moves logged yet</div>

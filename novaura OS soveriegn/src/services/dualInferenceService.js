@@ -427,3 +427,5 @@ class DualInferenceService {
 }
 
 export const dualInference = new DualInferenceService();
+export const dualInferenceService = dualInference;
+export default DualInferenceService;
