@@ -8,23 +8,24 @@
 // there when the sender picks the same file again. The receiver accepts each
 // file first. Protocol, keys and checks: meshTransferProtocol.js.
 //
-// Who gets the key: when the recipient's identity key is already known (a
-// contact or a did:nova address), only that identity can accept, and the file
-// name is sealed too. A peer known only by its node id is trusted on first
-// accept, so an offer intercepted by a hostile relay could be taken over;
-// saving the person as a contact closes that.
+// Who gets the key: a node's ID is derived from its identity key, so only the
+// identity whose node was offered the file can accept it, wherever the offer
+// travelled. When the recipient's key is already known (a contact or a did:nova
+// address) the file name is sealed too. Only a peer added by bare IP address,
+// whose node ID isn't known yet, is trusted on first accept.
 
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { db } from '../database/sovereignDatabase.js';
 import {
   registerMeshHandler, sendDirectMeshPacket, getMeshNodeId, getLocalIdentity, resolveRecipientPublicKey,
-  encryptMailPayload, decryptMailPayload, didToPubHex, getConnectedPeers,
+  encryptMailPayload, decryptMailPayload, didToPubHex, getConnectedPeers, resolveMeshNode,
 } from './sovereignMesh.js';
 import {
   CHUNK_BYTES, STALL_MS, WINDOW, newTransferId, isTransferId, chunkCount, chunkLength, deriveTransferKey,
-  encryptChunk, decryptChunk, admitOffer, cleanMeta, advance, nextToSend,
+  encryptChunk, decryptChunk, admitOffer, cleanMeta, advance, nextToSend, newSession,
 } from './meshTransferProtocol.js';
+import { isMeshNodeId, meshNodeIdForPub } from './meshNodeIds.js';
 import { isPopoutWindow } from './popoutWindows.js';
 import { formatBytes } from '../config/meshLimits.js';
 
@@ -43,6 +44,9 @@ const hexToBytes = (hex) => new Uint8Array(String(hex).match(/.{2}/g).map(b => p
 const bytesToHex = (bytes) => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const now = () => new Date().toISOString();
+
+/** The node a packet's signer lives on (its ID comes from the signing key). */
+const senderNode = (packet) => meshNodeIdForPub(packet?.sender_pubkey);
 
 async function native(cmd, args, options) {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -137,19 +141,26 @@ export async function sendFileToPeer(peerId, file, { resumeId } = {}) {
   if (rec && rec.size !== file.size) throw new Error(`That is not the same file: it should be ${formatBytes(rec.size)}.`);
   if (!rec) {
     rec = {
-      id: newTransferId(), direction: 'out', peerId, peerDid: null, peerName: peerLabel(peerId),
+      id: newTransferId(), direction: 'out', peerId: await resolveMeshNode(peerId), peerDid: null, peerName: peerLabel(peerId),
       fileName: name, mimeType: mime, size: file.size, chunkBytes: CHUNK_BYTES, chunks: chunkCount(file.size),
       salt: bytesToHex(crypto.getRandomValues(new Uint8Array(16))), next: 0, createdAt: now(),
     };
+  } else {
+    rec.peerId = await resolveMeshNode(rec.peerId);
   }
   _out.get(rec.id)?.stop?.();
   Object.assign(rec, { status: 'waiting', error: null, rateBps: 0 });
-  const live = { rec, file, key: null, sendNext: rec.next || 0, acked: rec.next || 0, dupAcks: 0, hashedUpTo: 0, hasher: sha256.create(), waiter: null, pumping: false, failures: 0, lastAckAt: Date.now() };
+  // A new session, and so a new key, for every offer: a resume never encrypts a
+  // piece again under the key and nonce it went out with before.
+  const session = newSession();
+  // `cipher` keeps each piece in flight as sent, so a resend within the session
+  // repeats those bytes instead of encrypting the piece again.
+  const live = { rec, file, session, cipher: new Map(), key: null, sendNext: rec.next || 0, acked: rec.next || 0, dupAcks: 0, hashedUpTo: 0, hasher: sha256.create(), waiter: null, pumping: false, failures: 0, lastAckAt: Date.now() };
   live.stop = () => { live.stopped = true; live.waiter?.(); };
   _out.set(rec.id, live);
   await save(rec);
 
-  const offer = { id: rec.id, size: rec.size, chunkBytes: rec.chunkBytes, chunks: rec.chunks, salt: rec.salt, replyTo };
+  const offer = { id: rec.id, size: rec.size, chunkBytes: rec.chunkBytes, chunks: rec.chunks, salt: rec.salt, session, replyTo };
   const recipientPub = rec.peerDid ? didToPubHex(rec.peerDid) : await resolveRecipientPublicKey(peerId).catch(() => null);
   if (recipientPub) {
     // The name stays private too when the recipient's key is known.
@@ -221,12 +232,16 @@ async function pump(live) {
       // sendNext) is never overwritten when this piece goes out.
       live.sendNext = i + 1;
       await hashUpTo(live, i);
-      const plain = await readPiece(live, i);
-      if (i === live.hashedUpTo) {
-        live.hasher.update(plain);
-        live.hashedUpTo++;
+      let data = live.cipher.get(i);
+      if (!data) {
+        const plain = await readPiece(live, i);
+        if (i === live.hashedUpTo) {
+          live.hasher.update(plain);
+          live.hashedUpTo++;
+        }
+        data = await toBase64(await encryptChunk(live.key, rec.id, i, plain));
+        live.cipher.set(i, data);
       }
-      const data = await toBase64(await encryptChunk(live.key, rec.id, i, plain));
       if (live.stopped) return;
       if (await sendDirectMeshPacket(rec.peerId, 'MESH_XFER_CHUNK', { id: rec.id, i, data })) {
         if (live.failures) { live.failures = 0; rec.error = null; emit(rec); }
@@ -274,12 +289,17 @@ async function onAccept(payload, packet) {
   const did = String(packet?.sender_id || '');
   const pub = didToPubHex(did);
   if (!pub || (live.expectedPub && live.expectedPub !== pub) || (live.rec.peerDid && live.rec.peerDid !== did)) return;
+  // An accept of an earlier offer would mean the other side holds another key.
+  if (payload.session !== live.session) return;
+  // Only the identity whose node was offered the file: its node ID comes from its key.
+  const node = senderNode(packet);
+  if (!node || (isMeshNodeId(live.rec.peerId) && node !== live.rec.peerId)) return;
   const next = Number(payload.next);
   if (!Number.isInteger(next) || next < 0 || next > live.rec.chunks) return;
   const { rec } = live;
   rec.peerDid = did;
-  if (typeof payload.replyTo === 'string' && payload.replyTo.length <= 160) rec.peerId = payload.replyTo;
-  live.key = await deriveTransferKey(sharedSecretWith(pub), rec.salt, rec.id);
+  rec.peerId = node;
+  live.key = await deriveTransferKey(sharedSecretWith(pub), rec.salt, rec.id, live.session);
   Object.assign(live, { acked: next, sendNext: next, lastAckAt: Date.now(), rateFrom: { t: Date.now(), n: next } });
   Object.assign(rec, { next, status: 'sending', error: null });
   await save(rec);
@@ -304,6 +324,7 @@ function onAck(payload, packet) {
   const { rec } = live;
   live.dupAcks = 0;
   live.acked = next;
+  for (const i of live.cipher.keys()) if (i < next) live.cipher.delete(i);
   live.lastAckAt = Date.now();
   rec.next = next;
   const dt = (Date.now() - live.rateFrom.t) / 1000;
@@ -339,12 +360,17 @@ async function onOffer(payload, packet) {
   const identity = getLocalIdentity();
   if (!offer || !pub || !identity?.secretKeyHex) return;
 
+  const node = senderNode(packet);
+  if (!node) return;
   const existing = await db.mesh_transfers.get(offer.id);
   if (existing) {
-    // The same transfer offered again (the sender reconnected or restarted): resume it.
+    // The same transfer offered again (the sender reconnected or restarted): resume
+    // it, under the new offer's session key.
     if (existing.direction !== 'in' || existing.peerDid !== did || existing.size !== offer.size || existing.salt !== offer.salt) return;
-    existing.peerId = offer.replyTo;
+    Object.assign(existing, { peerId: node, session: offer.session });
+    _in.delete(existing.id);
     if (['receiving', 'interrupted'].includes(existing.status)) await startReceiving(existing);
+    else await save(existing);
     return;
   }
   const pending = (await listTransfers()).filter(r => r.direction === 'in' && r.peerDid === did && r.status === 'offered');
@@ -357,7 +383,7 @@ async function onOffer(payload, packet) {
   }
   const { name, mime } = cleanMeta(meta);
   const rec = {
-    id: offer.id, direction: 'in', peerId: offer.replyTo, peerDid: did,
+    id: offer.id, direction: 'in', peerId: node, peerDid: did, session: offer.session,
     peerName: String(packet?.sender_name || '').slice(0, 60) || `${did.slice(9, 17)}…`,
     fileName: name, mimeType: mime, size: offer.size, chunkBytes: offer.chunkBytes, chunks: offer.chunks,
     salt: offer.salt, next: 0, status: 'offered', error: null, createdAt: now(),
@@ -368,12 +394,12 @@ async function onOffer(payload, packet) {
 
 async function startReceiving(rec) {
   await native('transfer_recv_open', { id: rec.id, name: rec.fileName, size: rec.size });
-  const key = await deriveTransferKey(sharedSecretWith(didToPubHex(rec.peerDid)), rec.salt, rec.id);
+  const key = await deriveTransferKey(sharedSecretWith(didToPubHex(rec.peerDid)), rec.salt, rec.id, rec.session || null);
   _in.set(rec.id, { rec, key, pending: new Set(), queue: Promise.resolve(), bad: 0, rateFrom: { t: Date.now(), n: rec.next || 0 } });
   Object.assign(rec, { status: 'receiving', error: null, next: rec.next || 0 });
   await save(rec);
   const replyTo = await getMeshNodeId();
-  if (!(await sendDirectMeshPacket(rec.peerId, 'MESH_XFER_ACCEPT', { id: rec.id, next: rec.next, replyTo }))) {
+  if (!(await sendDirectMeshPacket(rec.peerId, 'MESH_XFER_ACCEPT', { id: rec.id, next: rec.next, replyTo, session: rec.session || null }))) {
     rec.error = 'Could not reach the sender. It resumes when they send it again.';
     emit(rec);
   }

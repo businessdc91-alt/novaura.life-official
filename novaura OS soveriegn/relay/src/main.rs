@@ -6,7 +6,8 @@
 // - Connection concurrency limits (global max + per-IP ceiling)
 // - Room capacity caps & token-bucket rate limiting
 // - Socket-derived WAN IP enforcement (anti-reflection & peer poisoning defense)
-// - Strict sender ID ownership & anti-spoofing enforcement
+// - Node IDs derived from identity keys; a login signs a one-time challenge for every ID
+//   it claims, and a socket may only send packets signed by keys it logged in with
 // - Zero-knowledge forwarding for E2EE envelopes
 // - Short-lived TURN credentials for calls, when a TURN server shares this relay's secret
 // - Always-on archive of signed listings, replayed to nodes that were offline (archive.rs)
@@ -16,6 +17,7 @@ mod archive;
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use std::collections::HashMap;
@@ -45,6 +47,7 @@ pub const CLIENT_WRITE_TIMEOUT_SECS: u64 = 5;        // Outbound socket write ti
 pub const MIN_RECEIVE_BYTES_PER_SEC: u64 = 64 * 1024; // ...a receiver this slow needs for the packet
 pub const DEFAULT_TURN_TTL_SECS: u64 = 86_400;       // TURN credential lifetime
 pub const ARCHIVE_SYNC_INTERVAL_MS: u64 = 30_000;    // Min gap between catch-up syncs per socket
+pub const MAX_IDS_PER_SESSION: usize = 5;            // A node's own ID plus its aliases
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RelayPacket {
@@ -257,11 +260,24 @@ impl Drop for LineBuf {
 
 struct ClientSession {
     pub node_id: Option<String>,
+    /// More IDs this socket proved it holds (the beta feedback inbox on the team node).
+    pub aliases: Vec<String>,
     pub node_name: Option<String>,
     pub room: String,
     pub ip: IpAddr,
     pub tcp_port: u16,
     pub outbox: Outbox,
+}
+
+impl ClientSession {
+    /// Every ID this socket answers for, its own first; empty before it logs in.
+    fn ids(&self) -> Vec<String> {
+        self.node_id.iter().chain(self.aliases.iter()).cloned().collect()
+    }
+
+    fn answers_for(&self, id: &str) -> bool {
+        self.node_id.as_deref() == Some(id) || self.aliases.iter().any(|a| a == id)
+    }
 }
 
 struct RelayState {
@@ -384,11 +400,78 @@ fn hex_to_bytes<const N: usize>(hex: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
+/// Routing ID of an identity key: NODE- and the first 128 bits of SHA-256 of the
+/// raw public key. The app (mesh.rs, meshNodeIds.js) computes the same.
+fn node_id_for_pubkey(pub_bytes: &[u8; 32]) -> String {
+    let digest = Sha256::digest(pub_bytes);
+    let mut id = String::from("NODE-");
+    for b in &digest[..16] {
+        id.push_str(&format!("{:02X}", b));
+    }
+    id
+}
+
+/// What a login signs for each ID: this socket's one-time challenge and the ID.
+fn relay_register_message(nonce: &str, node_id: &str) -> String {
+    format!("NOVA-RELAY-REGISTER-v1\n{}\n{}", nonce, node_id)
+}
+
+/// The IDs a login proves. Each entry of payload.keys is a public key and its
+/// signature over this socket's challenge and the key's own ID. The first is the
+/// node's ID and must be the packet's sender_id; the rest are aliases.
+fn verify_login(packet: &RelayPacket, nonce: &str) -> Result<Vec<String>, String> {
+    let keys = packet
+        .payload
+        .get("keys")
+        .and_then(|k| k.as_array())
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| "LOGIN_UNSIGNED: this Sovereign is too old for this relay. Update it.".to_string())?;
+    let mut ids: Vec<String> = Vec::new();
+    for entry in keys.iter().take(MAX_IDS_PER_SESSION) {
+        let pub_bytes = entry
+            .get("pubkey")
+            .and_then(|v| v.as_str())
+            .and_then(hex_to_bytes::<32>)
+            .ok_or_else(|| "LOGIN_BAD_KEY: a login key is not 32 bytes of hex.".to_string())?;
+        let sig = entry
+            .get("sig")
+            .and_then(|v| v.as_str())
+            .and_then(hex_to_bytes::<64>)
+            .ok_or_else(|| "LOGIN_BAD_SIGNATURE: a login signature is not 64 bytes of hex.".to_string())?;
+        let id = node_id_for_pubkey(&pub_bytes);
+        let key = VerifyingKey::from_bytes(&pub_bytes).map_err(|_| "LOGIN_BAD_KEY: not an Ed25519 key.".to_string())?;
+        key.verify(relay_register_message(nonce, &id).as_bytes(), &Signature::from_bytes(&sig))
+            .map_err(|_| format!("LOGIN_BAD_SIGNATURE: the proof for {} does not verify.", id))?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.first() != Some(&packet.sender_id) {
+        return Err(format!("LOGIN_ID_MISMATCH: '{}' is not the ID of the first login key.", packet.sender_id));
+    }
+    Ok(ids)
+}
+
+/// A fresh login challenge: 128 random bits as hex.
+fn new_nonce() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).ok()?;
+    Some(bytes.iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+/// The node ID of the key that signed `packet`, when the signature verifies.
+fn signer_node_id(packet: &RelayPacket) -> Option<String> {
+    if !identity_signature_valid(packet) {
+        return None;
+    }
+    packet.sender_pubkey.as_deref().and_then(hex_to_bytes::<32>).map(|b| node_id_for_pubkey(&b))
+}
+
 /// Application packets are signed by the sender's identity key and carry
-/// `sender_id = did:nova:<full public key hex>`. That differs from the hardware
-/// node ID the socket registered with, so the relay accepts it only when the
-/// DID is exactly bound to the attached public key and the Ed25519 signature
-/// over the canonical packet string verifies. The payload stays opaque.
+/// `sender_id = did:nova:<full public key hex>`. The relay accepts one only when
+/// the DID is exactly bound to the attached public key and the Ed25519 signature
+/// over the canonical packet string (which covers the packet ID and recipient)
+/// verifies. The payload stays opaque.
 fn identity_signature_valid(packet: &RelayPacket) -> bool {
     let pub_hex = match packet.sender_pubkey.as_deref() {
         Some(pk) => pk.trim().trim_start_matches("0x").to_ascii_lowercase(),
@@ -413,8 +496,18 @@ fn identity_signature_valid(packet: &RelayPacket) -> bool {
         Ok(k) => k,
         Err(_) => return false,
     };
+    let id_ok = !packet.id.is_empty()
+        && packet.id.len() <= 80
+        && packet.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    let recipient = packet.recipient_id.as_deref().filter(|r| !r.is_empty()).unwrap_or("*");
+    if !id_ok || recipient.len() > 160 || recipient.chars().any(char::is_control) {
+        return false;
+    }
     let payload_str = serde_json::to_string(&packet.payload).unwrap_or_default();
-    let canonical = format!("{}:{}:{}:{}", packet.packet_type, packet.sender_id, packet.timestamp_ms, payload_str);
+    let canonical = format!(
+        "NOVA-PACKET-v2\n{}\n{}\n{}\n{}\n{}\n{}",
+        packet.packet_type, packet.sender_id, packet.timestamp_ms, packet.id, recipient, payload_str
+    );
     key.verify(canonical.as_bytes(), &Signature::from_bytes(&sig_bytes)).is_ok()
 }
 
@@ -575,6 +668,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut state = state_clone.lock().await;
                 state.sessions.insert(peer_addr, ClientSession {
                     node_id: None,
+                    aliases: Vec::new(),
                     node_name: None,
                     room: "general".to_string(),
                     ip: peer_ip,
@@ -584,6 +678,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!("[Relay] New connection from {}", peer_addr);
+
+            // The login challenge, and the address this socket connects from (the
+            // node uses it in invite codes instead of asking a STUN server).
+            let nonce = new_nonce().unwrap_or_default();
+            outbox.offer(&Frame::unmetered(supervisor_line(
+                "",
+                "MESH_CHALLENGE",
+                serde_json::json!({ "nonce": nonce, "observed_ip": peer_ip.to_string() }),
+            )));
 
             let mut buf_reader = BufReader::new(reader);
             let mut line = LineBuf::new(Arc::clone(&budget));
@@ -636,12 +739,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // 4. Process Registration or Room Change
+                // 4. Login (MESH_REGISTER) or room change (MESH_JOIN_ROOM). A login signs
+                //    this socket's challenge with the key behind every ID it claims, so
+                //    nobody can register an ID whose key they don't hold.
                 if packet.packet_type == "MESH_REGISTER" || packet.packet_type == "MESH_JOIN_ROOM" {
                     let target_room = packet.payload.get("room")
                         .and_then(|r| r.as_str())
                         .unwrap_or("general")
-                        .to_string();
+                        .chars()
+                        .take(64)
+                        .collect::<String>();
 
                     // Security Check 2: NEVER trust client payload for WAN IP!
                     // WAN IP is strictly taken from the authenticated TCP socket.
@@ -653,76 +760,105 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .filter(|&p| p >= 1024)
                         .unwrap_or(43889);
 
+                    let send_error = |code: &str, reason: String| {
+                        let err = serde_json::json!({ "code": code, "reason": reason });
+                        outbox.offer(&Frame::unmetered(supervisor_line(&packet.sender_id, "MESH_ERROR", err)));
+                    };
+
+                    let claimed = if packet.packet_type == "MESH_REGISTER" {
+                        match if nonce.is_empty() { Err("NO_CHALLENGE".to_string()) } else { verify_login(&packet, &nonce) } {
+                            Ok(ids) => Some(ids),
+                            Err(reason) => {
+                                eprintln!("[Relay Security] Login refused from {}: {}", peer_addr, reason);
+                                send_error("REGISTRATION_FAILED", reason);
+                                line.clear();
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     let mut roster_peers = Vec::new();
                     let mut peers_to_notify = Vec::new();
+                    let mut displaced: Vec<Outbox> = Vec::new();
+                    let mut my_ids: Vec<String> = Vec::new();
+                    let mut my_name = String::new();
                     let mut reg_error: Option<String> = None;
 
                     {
                         let mut state = state_clone.lock().await;
 
-                        // Security Check 3: Prevent Node ID Hijacking
-                        for (&other_addr, s) in state.sessions.iter() {
-                            if other_addr != peer_addr && s.node_id.as_deref() == Some(&packet.sender_id) {
-                                reg_error = Some(format!("NODE_ID_IN_USE: Active connection already registered for node '{}'", packet.sender_id));
-                                break;
-                            }
+                        if claimed.is_none() && state.sessions.get(&peer_addr).map_or(true, |s| s.node_id.is_none()) {
+                            reg_error = Some("NOT_REGISTERED: log in before joining a room.".to_string());
                         }
 
                         // Security Check 4: Room Capacity Cap
                         if reg_error.is_none() {
-                            let room_count = state.sessions.values().filter(|s| s.room == target_room).count();
+                            let room_count = state.sessions.iter()
+                                .filter(|(a, s)| **a != peer_addr && s.room == target_room && s.node_id.is_some())
+                                .count();
                             if room_count >= MAX_ROOM_PEERS {
                                 reg_error = Some(format!("ROOM_FULL: Room '{}' reached maximum capacity of {} peers.", target_room, MAX_ROOM_PEERS));
                             }
                         }
 
                         if let Some(err_msg) = reg_error {
-                            let err_pkt = RelayPacket {
-                                id: format!("err_{}", current_timestamp_ms()),
-                                sender_id: "relay_supervisor".to_string(),
-                                sender_name: "NovAura Universe Relay".to_string(),
-                                sender_pubkey: None,
-                                recipient_id: Some(packet.sender_id.clone()),
-                                packet_type: "MESH_ERROR".to_string(),
-                                payload: serde_json::json!({
-                                    "code": "REGISTRATION_FAILED",
-                                    "reason": err_msg,
-                                }),
-                                signature: None,
-                                timestamp_ms: current_timestamp_ms(),
-                            };
-                            if let Ok(err_json) = serde_json::to_string(&err_pkt) {
-                                outbox.offer(&Frame::unmetered(format!("{}\n", err_json)));
-                            }
+                            drop(state);
+                            send_error("REGISTRATION_FAILED", err_msg);
                             line.clear();
                             continue;
                         }
 
-                        // Register authentic node identity
+                        // Security Check 3: a proven login takes its IDs from any other
+                        // socket (usually the same node, back after a dropped link).
+                        if let Some(ref new_ids) = claimed {
+                            for (&other_addr, s) in state.sessions.iter_mut() {
+                                if other_addr == peer_addr {
+                                    continue;
+                                }
+                                if s.node_id.as_ref().is_some_and(|id| new_ids.contains(id)) {
+                                    s.node_id = None;
+                                    s.aliases.clear();
+                                    displaced.push(s.outbox.clone());
+                                } else {
+                                    s.aliases.retain(|a| !new_ids.contains(a));
+                                }
+                            }
+                        }
+
                         if let Some(session) = state.sessions.get_mut(&peer_addr) {
-                            session.node_id = Some(packet.sender_id.clone());
-                            session.node_name = Some(packet.sender_name.clone());
+                            if let Some(ref new_ids) = claimed {
+                                session.node_id = Some(new_ids[0].clone());
+                                session.aliases = new_ids[1..].to_vec();
+                                let name: String = packet.sender_name.chars().filter(|c| !c.is_control()).take(48).collect();
+                                session.node_name = Some(name);
+                            }
                             session.room = target_room.clone();
                             session.ip = peer_ip;
                             session.tcp_port = extracted_port;
+                            my_ids = session.ids();
+                            my_name = session.node_name.clone().unwrap_or_default();
                         }
 
                         // Gather existing peers in this room
                         for (&addr, s) in state.sessions.iter() {
                             if addr != peer_addr && s.room == target_room {
-                                if let (Some(nid), Some(nname)) = (&s.node_id, &s.node_name) {
+                                if let (Some(_), Some(nname)) = (&s.node_id, &s.node_name) {
                                     if is_safe_peer_ip(s.ip) {
-                                        roster_peers.push(serde_json::json!({
-                                            "id": nid,
-                                            "name": nname,
-                                            "address": format!("{}:{}", s.ip, s.tcp_port),
-                                            "wan_ip": s.ip.to_string(),
-                                            "tcp_port": s.tcp_port,
-                                            "peer_type": "ROOM_SWARM",
-                                            "room": s.room,
-                                            "last_seen_ms": current_timestamp_ms(),
-                                            "is_connected": true,
-                                        }));
+                                        for nid in s.ids() {
+                                            roster_peers.push(serde_json::json!({
+                                                "id": nid,
+                                                "name": nname,
+                                                "address": format!("{}:{}", s.ip, s.tcp_port),
+                                                "wan_ip": s.ip.to_string(),
+                                                "tcp_port": s.tcp_port,
+                                                "peer_type": "ROOM_SWARM",
+                                                "room": s.room,
+                                                "last_seen_ms": current_timestamp_ms(),
+                                                "is_connected": true,
+                                            }));
+                                        }
                                         peers_to_notify.push(s.outbox.clone());
                                     }
                                 }
@@ -730,44 +866,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
-                    println!("[Relay] Node '{}' ({}) joined Room #{}. Active peers: {}", 
-                        packet.sender_name, packet.sender_id, target_room, roster_peers.len());
-
-                    // Send MESH_ROOM_ROSTER to the joining node
-                    let roster_pkt = RelayPacket {
-                        id: format!("roster_{}", current_timestamp_ms()),
-                        sender_id: "relay_supervisor".to_string(),
-                        sender_name: "NovAura Universe Relay".to_string(),
-                        sender_pubkey: None,
-                        recipient_id: Some(packet.sender_id.clone()),
-                        packet_type: "MESH_ROOM_ROSTER".to_string(),
-                        payload: serde_json::json!({
-                            "room": target_room,
-                            "peers": roster_peers,
-                            "active_count": roster_peers.len() + 1,
-                        }),
-                        signature: None,
-                        timestamp_ms: current_timestamp_ms(),
-                    };
-
-                    if let Ok(roster_json) = serde_json::to_string(&roster_pkt) {
-                        outbox.offer(&Frame::unmetered(format!("{}\n", roster_json)));
+                    if my_ids.is_empty() {
+                        line.clear();
+                        continue;
                     }
 
-                    // Broadcast MESH_PEER_JOINED_ROOM to existing peers in the room
+                    for other in displaced {
+                        let err = serde_json::json!({
+                            "code": "ID_TAKEN_OVER",
+                            "reason": "This identity logged in to the relay from another connection.",
+                        });
+                        other.offer(&Frame::unmetered(supervisor_line("", "MESH_ERROR", err)));
+                    }
+
+                    println!("[Relay] Node '{}' ({}) joined Room #{}. Active peers: {}",
+                        my_name, my_ids.join(", "), target_room, roster_peers.len());
+
+                    // Send MESH_ROOM_ROSTER to the joining node
+                    let roster_payload = serde_json::json!({
+                        "room": target_room,
+                        "peers": roster_peers,
+                        "active_count": roster_peers.len() + 1,
+                    });
+                    outbox.offer(&Frame::unmetered(supervisor_line(&my_ids[0], "MESH_ROOM_ROSTER", roster_payload)));
+
+                    // Broadcast MESH_PEER_JOINED_ROOM to existing peers in the room, once per ID
                     if is_safe_peer_ip(peer_ip) {
-                        let join_pkt = RelayPacket {
-                            id: format!("join_{}", current_timestamp_ms()),
-                            sender_id: "relay_supervisor".to_string(),
-                            sender_name: "NovAura Universe Relay".to_string(),
-                            sender_pubkey: None,
-                            recipient_id: Some("*".to_string()),
-                            packet_type: "MESH_PEER_JOINED_ROOM".to_string(),
-                            payload: serde_json::json!({
+                        for nid in &my_ids {
+                            let joined = serde_json::json!({
                                 "room": target_room,
                                 "peer": {
-                                    "id": packet.sender_id,
-                                    "name": packet.sender_name,
+                                    "id": nid,
+                                    "name": my_name,
                                     "address": format!("{}:{}", authentic_wan_ip, extracted_port),
                                     "wan_ip": authentic_wan_ip,
                                     "tcp_port": extracted_port,
@@ -776,14 +906,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "last_seen_ms": current_timestamp_ms(),
                                     "is_connected": true,
                                 }
-                            }),
-                            signature: None,
-                            timestamp_ms: current_timestamp_ms(),
-                        };
-
-                        if let Ok(join_json) = serde_json::to_string(&join_pkt) {
-                            let join_frame = Frame::unmetered(format!("{}\n", join_json));
-                            for peer in peers_to_notify {
+                            });
+                            let join_frame = Frame::unmetered(supervisor_line("*", "MESH_PEER_JOINED_ROOM", joined));
+                            for peer in &peers_to_notify {
                                 peer.offer(&join_frame);
                             }
                         }
@@ -861,18 +986,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     let state = state_clone.lock().await;
 
-                    // Security Check 5: Anti-Spoofing enforcement
-                    // Ensure the sender_id matches the authenticated registered identity for this socket
+                    // Security Check 5: Anti-Spoofing enforcement. A socket forwards only
+                    // packets signed by a key it logged in with, so nobody can push
+                    // someone else's signed packet from their own connection.
                     if let Some(session) = state.sessions.get(&peer_addr) {
-                        if let Some(ref registered_id) = session.node_id {
-                            if registered_id != &packet.sender_id && !identity_signature_valid(&packet) {
-                                eprintln!("[Relay Security] Impersonation attempt: socket {} (id: {}) tried sending as '{}'. Dropped.",
-                                    peer_addr, registered_id, packet.sender_id);
-                                line.clear();
-                                continue;
-                            }
-                        } else {
+                        if session.node_id.is_none() {
                             eprintln!("[Relay Security] Unregistered node tried to send packet from {}. Dropped.", peer_addr);
+                            line.clear();
+                            continue;
+                        }
+                        if !signer_node_id(&packet).is_some_and(|signer| session.answers_for(&signer)) {
+                            eprintln!("[Relay Security] Socket {} sent a packet not signed by its own keys ('{}'). Dropped.",
+                                peer_addr, packet.sender_id);
                             line.clear();
                             continue;
                         }
@@ -891,7 +1016,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 // Directed routing: deliver strictly to the session owning this node_id
                                 for (&_addr, s) in state.sessions.iter() {
-                                    if s.node_id.as_ref() == Some(target_id) {
+                                    if s.answers_for(target_id) {
                                         target_senders.push(s.outbox.clone());
                                         break;
                                     }
@@ -958,34 +1083,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             list.push(s.outbox.clone());
                         }
                     }
-                    (session.node_id, session.room, list)
+                    (session.ids(), session.room, list)
                 } else {
-                    (None, "general".to_string(), Vec::new())
+                    (Vec::new(), "general".to_string(), Vec::new())
                 }
             };
 
             writer_handle.abort(); // Terminate outbound queue writer
 
-            if let Some(ref nid) = departed_id {
-                println!("[Relay] Node '{}' disconnected from Room #{}", nid, departed_room);
-                let leave_pkt = RelayPacket {
-                    id: format!("leave_{}", current_timestamp_ms()),
-                    sender_id: "relay_supervisor".to_string(),
-                    sender_name: "NovAura Universe Relay".to_string(),
-                    sender_pubkey: None,
-                    recipient_id: Some("*".to_string()),
-                    packet_type: "MESH_PEER_LEFT_ROOM".to_string(),
-                    payload: serde_json::json!({
-                        "room": departed_room,
-                        "node_id": nid,
-                    }),
-                    signature: None,
-                    timestamp_ms: current_timestamp_ms(),
-                };
-
-                if let Ok(leave_json) = serde_json::to_string(&leave_pkt) {
-                    let leave_frame = Frame::unmetered(format!("{}\n", leave_json));
-                    for peer in peers_to_notify {
+            if !departed_id.is_empty() {
+                println!("[Relay] Node '{}' disconnected from Room #{}", departed_id.join(", "), departed_room);
+                for nid in &departed_id {
+                    let left = serde_json::json!({ "room": departed_room, "node_id": nid });
+                    let leave_frame = Frame::unmetered(supervisor_line("*", "MESH_PEER_LEFT_ROOM", left));
+                    for peer in &peers_to_notify {
                         peer.offer(&leave_frame);
                     }
                 }
@@ -1094,5 +1205,92 @@ mod tests {
         assert!(bucket.take(BYTE_RATE_BURST as usize).is_zero());
         let pause = bucket.take(BYTE_RATE_PER_SEC as usize);
         assert!(pause >= Duration::from_millis(900) && pause <= Duration::from_millis(1100));
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    fn login(keys: &[&ed25519_dalek::SigningKey], nonce: &str, sender_id: &str) -> RelayPacket {
+        use ed25519_dalek::Signer;
+        let proofs: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|k| {
+                let id = node_id_for_pubkey(&k.verifying_key().to_bytes());
+                let sig = k.sign(relay_register_message(nonce, &id).as_bytes());
+                serde_json::json!({ "pubkey": hex(&k.verifying_key().to_bytes()), "sig": hex(&sig.to_bytes()) })
+            })
+            .collect();
+        RelayPacket {
+            id: "reg".into(),
+            sender_id: sender_id.into(),
+            sender_name: "Tester".into(),
+            sender_pubkey: None,
+            recipient_id: None,
+            packet_type: "MESH_REGISTER".into(),
+            payload: serde_json::json!({ "room": "general", "keys": proofs }),
+            signature: None,
+            timestamp_ms: 0,
+        }
+    }
+
+    #[test]
+    fn node_ids_come_from_the_key() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let id = node_id_for_pubkey(&key.verifying_key().to_bytes());
+        // The same vector is pinned in tests/mesh/nodeIds.test.mjs (the app's JS side).
+        assert_eq!(id, "NODE-FE812C12F3AB4CE6AC5DB69AC352F906");
+    }
+
+    #[test]
+    fn a_login_proves_every_id_it_claims() {
+        let node = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
+        let inbox = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
+        let node_id = node_id_for_pubkey(&node.verifying_key().to_bytes());
+        let inbox_id = node_id_for_pubkey(&inbox.verifying_key().to_bytes());
+        let ids = verify_login(&login(&[&node, &inbox], "abc123", &node_id), "abc123").unwrap();
+        assert_eq!(ids, vec![node_id.clone(), inbox_id]);
+
+        // Signed for another socket's challenge
+        assert!(verify_login(&login(&[&node], "other", &node_id), "abc123").is_err());
+        // Claiming an ID the first key doesn't hold
+        let victim = node_id_for_pubkey(&[9u8; 32]);
+        assert!(verify_login(&login(&[&node], "abc123", &victim), "abc123").is_err());
+        // No proof at all, as older builds sent
+        let mut unsigned = login(&[&node], "abc123", &node_id);
+        unsigned.payload = serde_json::json!({ "room": "general" });
+        assert!(verify_login(&unsigned, "abc123").is_err());
+    }
+
+    #[test]
+    fn packet_signatures_cover_the_id_and_recipient() {
+        use ed25519_dalek::Signer;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let pub_hex = hex(&key.verifying_key().to_bytes());
+        let payload = serde_json::json!({ "b": 1, "a": "x" });
+        let did = format!("did:nova:{}", pub_hex);
+        let canonical = format!(
+            "NOVA-PACKET-v2\n{}\n{}\n{}\n{}\n{}\n{}",
+            "MESH_POST", did, 5, "pkt_1", "NODE-AA", serde_json::to_string(&payload).unwrap()
+        );
+        let mut packet = RelayPacket {
+            id: "pkt_1".into(),
+            sender_id: did,
+            sender_name: "T".into(),
+            sender_pubkey: Some(pub_hex),
+            recipient_id: Some("NODE-AA".into()),
+            packet_type: "MESH_POST".into(),
+            payload,
+            signature: Some(hex(&key.sign(canonical.as_bytes()).to_bytes())),
+            timestamp_ms: 5,
+        };
+        assert!(identity_signature_valid(&packet));
+        assert_eq!(signer_node_id(&packet), Some(node_id_for_pubkey(&key.verifying_key().to_bytes())));
+
+        packet.id = "pkt_2".into();
+        assert!(!identity_signature_valid(&packet), "a new ID needs a new signature");
+        packet.id = "pkt_1".into();
+        packet.recipient_id = Some("NODE-BB".into());
+        assert!(!identity_signature_valid(&packet), "pointing it elsewhere needs a new signature");
     }
 }

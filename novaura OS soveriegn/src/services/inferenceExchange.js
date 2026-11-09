@@ -29,6 +29,8 @@ import {
   dispatchMeshToast,
   isPeerBlocked,
   isAllyContact,
+  senderNode,
+  meshNodeIdFor,
 } from './sovereignMesh.js';
 import { runLocalChat, describeModelRef, parseModelRef } from './localModels.js';
 import {
@@ -50,7 +52,9 @@ const MAX_PROMPT_CHARS = 1_000_000; // long-context prompts; hosts cap tokens pe
 const MAX_CONCURRENT_JOBS = 2;
 const DEFAULT_CALL_TIMEOUT_MS = 120000;
 
-const NODE_ID_RE = /^[A-Za-z0-9:_-]{1,128}$/;
+// Answers go to the node of the key that signed the packet (a node's ID comes
+// from its key), never to a node the packet names: nobody can aim offers,
+// replies or results at someone else's node.
 const JOB_ID_RE = /^job_[0-9a-f]{24}$/;
 const GRANT_ID_RE = /^g_[0-9a-f]{24}$/;
 
@@ -175,7 +179,8 @@ export function discoverHosts() {
 async function onOffer(payload, packet) {
   const sender = verifiedSenderDid(packet);
   if (!sender || sender !== payload?.host || sender === getMyDid()) return;
-  if (!NODE_ID_RE.test(String(payload.hostNode || ''))) return;
+  const hostNode = senderNode(packet);
+  if (!hostNode) return;
 
   const models = (Array.isArray(payload.models) ? payload.models : [])
     .slice(0, 12)
@@ -187,7 +192,7 @@ async function onOffer(payload, packet) {
   await db.inference_hosts.put({
     ...(existing || {}),
     id: sender,
-    hostNode: payload.hostNode,
+    hostNode,
     hostName: String(payload.hostName || 'Sovereign node').slice(0, 60),
     models,
     limits: {
@@ -199,7 +204,7 @@ async function onOffer(payload, packet) {
     lastSeen: Date.now(),
   });
   // Keep stored keys pointed at the host's current node.
-  await db.inference_keys.where('host').equals(sender).modify({ hostNode: payload.hostNode }).catch(() => {});
+  await db.inference_keys.where('host').equals(sender).modify({ hostNode }).catch(() => {});
   emitChange();
 }
 
@@ -265,12 +270,13 @@ async function onAccessRequest(payload, packet) {
   const me = myIdentity();
   const sender = verifiedSenderDid(packet);
   if (!me || !sender || sender === me.did || payload?.host !== me.did) return;
-  if (!isFresh(packet) || !NODE_ID_RE.test(String(payload.replyNode || ''))) return;
+  const replyNode = senderNode(packet);
+  if (!isFresh(packet) || !replyNode) return;
   if (await isPeerBlocked(sender)) return;
 
   const request = {
     id: sender,
-    replyNode: payload.replyNode,
+    replyNode,
     name: String(payload.name || 'Unknown node').slice(0, 60),
     note: String(payload.note || '').slice(0, 280),
     status: 'pending',
@@ -436,7 +442,9 @@ export async function importAccessKey(token) {
   if (body.grantee !== me.did) {
     throw new Error('This key was issued to a different identity, so it will not work here. Ask the host for a key made for your identity.');
   }
-  if (!GRANT_ID_RE.test(String(body.gid || '')) || !NODE_ID_RE.test(String(body.hostNode || ''))) {
+  // The host's node comes from its key, whatever node the key names.
+  const hostNode = meshNodeIdFor(body.host);
+  if (!GRANT_ID_RE.test(String(body.gid || '')) || !hostNode) {
     throw new Error('The access key is malformed.');
   }
   if (Number(body.exp) < Date.now()) throw new Error('This access key has expired.');
@@ -444,7 +452,7 @@ export async function importAccessKey(token) {
   const key = {
     id: body.gid,
     host: body.host,
-    hostNode: body.hostNode,
+    hostNode,
     hostName: String(body.hostName || 'Sovereign node').slice(0, 60),
     models: (Array.isArray(body.models) ? body.models : []).filter(ref => parseModelRef(ref)).slice(0, 12),
     maxTokens: clampInt(body.maxTokens, 64, 4096),
@@ -585,8 +593,9 @@ async function onCall(payload, packet) {
   const me = myIdentity();
   const caller = verifiedSenderDid(packet);
   if (!me || !caller || caller === me.did || payload?.host !== me.did) return; // not for us
-  const { gid, jobId, replyNode } = payload;
-  if (!JOB_ID_RE.test(String(jobId || '')) || !NODE_ID_RE.test(String(replyNode || ''))) return;
+  const { gid, jobId } = payload;
+  const replyNode = senderNode(packet);
+  if (!JOB_ID_RE.test(String(jobId || '')) || !replyNode) return;
   if (!isFresh(packet) || _seenJobs.has(jobId)) return;
   rememberJob(jobId);
 

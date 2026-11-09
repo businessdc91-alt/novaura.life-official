@@ -8,6 +8,8 @@ One Linux machine with a public IP runs three things:
 
 The relay hands each node short-lived TURN logins, signed with a secret it shares with coturn. No TURN password is ever stored in the app.
 
+A node's ID is derived from its identity key, and logging in to the relay means signing a one-time challenge with that key, so nobody can take over another node's address. Sovereign builds before 1.0.9 log in the old way and are refused; update them.
+
 ## 1. Get a machine
 
 Oracle Cloud Always Free works and costs nothing:

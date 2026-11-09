@@ -17,6 +17,7 @@ import {
   wirePost as wireSocialPost,
 } from './meshSocial.js';
 import { isPopoutWindow } from './popoutWindows.js';
+import { meshNodeIdFor, meshNodeIdForPub } from './meshNodeIds.js';
 import { MESH_PAYLOAD_BYTES, formatBytes } from '../config/meshLimits.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
@@ -54,19 +55,26 @@ export function canonicalJson(obj) {
   return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalJson(obj[k])).join(',') + '}';
 }
 
-export function canonicalPacketString(packetType, senderId, timestampMs, payload) {
+// The signed form of a packet. It covers the packet ID and the recipient (a node
+// ID, or "*" for a broadcast), so nobody can send a signed packet again under a
+// new ID or point it at another node. Must match canonical_packet_string in mesh.rs.
+export function canonicalPacketString(packetType, senderId, timestampMs, payload, packetId, recipientId = '*') {
   const payloadStr = canonicalJson(payload);
-  return `${packetType}:${senderId}:${timestampMs}:${payloadStr}`;
+  return ['NOVA-PACKET-v2', packetType, senderId, timestampMs, packetId, recipientId || '*', payloadStr].join('\n');
 }
 
-export function signPacket(packetType, payload, timestampMs, identity = null) {
+export function newPacketId() {
+  return 'pkt_' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export function signPacket(packetType, payload, timestampMs, identity = null, { packetId, recipientId = '*' } = {}) {
   const id = identity || getLocalIdentity();
   if (!id || !id.secretKeyHex) return { signature: null, senderPubkey: null, senderId: null, timestampMs };
 
   try {
     const cleanPub = (id.publicKey || '').replace(/^0x/, '');
     const senderId = id.nodeId || `did:nova:${cleanPub}`;
-    const canonical = canonicalPacketString(packetType, senderId, timestampMs, payload);
+    const canonical = canonicalPacketString(packetType, senderId, timestampMs, payload, packetId, recipientId);
     const secretBytes = new Uint8Array(id.secretKeyHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
     const canonicalBytes = new TextEncoder().encode(canonical);
     const signatureBytes = ed25519.sign(canonicalBytes, secretBytes);
@@ -98,7 +106,10 @@ export function verifyPacketSignature(packet) {
       return false;
     }
 
-    const canonical = canonicalPacketString(packet.packet_type, packet.sender_id, packet.timestamp_ms, packet.payload);
+    const packetId = String(packet.id || '');
+    const recipient = String(packet.recipient_id || '*');
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(packetId) || recipient.length > 160 || /[\x00-\x1f]/.test(recipient)) return false;
+    const canonical = canonicalPacketString(packet.packet_type, packet.sender_id, packet.timestamp_ms, packet.payload, packetId, recipient);
     const canonicalBytes = new TextEncoder().encode(canonical);
     const sigClean = packet.signature.trim();
     if (sigClean.length !== 128) return false;
@@ -121,6 +132,14 @@ export function verifiedSenderDid(packet) {
 export function didToPubHex(did) {
   const m = /^did:nova:([0-9a-f]{64})$/.exec(String(did || ''));
   return m ? m[1] : null;
+}
+
+export { meshNodeIdFor, meshNodeIdForPub };
+
+// The node a packet's signer lives on (its ID comes from the signing key), which
+// is where answers to it go.
+export function senderNode(packet) {
+  return meshNodeIdForPub(packet?.sender_pubkey);
 }
 
 // ── End-to-End Encryption (E2EE) with X25519 Montgomery & AES-256-GCM ───────
@@ -174,8 +193,9 @@ export async function resolveRecipientPublicKey(recipientStr) {
   if (/^(0x)?[0-9a-fA-F]{64}$/.test(clean)) {
     return clean.replace(/^0x/, '').toLowerCase();
   }
+  // By ID only: a peer's display name is whatever that peer chose to announce.
   for (const peer of _peersMap.values()) {
-    if (peer.id === clean || peer.name === clean) {
+    if (peer.id === clean) {
       if (peer.publicKey) return peer.publicKey.replace(/^0x/, '').toLowerCase();
       if (peer.id.startsWith('did:nova:')) return peer.id.replace('did:nova:', '').replace(/^0x/, '').toLowerCase();
       if (/^[0-9a-fA-F]{64}$/.test(peer.id)) return peer.id.toLowerCase();
@@ -288,6 +308,7 @@ async function hydrateFromDatabase() {
   } catch (err) {
     console.warn('[SovereignMesh] Database hydration note:', err);
   }
+  syncNativeMeshIdentity();
 }
 
 const _blockedPeersCache = new Set();
@@ -310,6 +331,37 @@ export function registerMeshHandler(type, handler) {
 }
 
 let _meshNodeIdPromise = null;
+
+// The native mesh derives this node's ID from the identity key and signs relay
+// logins and LAN beacons with it, so it gets the key once the identity loads.
+// The team node also answers for the beta feedback inbox key, so reports reach
+// it wherever it is. Only the main window does this.
+export async function syncNativeMeshIdentity() {
+  if (!isTauri() || isPopoutWindow()) return null;
+  const identity = _identityCache;
+  if (!/^[0-9a-fA-F]{64}$/.test(identity?.secretKeyHex || '')) return null;
+  const aliasSecrets = [];
+  try {
+    const inbox = String((await db.getVaultKey(FEEDBACK_INBOX_VAULT_KEY)) || '').trim().replace(/^0x/, '');
+    if (/^[0-9a-fA-F]{64}$/.test(inbox) && bytesToHex(ed25519.getPublicKey(hexToBytes(inbox))) === FEEDBACK_INBOX_PUBKEY) {
+      aliasSecrets.push(inbox);
+    }
+  } catch {}
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const nodeId = await invoke('mesh_set_identity', {
+      secretKeyHex: identity.secretKeyHex,
+      nodeName: identity.displayName || identity.handle || null,
+      aliasSecrets,
+    });
+    _meshNodeIdPromise = null;
+    window.dispatchEvent(new CustomEvent('novaura:mesh_updated'));
+    return nodeId;
+  } catch (err) {
+    console.warn('[SovereignMesh] Could not hand the identity to the native mesh:', err);
+    return null;
+  }
+}
 
 // The routable node id (NODE-...) that directed packets must be addressed to.
 export function getMeshNodeId() {
@@ -337,13 +389,12 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
   }
 
   // Cryptographic Signature Verification for application packets
+  // Room membership comes unsigned from the relay (the native side only passes
+  // it on from the relay tunnel); everything else must be signed.
   const isInfraPacket = [
-    'MESH_HEARTBEAT',
-    'MESH_REGISTER',
     'MESH_ROOM_ROSTER',
     'MESH_PEER_JOINED_ROOM',
     'MESH_PEER_LEFT_ROOM',
-    'MESH_JOIN_ROOM'
   ].includes(type);
 
   // Every application packet must carry a valid signature. Unsigned packets used
@@ -355,42 +406,30 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
 
   switch (type) {
     case 'MESH_MAIL': {
-      const mail = payload?.mail || packet?.payload?.mail;
-      if (!mail) break;
+      // Only sealed mail is taken (this client never sends any other kind), and
+      // only when the key that signed the packet is the key it was sealed with.
+      // The stored record is built from checked fields, never copied from the wire.
+      const mail = payload?.mail;
+      if (!mail || !mail.encrypted || !mail.ciphertext) break;
+      const signerPub = String(packet.sender_pubkey || '').replace(/^0x/, '').toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(signerPub) || String(mail.senderPub || '').replace(/^0x/, '').toLowerCase() !== signerPub) break;
+      const identity = getLocalIdentity();
+      const myPub = (identity?.publicKey || '').replace(/^0x/, '').toLowerCase();
+      const targetPub = (mail.recipientPub || '').replace(/^0x/, '').toLowerCase();
+      // Sealed for another node, or no key to open it with
+      if (!targetPub || targetPub !== myPub || !identity?.secretKeyHex) break;
 
       (async () => {
-        let displayMail = mail;
-        // Handle E2EE decryption
-        if (mail.encrypted && mail.ciphertext) {
-          const identity = getLocalIdentity();
-          const myPub = (identity?.publicKey || '').replace(/^0x/, '').toLowerCase();
-          const targetPub = (mail.recipientPub || '').replace(/^0x/, '').toLowerCase();
-
-          if (targetPub && targetPub === myPub && identity?.secretKeyHex && mail.senderPub) {
-            try {
-              const decrypted = await decryptMailPayload(mail, identity.secretKeyHex);
-              displayMail = {
-                ...mail,
-                subject: String(decrypted.subject || '').slice(0, 300),
-                body: String(decrypted.body || '').slice(0, 50000),
-                attachments: Array.isArray(decrypted.attachments) ? decrypted.attachments.slice(0, 10) : [],
-                threadId: typeof decrypted.threadId === 'string' ? decrypted.threadId.slice(0, 64) : mail.id,
-                inReplyTo: typeof decrypted.inReplyTo === 'string' ? decrypted.inReplyTo.slice(0, 64) : null,
-                // The signed packet's key, not the address the sender typed.
-                senderDid: verifiedSenderDid(packet),
-                isEncryptedE2EE: true,
-              };
-            } catch (err) {
-              console.warn('[SovereignMesh] Failed to decrypt E2EE mail envelope:', err);
-              return;
-            }
-          } else {
-            // Envelope is encrypted for another mesh node; do not ingest
-            return;
-          }
+        let decrypted;
+        try {
+          decrypted = await decryptMailPayload(mail, identity.secretKeyHex);
+        } catch (err) {
+          console.warn('[SovereignMesh] Failed to decrypt E2EE mail envelope:', err);
+          return;
         }
+        const displayMail = await receivedMailRecord(mail, decrypted, signerPub, identity);
 
-        if (displayMail && !_mailCache.inbox.some(m => m.id === displayMail.id)) {
+        if (!_mailCache.inbox.some(m => m.id === displayMail.id)) {
           _mailCache.inbox.unshift(displayMail);
           db.mailbox.put({ ...displayMail, box: 'inbox' }).catch(() => {});
           window.dispatchEvent(new CustomEvent('novaura:mail_received', { detail: displayMail }));
@@ -403,7 +442,7 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     case 'MESH_BETA_FEEDBACK': {
       const fb = payload?.feedback;
       if (!fb?.clientId || !fb.ciphertext || !fb.senderPub) break;
-      receiveBetaFeedback(fb).catch(err => console.warn('[SovereignMesh] Beta feedback receive failed:', err));
+      receiveBetaFeedback(fb, senderNode(packet)).catch(err => console.warn('[SovereignMesh] Beta feedback receive failed:', err));
       break;
     }
 
@@ -527,9 +566,18 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_SEARCH_RESPONSE': {
-      const results = payload?.results || packet?.payload?.results;
-      if (results) {
-        window.dispatchEvent(new CustomEvent('novaura:mesh_search_results', { detail: payload }));
+      // Results point back at the node that signed them, whatever IDs they name.
+      const responder = verifiedSenderDid(packet);
+      const results = Array.isArray(payload?.results) ? payload.results.slice(0, 20) : null;
+      if (results && responder) {
+        const responderName = String(payload.responderName || '').slice(0, 60);
+        window.dispatchEvent(new CustomEvent('novaura:mesh_search_results', {
+          detail: {
+            responderName,
+            responderId: responder,
+            results: results.map(r => ({ ...r, nodeId: responder, peerId: responder, peerName: responderName })),
+          },
+        }));
       }
       break;
     }
@@ -544,9 +592,9 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_ARTICLE_RESPONSE': {
-      const { requestId, article, providerName } = payload || packet?.payload || {};
+      const { requestId, article, providerName } = payload || {};
       if (article) {
-        handleIncomingArticleResponse(requestId, article, providerName);
+        handleIncomingArticleResponse(requestId, article, providerName, senderNode(packet));
       }
       break;
     }
@@ -570,10 +618,12 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_INFERENCE_REQUEST': {
-      const { jobId, prompt, role, maxTokens, requesterName, replyNode } = payload || packet?.payload || {};
+      const { jobId, prompt, role, maxTokens, requesterName } = payload || packet?.payload || {};
       const requesterId = verifiedSenderDid(packet);
+      // The answer goes to the requester's own node (derived from its key), never
+      // to a node the request names, so a request can't aim answers at someone else.
       if (jobId && prompt && requesterId) {
-        handleIncomingInferenceRequest(jobId, prompt, role || 'aura', maxTokens, requesterId, requesterName, replyNode);
+        handleIncomingInferenceRequest(jobId, prompt, role || 'aura', maxTokens, requesterId, requesterName, senderNode(packet));
       }
       break;
     }
@@ -634,13 +684,70 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
   }
 }
 
+// ── Received mail ───────────────────────────────────────────────────────────
+
+const MAIL_ID = /[^A-Za-z0-9_-]/g;
+
+// Attachments as the inbox keeps them: a name, a type, a size and a data: URL.
+// Anything else (a link to a website, say) is dropped.
+function cleanAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 10).flatMap((att) => {
+    const dataUrl = typeof att?.dataUrl === 'string' ? att.dataUrl : '';
+    if (!/^data:[\w.+-]+\/[\w.+-]+(;[\w=.+-]+)*(;base64)?,/i.test(dataUrl)) return [];
+    const name = [...String(att.name || 'attachment')].filter(c => c.charCodeAt(0) > 31).join('').slice(0, 255);
+    const type = /^[\w.+-]+\/[\w.+-]+$/.test(String(att.type || '')) ? att.type : 'application/octet-stream';
+    return [{ name: name || 'attachment', type, size: Number(att.size) || 0, dataUrl }];
+  });
+}
+
+/**
+ * The inbox record for sealed mail that verified. The sender is the key that
+ * signed it: shown by the saved contact's name when there is one, otherwise by
+ * the name it gave, marked unverified. The local ID is derived from the sender's
+ * key, so a message can't replace one it didn't come from.
+ */
+async function receivedMailRecord(mail, decrypted, signerPub, identity) {
+  const senderDid = `did:nova:${signerPub}`;
+  let contact = null;
+  try {
+    contact = (await db.contacts.toArray()).find(c => String(c.publicKey || '').replace(/^0x/, '').toLowerCase() === signerPub) || null;
+  } catch {}
+  const claimedName = [...String(mail.senderName || '')].filter(c => c.charCodeAt(0) > 31).join('').trim().slice(0, 80);
+  const remoteId = String(mail.id || '').replace(MAIL_ID, '').slice(0, 64) || generateId();
+  const sentAt = Date.parse(mail.timestamp);
+  return {
+    id: `in_${signerPub.slice(0, 16)}_${remoteId}`,
+    remoteId,
+    // Replies go to the key that signed this, not to an address it claimed.
+    sender: senderDid,
+    senderName: contact?.handle || contact?.displayName
+      || (claimedName ? `${claimedName} (unverified)` : `${senderDid.slice(0, 17)}…`),
+    claimedName,
+    claimedAddress: String(mail.sender || '').slice(0, 200),
+    senderPub: signerPub,
+    senderDid,
+    senderIsContact: Boolean(contact),
+    recipient: identity?.address || String(mail.recipient || '').slice(0, 200),
+    subject: String(decrypted.subject || '').slice(0, 300),
+    body: String(decrypted.body || '').slice(0, 50000),
+    attachments: cleanAttachments(decrypted.attachments),
+    threadId: typeof decrypted.threadId === 'string' ? decrypted.threadId.replace(MAIL_ID, '').slice(0, 64) || remoteId : remoteId,
+    inReplyTo: typeof decrypted.inReplyTo === 'string' ? decrypted.inReplyTo.replace(MAIL_ID, '').slice(0, 64) : null,
+    timestamp: Number.isFinite(sentAt) ? new Date(Math.min(sentAt, Date.now())).toISOString() : new Date().toISOString(),
+    read: false,
+    starred: false,
+    isEncryptedE2EE: true,
+  };
+}
+
 // ── Beta feedback inbox (team node) and delivery receipts (tester node) ──────
 
 const hexToBytes = (hex) => new Uint8Array(hex.replace(/^0x/, '').match(/.{1,2}/g).map(b => parseInt(b, 16)));
 const bytesToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 
 // Runs on the node that holds the inbox secret. Other nodes ignore the packet.
-async function receiveBetaFeedback(fb) {
+async function receiveBetaFeedback(fb, reporterNode) {
   const inboxSecret = String((await db.getVaultKey(FEEDBACK_INBOX_VAULT_KEY)) || '').trim().replace(/^0x/, '');
   if (!/^[0-9a-fA-F]{64}$/.test(inboxSecret)) {
     console.info('[SovereignMesh] Beta report arrived but this node has no feedback inbox key; ignoring.');
@@ -672,7 +779,7 @@ async function receiveBetaFeedback(fb) {
         `CPU cores: ${env.cpuCores ?? 'unknown'}`,
         `Reported: ${report.createdAt || 'unknown'}`,
         `Report ID: ${fb.clientId}`,
-        fb.replyNode ? `Reply node: ${fb.replyNode}` : null,
+        reporterNode ? `Reply node: ${reporterNode}` : null,
       ].filter(line => line !== null).join('\n'),
       attachments: [],
       timestamp: report.createdAt || new Date().toISOString(),
@@ -689,10 +796,11 @@ async function receiveBetaFeedback(fb) {
     dispatchMeshToast({ type: 'info', title: 'Beta report received', message: report.title || 'New tester report in NovaMail' });
   }
 
-  // Always confirm, including duplicates, so the tester stops re-sending.
-  if (fb.replyNode) {
+  // Always confirm, including duplicates, so the tester stops re-sending. The
+  // receipt goes to the node that signed the report.
+  if (reporterNode) {
     const ackSig = bytesToHex(ed25519.sign(new TextEncoder().encode(feedbackAckMessage(fb.clientId)), hexToBytes(inboxSecret)));
-    await sendDirectMeshPacket(fb.replyNode, 'MESH_BETA_FEEDBACK_ACK', { clientId: fb.clientId, ackSig });
+    await sendDirectMeshPacket(reporterNode, 'MESH_BETA_FEEDBACK_ACK', { clientId: fb.clientId, ackSig });
   }
 }
 
@@ -715,10 +823,15 @@ async function confirmBetaFeedbackReceipt(payload) {
   }
 }
 
-// Responds to decentralized search queries from remote mesh peers
+// Responds to decentralized search queries from remote mesh peers. Only what this
+// node has made public is searched: encyclopedia articles (public reference
+// pages), chapters published to the mesh, and repositories marked public.
+// Unpublished drafts and private repositories never answer, so nobody can probe
+// what they contain word by word.
 async function handleLocalSearchQueryForPeer(query, requesterId) {
   try {
-    const q = query.toLowerCase().trim();
+    const q = String(query || '').toLowerCase().trim().slice(0, 200);
+    if (q.length < 2) return;
     const myId = getLocalIdentity();
     const myNodeId = myId?.publicKey || myId?.handle || 'node';
     const [manuscripts, repos, encyclopedia] = await Promise.all([
@@ -728,6 +841,7 @@ async function handleLocalSearchQueryForPeer(query, requesterId) {
     ]);
 
     const matchingManuscripts = manuscripts
+      .filter(m => m.meshPublishedAt)
       .filter(m => (m.name || '').toLowerCase().includes(q) || (m.content || '').toLowerCase().includes(q))
       .slice(0, 4)
       .map(m => ({
@@ -741,6 +855,7 @@ async function handleLocalSearchQueryForPeer(query, requesterId) {
       }));
 
     const matchingRepos = repos
+      .filter(r => r.isPrivate === false)
       .filter(r => (r.name || '').toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q))
       .slice(0, 3)
       .map(r => ({
@@ -754,6 +869,7 @@ async function handleLocalSearchQueryForPeer(query, requesterId) {
       }));
 
     const matchingArticles = encyclopedia
+      .filter(a => !a.isMeshShared)
       .filter(a =>
         (a.title || '').toLowerCase().includes(q) ||
         (a.description || '').toLowerCase().includes(q) ||
@@ -813,22 +929,51 @@ async function handleIncomingArticleRequest(requestId, articleId, title, request
   }
 }
 
-async function handleIncomingArticleResponse(requestId, article, providerName) {
+// requestId -> node asked. Only an answer to one of these, from that node, is kept.
+const _pendingArticleRequests = new Map();
+
+const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+const httpsUrl = (v) => (typeof v === 'string' && /^https:\/\//i.test(v) ? v.slice(0, 2000) : null);
+
+// A peer's article as this node stores it: known fields only, under an ID of our
+// own, so a copy from a peer never replaces an article saved here.
+function sharedArticleRecord(article, providerName, providerNode) {
+  const title = str(article.title, 300).trim();
+  const key = (str(article.id, 120) || title).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
+  return {
+    id: `mesh_${providerNode.slice(5, 21)}_${key}`,
+    title,
+    extract: str(article.extract, 2000),
+    description: str(article.description, 500),
+    thumbnail: httpsUrl(article.thumbnail),
+    fullUrl: httpsUrl(article.fullUrl),
+    sections: (Array.isArray(article.sections) ? article.sections : []).slice(0, 200)
+      .map(sec => ({ title: str(sec?.title, 300), content: str(sec?.content, 100_000) })),
+    cleanText: str(article.cleanText, 2_000_000),
+    references: (Array.isArray(article.references) ? article.references : []).slice(0, 500)
+      .map((ref, i) => ({ index: Number(ref?.index) || i + 1, text: str(ref?.text, 2000), url: httpsUrl(ref?.url) })),
+    categories: (Array.isArray(article.categories) ? article.categories : []).slice(0, 8).map(c => str(c, 120)),
+    wordcount: Number(article.wordcount) || 0,
+    isDownloaded: true,
+    isMeshShared: true,
+    sourcePeer: str(providerName, 60) || 'Swarm Peer',
+    lastAccessed: new Date().toISOString(),
+  };
+}
+
+async function handleIncomingArticleResponse(requestId, article, providerName, providerNode) {
   try {
-    if (!article || !article.title) return;
-    const localRecord = {
-      ...article,
-      id: article.id || 'article_' + Date.now(),
-      isMeshShared: true,
-      sourcePeer: providerName || 'Swarm Peer',
-      lastAccessed: new Date().toISOString()
-    };
+    const asked = _pendingArticleRequests.get(requestId);
+    if (!asked || !providerNode || asked !== providerNode) return;
+    if (!article || typeof article.title !== 'string' || !article.title.trim()) return;
+    _pendingArticleRequests.delete(requestId);
+    const localRecord = sharedArticleRecord(article, providerName, providerNode);
     await db.encyclopedia_articles.put(localRecord);
     window.dispatchEvent(new CustomEvent('novaura:article_received', { detail: { requestId, article: localRecord, providerName } }));
     dispatchMeshToast({
       type: 'encyclopedia',
       title: 'Encyclopedia Article Cached',
-      message: `"${article.title}" retrieved from ${providerName || 'Peer'} via mesh.`
+      message: `"${localRecord.title}" retrieved from ${localRecord.sourcePeer} via mesh.`
     });
   } catch (err) {
     console.warn('[SovereignMesh] Article response storage error:', err);
@@ -852,10 +997,14 @@ export async function requestRemoteArticle(peerId, { articleId, title, timeoutMs
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
+      _pendingArticleRequests.delete(requestId);
       window.removeEventListener('novaura:article_received', onResponse);
     };
 
     window.addEventListener('novaura:article_received', onResponse);
+    resolveMeshRoute(peerId).then(node => {
+      if (node) _pendingArticleRequests.set(requestId, node);
+    });
 
     timer = setTimeout(() => {
       cleanup();
@@ -1052,11 +1201,14 @@ export function broadcastMeshPacket(type, payload) {
 
     const timestampMs = Date.now();
     const identity = getLocalIdentity();
-    const { signature, senderPubkey, senderId } = signPacket(type, payload, timestampMs, identity);
+    const packetId = newPacketId();
+    const { signature, senderPubkey, senderId } = signPacket(type, payload, timestampMs, identity, { packetId });
 
     // 1. Intra-browser / Multi-window broadcast
     if (meshChannel) {
       meshChannel.postMessage({
+        id: packetId,
+        recipient_id: '*',
         type,
         packet_type: type,
         payload,
@@ -1079,6 +1231,7 @@ export function broadcastMeshPacket(type, payload) {
           senderPubkey,
           senderId,
           timestampMs,
+          packetId,
         }).catch(err => {
           console.warn('[SovereignMesh] Native mesh broadcast note:', err);
         });
@@ -1088,6 +1241,17 @@ export function broadcastMeshPacket(type, payload) {
     console.warn('[SovereignMesh] Mesh broadcast note:', e);
   }
 }
+
+// Where a directed packet goes. A DID or public key maps to its node; a contact
+// saved with a node ID from before IDs came from keys is found by its key.
+async function resolveMeshRoute(recipientId) {
+  const direct = meshNodeIdFor(recipientId);
+  if (direct) return direct;
+  const contact = await db.contacts.where('nodeId').equals(String(recipientId || '')).first().catch(() => null);
+  return meshNodeIdFor(contact?.publicKey) || String(recipientId || '');
+}
+
+export const resolveMeshNode = resolveMeshRoute;
 
 export async function sendDirectMeshPacket(recipientId, type, payload) {
   if (!ALLOWED_MESH_PACKET_TYPES.has(type)) {
@@ -1103,18 +1267,21 @@ export async function sendDirectMeshPacket(recipientId, type, payload) {
 
     const timestampMs = Date.now();
     const identity = getLocalIdentity();
-    const { signature, senderPubkey, senderId } = signPacket(type, payload, timestampMs, identity);
+    const route = await resolveMeshRoute(recipientId);
+    const packetId = newPacketId();
+    const { signature, senderPubkey, senderId } = signPacket(type, payload, timestampMs, identity, { packetId, recipientId: route });
 
     if (isTauri()) {
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke('mesh_send_direct_packet', {
-        recipientId,
+        recipientId: route,
         packetType: type,
         payload,
         signature,
         senderPubkey,
         senderId,
         timestampMs,
+        packetId,
       });
     }
 
@@ -1179,6 +1346,7 @@ export function createLocalIdentity(handle, displayName, bio = 'Sovereign Node O
     localStorage.setItem(STORAGE_KEY, JSON.stringify(safeCold));
   } catch {}
   db.identities.put(idRecord).catch(err => console.warn('[SovereignMesh] Identity save err:', err));
+  syncNativeMeshIdentity();
 
   window.dispatchEvent(new CustomEvent('novaura:identity_updated', { detail: idRecord }));
   return idRecord;
@@ -1421,6 +1589,8 @@ export function publishManuscriptToMesh(manuscript, note = '') {
   };
 
   broadcastMeshPacket('MESH_LITERATURE_PUBLISH', payload);
+  // Published chapters answer peer searches; unpublished ones never do.
+  if (manuscript.id) db.manuscripts.update(manuscript.id, { meshPublishedAt: payload.publishedAt }).catch(() => {});
   return true;
 }
 
@@ -2097,7 +2267,8 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
   }
 
   const { prompt, role = 'aura', maxTokens = 1024, timeoutMs = 45000 } = opts;
-  const jobId = 'inf_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+  // Unguessable, so only a peer that saw the request can answer it.
+  const jobId = 'inf_' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
   const myId = getLocalIdentity();
   // Replies are directed packets, which route by node id, not by DID.
   const replyNode = await getMeshNodeId();

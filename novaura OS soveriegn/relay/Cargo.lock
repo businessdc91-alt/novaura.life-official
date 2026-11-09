@@ -203,10 +203,12 @@ version = "2.1.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
+ "getrandom",
  "hmac",
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "tokio",
 ]
 

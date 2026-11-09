@@ -246,13 +246,29 @@ export default function NovaMailWindow({ onClose }) {
     refreshMails();
   };
 
-  // Attachment download
+  // Attachment download. Only a data: URL is saved, through a Blob: a link to a
+  // website would navigate the Sovereign window to it instead of downloading.
   const handleDownloadAttachment = (att) => {
-    if (!att || !att.dataUrl) return;
+    if (!att || typeof att.dataUrl !== 'string' || !/^data:/i.test(att.dataUrl)) return;
+    const comma = att.dataUrl.indexOf(',');
+    if (comma < 0) return;
+    const meta = att.dataUrl.slice(5, comma);
+    const body = att.dataUrl.slice(comma + 1);
+    let bytes;
+    try {
+      bytes = /;base64$/i.test(meta)
+        ? Uint8Array.from(atob(body), c => c.charCodeAt(0))
+        : new TextEncoder().encode(decodeURIComponent(body));
+    } catch {
+      return;
+    }
+    const blob = new Blob([bytes], { type: meta.split(';')[0] || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = att.dataUrl;
+    a.href = url;
     a.download = att.name || 'attachment';
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
   // Superhuman Keyboard Shortcuts

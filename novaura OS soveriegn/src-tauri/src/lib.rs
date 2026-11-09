@@ -1113,8 +1113,9 @@ async fn mesh_broadcast_packet(
     sender_pubkey: Option<String>,
     sender_id: Option<String>,
     timestamp_ms: Option<u64>,
+    packet_id: Option<String>,
 ) -> Result<bool, String> {
-    mesh.broadcast_packet(packet_type, payload, signature, sender_pubkey, sender_id, timestamp_ms).await
+    mesh.broadcast_packet(packet_type, payload, signature, sender_pubkey, sender_id, timestamp_ms, packet_id).await
 }
 
 #[tauri::command]
@@ -1127,8 +1128,22 @@ async fn mesh_send_direct_packet(
     sender_pubkey: Option<String>,
     sender_id: Option<String>,
     timestamp_ms: Option<u64>,
+    packet_id: Option<String>,
 ) -> Result<bool, String> {
-    mesh.send_direct_packet(recipient_id, packet_type, payload, signature, sender_pubkey, sender_id, timestamp_ms).await
+    mesh.send_direct_packet(recipient_id, packet_type, payload, signature, sender_pubkey, sender_id, timestamp_ms, packet_id).await
+}
+
+/// The profile's identity key for the mesh: the node ID is derived from it, and it
+/// signs relay logins and LAN beacons. Alias keys (the beta feedback inbox on the
+/// team node) make this node reachable under their IDs too.
+#[tauri::command]
+async fn mesh_set_identity(
+    mesh: tauri::State<'_, MeshManager>,
+    secret_key_hex: String,
+    node_name: Option<String>,
+    alias_secrets: Option<Vec<String>>,
+) -> Result<String, String> {
+    mesh.set_identity(secret_key_hex, node_name, alias_secrets.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -1676,15 +1691,25 @@ async fn get_native_hardware_spec() -> Result<NativeHardwareSpec, String> {
     Err("Could not retrieve native hardware specifications".to_string())
 }
 
+/// The app's own pages: the bundled frontend (tauri.localhost on Windows), the
+/// dev server in debug builds, and blob:/about: pages it creates itself.
+fn is_app_url(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "blob" | "about" => true,
+        "http" | "https" => match url.host_str() {
+            Some("tauri.localhost") => true,
+            Some("localhost") => cfg!(debug_assertions),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // First, before any window: which profile's data this process opens.
     profiles::init_from_args();
-    let node_id = get_hardware_fingerprint();
-    let node_name = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "sovereign-node".to_string());
-    let mut mesh_manager = MeshManager::new(node_id, node_name);
+    let mut mesh_manager = MeshManager::new();
 
     tauri::Builder::default()
         .plugin(
@@ -1694,6 +1719,14 @@ pub fn run() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // The desktop and its pop-outs only ever show the app itself. Anything that
+        // tries to navigate one of them elsewhere (a link in mail, a page's script)
+        // is refused, so no website can stand in for the profile or activation screen.
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("navigation-guard")
+                .on_navigation(|_webview, url| is_app_url(url))
+                .build(),
+        )
         .manage(mesh_manager.clone())
         // Cybeni previews run on their own origin, isolated from the OS UI (see preview.rs).
         .register_uri_scheme_protocol("cyprev", |_ctx, request| preview::handle(&request))
@@ -1739,6 +1772,7 @@ pub fn run() {
             transfer_recv_cancel,
             transfer_reveal,
             mesh_get_status,
+            mesh_set_identity,
             mesh_broadcast_packet,
             mesh_send_direct_packet,
             mesh_connect_peer,

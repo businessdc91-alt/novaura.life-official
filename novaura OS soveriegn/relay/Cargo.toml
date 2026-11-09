@@ -22,6 +22,9 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 hmac = "0.12"
 sha1 = "0.10"
 base64 = "0.22"
+# Node IDs from identity keys, and random login challenges.
+sha2 = "0.10"
+getrandom = "0.2"
 
 [profile.release]
 opt-level = 3

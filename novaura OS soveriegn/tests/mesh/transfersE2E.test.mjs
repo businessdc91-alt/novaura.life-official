@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
+import { meshNodeIdFor, meshNodeIdForPub } from '../../src/services/meshNodeIds.js';
 
 const als = new AsyncLocalStorage();
 const nodes = new Map();
@@ -54,7 +55,7 @@ async function sendDirectMeshPacket(recipientId, type, payload) {
   const copies = net.filter ? net.filter({ from, to, type, payload: clone(payload) }) : [{ payload: clone(payload) }];
   for (const { payload: p, delayMs = 0 } of copies) {
     net.log.push({ from: from.name, to: to.name, type, payload: p });
-    const packet = { sender_id: from.did, sender_name: from.name, payload: p };
+    const packet = { sender_id: from.did, sender_pubkey: from.pub, sender_name: from.name, payload: p };
     setTimeout(() => als.run(to, () => {
       const handler = to.handlers.get(type);
       if (handler) Promise.resolve().then(() => handler(p, packet)).catch(err => console.error(`${to.name} ${type}`, err));
@@ -127,6 +128,7 @@ mock.module(src('services/sovereignMesh.js'), {
     decryptMailPayload,
     didToPubHex: (did) => /^did:nova:([0-9a-f]{64})$/.exec(String(did || ''))?.[1] || null,
     getConnectedPeers: () => [...nodes.values()].map(n => ({ id: n.nodeId, name: n.name })),
+    resolveMeshNode: async (id) => meshNodeIdFor(id) || String(id || ''),
   },
 });
 
@@ -135,7 +137,7 @@ async function makeNode(name) {
   const secret = ed25519.utils.randomSecretKey();
   const pub = hex(ed25519.getPublicKey(secret));
   const node = {
-    name, nodeId: `NODE-${name.toUpperCase()}${++seq}`, secretHex: hex(secret), pub, did: `did:nova:${pub}`,
+    name, nodeId: meshNodeIdForPub(pub), secretHex: hex(secret), pub, did: `did:nova:${pub}`, seq: ++seq,
     handlers: new Map(), db: new Map(), open: new Map(), knows: new Set(), bytesWritten: 0,
     dir: fs.mkdtempSync(path.join(os.tmpdir(), `nv-xfer-${name}-`)),
   };
@@ -243,8 +245,12 @@ test('a sender restart resumes from the last acknowledged piece, and only with t
   await until(() => alice.rec(transferId)?.status === 'interrupted', 'interrupted after restart');
   await assert.rejects(alice.do(api => api.sendFileToPeer(bob.nodeId, makeFile(1234).file, { resumeId: transferId })), /not the same file/);
   const written = bob.bytesWritten;
+  const firstSession = net.log.find(p => p.type === 'MESH_XFER_OFFER').payload.session;
   net.log = [];
   await alice.do(api => api.sendFileToPeer(bob.nodeId, file, { resumeId: transferId }));
+  const resumedSession = net.log.find(p => p.type === 'MESH_XFER_OFFER').payload.session;
+  assert.match(resumedSession, /^[0-9a-f]{32}$/);
+  assert.notEqual(resumedSession, firstSession, 'a resume brings a new session key');
   await until(() => alice.rec(transferId)?.status === 'completed', 'the resumed transfer');
   assert.ok(fs.readFileSync(bob.rec(transferId).path).equals(data), 'whole-file hash still matches');
   const resent = net.log.filter(p => p.type === 'MESH_XFER_CHUNK').length;
@@ -288,6 +294,18 @@ test('declining, cancelling, a bad checksum and an impostor', async () => {
   assert.equal(bob.rec(three.transferId).status, 'failed');
   assert.equal(fs.existsSync(path.join(bob.dir, '.partial', `${three.transferId}.part`)), false, 'nothing half-written is left');
   net.filter = null;
+
+  // With bob's key unknown, an accept from another node is still ignored: the
+  // offer went to bob's node, and an identity's node comes from its key.
+  alice.knows.delete(bob.nodeId);
+  const five = await alice.do(api => api.sendFileToPeer(bob.nodeId, makeFile(5000).file));
+  await until(() => bob.rec(five.transferId)?.status === 'offered', 'offer five');
+  const offered = net.log.findLast(p => p.type === 'MESH_XFER_OFFER' && p.payload.id === five.transferId).payload;
+  await mallory.do(() => sendDirectMeshPacket(alice.nodeId, 'MESH_XFER_ACCEPT', { id: five.transferId, next: 0, replyTo: mallory.nodeId, session: offered.session }));
+  await sleep(100);
+  assert.equal(alice.rec(five.transferId).status, 'waiting', 'an accept from a node that was not offered the file is ignored');
+  await bob.do(api => api.acceptTransfer(five.transferId));
+  await until(() => alice.rec(five.transferId)?.status === 'completed', 'transfer five');
 
   const four = await alice.do(api => api.sendFileToPeer(bob.nodeId, makeFile(30 * 1024 * 1024).file));
   await until(() => bob.rec(four.transferId)?.status === 'offered', 'offer four');

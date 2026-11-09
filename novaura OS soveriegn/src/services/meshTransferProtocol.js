@@ -2,7 +2,7 @@
 // no I/O (meshTransfers.js does the sending and the disk), so they're unit tested.
 //
 //   sender                                  receiver
-//   MESH_XFER_OFFER  (size, pieces, salt, name sealed when the key is known) ──▶
+//   MESH_XFER_OFFER  (size, pieces, salt, session, name sealed when the key is known) ──▶
 //                    ◀── MESH_XFER_ACCEPT (first piece it still needs)
 //   MESH_XFER_CHUNK × n (AES-256-GCM, a few in flight) ──▶
 //                    ◀── MESH_XFER_ACK (every piece below `next` is on disk)
@@ -10,8 +10,11 @@
 //                    ◀── MESH_XFER_RESULT (the file checked out, or why not)
 //   MESH_XFER_CANCEL either way, any time.
 //
-// The piece key comes from both identity keys (X25519) and the offer's salt
-// through HKDF, so only the two nodes can read the pieces; relays see ciphertext.
+// The piece key comes from both identity keys (X25519), the transfer's salt and
+// the offer's session through HKDF, so only the two nodes can read the pieces;
+// relays see ciphertext. Every offer (a resume too) brings a new session, so a
+// file that changed before a resume is never encrypted under a key and nonce
+// already used for its old contents.
 // There is no limit on the file size: pieces go out as acknowledgements come
 // back, and a dropped connection resumes from the last acknowledged piece.
 
@@ -45,7 +48,7 @@ export function chunkLength(i, size, chunkBytes = CHUNK_BYTES) {
   return Math.max(0, Math.min(chunkBytes, size - i * chunkBytes));
 }
 
-/** AES-GCM nonce for piece `i`: 4 zero bytes, then `i` as a 64-bit big-endian number. Unique per transfer key. */
+/** AES-GCM nonce for piece `i`: 4 zero bytes, then `i` as a 64-bit big-endian number. Unique per session key. */
 export function chunkIv(i) {
   const iv = new Uint8Array(12);
   new DataView(iv.buffer).setBigUint64(4, BigInt(i));
@@ -55,15 +58,21 @@ export function chunkIv(i) {
 /** Binds a piece to its transfer and position, so pieces can't be swapped or replayed elsewhere. */
 export const chunkAad = (id, i) => new TextEncoder().encode(`${id}:${i}`);
 
+export function newSession() {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+}
+
 /**
  * The piece key: HKDF-SHA256 over the X25519 shared secret of the two identity
- * keys, salted per transfer. Returns a WebCrypto AES-GCM key.
+ * keys, salted per transfer and bound to the offer's session. Returns a WebCrypto
+ * AES-GCM key. (An offer from an older build has no session.)
  */
-export async function deriveTransferKey(sharedSecret, saltHex, id) {
+export async function deriveTransferKey(sharedSecret, saltHex, id, session = null) {
   const ikm = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveKey']);
   const salt = new Uint8Array(saltHex.match(/.{2}/g).map(b => parseInt(b, 16)));
+  const info = session ? `NOVA-XFER-v2|${id}|${session}` : `NOVA-XFER-v1|${id}`;
   return crypto.subtle.deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode(`NOVA-XFER-v1|${id}`) },
+    { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode(info) },
     ikm,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -91,7 +100,8 @@ export function admitOffer(raw) {
   if (typeof raw.salt !== 'string' || raw.salt.length !== 32 || !HEX.test(raw.salt)) return null;
   const replyTo = String(raw.replyTo || '');
   if (!replyTo || replyTo.length > 160) return null;
-  const offer = { id: raw.id, size, chunkBytes, chunks: chunkCount(size, chunkBytes), salt: raw.salt, replyTo };
+  if (raw.session !== undefined && (typeof raw.session !== 'string' || raw.session.length !== 32 || !HEX.test(raw.session))) return null;
+  const offer = { id: raw.id, size, chunkBytes, chunks: chunkCount(size, chunkBytes), salt: raw.salt, replyTo, session: raw.session || null };
   const sealed = raw.sealedMeta;
   if (sealed && typeof sealed === 'object') {
     if (typeof sealed.iv !== 'string' || !HEX.test(sealed.iv) || typeof sealed.ciphertext !== 'string'

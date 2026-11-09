@@ -36,6 +36,22 @@ test('both nodes derive the same piece key, and no one else does', async () => {
   await assert.rejects(decryptChunk(otherSalt, id, 3, await encryptChunk(kA, id, 3, plain)));
 });
 
+test('each offer session has its own key, so a resume never reuses a key and nonce', async () => {
+  const alice = identity();
+  const bob = identity();
+  const id = newTransferId();
+  const salt = '00112233445566778899aabbccddeeff';
+  const before = await deriveTransferKey(shared(alice, bob.pub), salt, id, 'a'.repeat(32));
+  const after = await deriveTransferKey(shared(alice, bob.pub), salt, id, 'b'.repeat(32));
+  const plain = new Uint8Array(4096).fill(7);
+  const c1 = await encryptChunk(before, id, 2, plain);
+  const c2 = await encryptChunk(after, id, 2, plain);
+  assert.notDeepEqual(c1, c2, 'the same piece under a new session is a different ciphertext');
+  await assert.rejects(decryptChunk(after, id, 2, c1), 'a piece from the earlier session no longer opens');
+  const bobSide = await deriveTransferKey(shared(bob, alice.pub), salt, id, 'b'.repeat(32));
+  assert.deepEqual(await decryptChunk(bobSide, id, 2, c2), plain);
+});
+
 test('pieces cover the file exactly, with a nonce per position', () => {
   assert.equal(chunkCount(0), 0);
   assert.equal(chunkCount(1), 1);

@@ -7,16 +7,19 @@
  * Override per build with VITE_SOVEREIGN_FEEDBACK_NODE / VITE_SOVEREIGN_FEEDBACK_PUBKEY.
  */
 
-// Mesh node ID of the machine that receives beta reports (its hardware node ID,
-// shown on the activation screen and in Sovereign Network).
-export const FEEDBACK_NODE_ID =
-  import.meta.env.VITE_SOVEREIGN_FEEDBACK_NODE || 'NODE-F60E82DB7BFC4F2C';
+import { meshNodeIdForPub } from '../services/meshNodeIds.js';
 
 // Ed25519 public key of the feedback inbox (hex, no 0x).
 export const FEEDBACK_INBOX_PUBKEY = (
   import.meta.env.VITE_SOVEREIGN_FEEDBACK_PUBKEY ||
   'a6118b2417f6f3fe7d3e2b8ad96d0c478034f578f62dca7c5c8f6e8b50f0879e'
 ).replace(/^0x/, '').toLowerCase();
+
+// Where reports go: the node ID of the inbox key itself. The node holding the
+// inbox secret answers for that ID too (sovereignMesh.js, syncNativeMeshIdentity),
+// so reports find it on whatever machine it runs, and no one else can claim it.
+export const FEEDBACK_NODE_ID =
+  import.meta.env.VITE_SOVEREIGN_FEEDBACK_NODE || meshNodeIdForPub(FEEDBACK_INBOX_PUBKEY);
 
 export const FEEDBACK_INBOX_VAULT_KEY = 'beta_feedback_inbox_key';
 
