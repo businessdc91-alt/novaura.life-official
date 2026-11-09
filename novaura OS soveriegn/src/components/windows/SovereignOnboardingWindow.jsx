@@ -463,10 +463,10 @@ export default function SovereignOnboardingWindow() {
                     <div className="w-7 h-7 rounded-lg bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-300 font-bold text-xs">
                       02
                     </div>
-                    <span className="text-xs font-bold text-white">Air-Gapped Zero-Telemetry Privacy</span>
+                    <span className="text-xs font-bold text-white">Private by Default</span>
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed">
-                    Your code, financial analysis, personal manuscripts, and AI queries never train corporate models. Everything is indexed locally in IndexedDB and physical disk files with zero analytics beacons.
+                    Your code, finances, manuscripts and AI chats stay on this PC, in its own database and files, and never train anyone's models. Sovereign sends no analytics. Features that use the internet do so only when you use them: the mesh relay, the web browser, model downloads and any cloud AI you add a key for.
                   </p>
                 </div>
 
@@ -1497,18 +1497,21 @@ export default function SovereignOnboardingWindow() {
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-white text-sm mb-1">2. 100% User Intellectual Property Ownership</h4>
+                  <h4 className="font-bold text-white text-sm mb-1">2. Your Creations Are Yours</h4>
                   <p>
-                    You retain 100% ownership of all source code, literary manuscripts, documents, designs, synthetic images, and databases created 
-                    within this software. Novaura claims **0% copyright, 0% royalty, and 0% license rights** over your creations. Your work is yours forever.
+                    You own the code, writing, documents, designs, images and data you make in Sovereign. Novaura claims no copyright,
+                    royalty or license over them. Templates from the Template Library are different: each carries its own license,
+                    which includes a royalty on commercial use of what you build from it.
                   </p>
                 </div>
 
                 <div>
-                  <h4 className="font-bold text-white text-sm mb-1">3. Zero Data Collection & Air-Gapped Privacy</h4>
+                  <h4 className="font-bold text-white text-sm mb-1">3. No Telemetry, No Account</h4>
                   <p>
-                    All neural inference (Ollama / LM Studio), database tables (IndexedDB), and keyring credentials remain strictly on your local machine. 
-                    Novaura operates zero cloud telemetry servers. No logs, prompts, or keystrokes are ever transmitted over the internet.
+                    AI you run locally (LM Studio, Ollama or the built-in models), your databases and your keys stay on this machine.
+                    Novaura runs no analytics and keeps no logs of your prompts or keystrokes. Some features connect to the internet when
+                    you use them: the mesh relay that links you to other nodes, the web browser, model downloads from Hugging Face, and
+                    cloud AI providers if you add a key.
                   </p>
                 </div>
 
