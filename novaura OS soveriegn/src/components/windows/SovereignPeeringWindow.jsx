@@ -230,8 +230,9 @@ export default function SovereignPeeringWindow({ initialTab } = {}) {
       return `nova://relay/${relayHost}?target=${nodeId}&name=${nodeName}`;
     }
 
-    // Direct WAN with STUN public IP
-    const host = meshStatus.wan_ip || meshStatus.lan_ip || '127.0.0.1';
+    // Direct: the public address when one is set, else this PC's address on the LAN.
+    const wan = meshStatus.wan_ip && meshStatus.wan_ip !== '0.0.0.0' ? meshStatus.wan_ip : '';
+    const host = wan || meshStatus.lan_ip || '127.0.0.1';
     const port = meshStatus.tcp_listen_port || 43889;
     return `nova://connect/${nodeId}@${host}:${port}?name=${nodeName}`;
   };
@@ -439,7 +440,7 @@ export default function SovereignPeeringWindow({ initialTab } = {}) {
   const peersList = meshStatus?.peers || [];
   const roomPeers = peersList.filter(p => p.peer_type === 'ROOM_SWARM' || !p.peer_type || p.peer_type === 'DIRECT_WAN');
   const wanIp = meshStatus?.wan_ip;
-  const isStunResolved = Boolean(wanIp && wanIp !== '127.0.0.1' && !wanIp.startsWith('192.168.') && !wanIp.startsWith('10.'));
+  const hasWan = Boolean(wanIp && wanIp !== '0.0.0.0' && wanIp !== '127.0.0.1');
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans select-none overflow-hidden border border-slate-800">
@@ -505,18 +506,17 @@ export default function SovereignPeeringWindow({ initialTab } = {}) {
           <span className="text-[10px] text-slate-500">{peersList.length} nodes in room</span>
         </div>
 
-        {/* WAN Public IP */}
+        {/* Address for direct invites. Sovereign does not look up its public IP
+            (no third-party servers), so direct invites work on the local network. */}
         <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 flex flex-col gap-1">
           <div className="flex items-center justify-between text-[10px] text-slate-400">
-            <span>PUBLIC WAN IP</span>
-            <span className={`px-1.5 py-0.2 rounded text-[9px] ${isStunResolved ? 'bg-emerald-500/20 text-emerald-300' : 'bg-cyan-500/20 text-cyan-300'}`}>
-              {isStunResolved ? 'STUN RFC 5389' : 'RESOLVING'}
-            </span>
+            <span>{hasWan ? 'PUBLIC ADDRESS' : 'LAN ADDRESS'}</span>
+            <span className="px-1.5 py-0.2 rounded text-[9px] bg-cyan-500/20 text-cyan-300">{hasWan ? 'WAN' : 'LOCAL'}</span>
           </div>
           <span className="text-sm font-bold text-cyan-300 truncate">
-            {wanIp || 'Querying STUN...'}
+            {hasWan ? wanIp : meshStatus?.lan_ip || '127.0.0.1'}
           </span>
-          <span className="text-[10px] text-slate-500">Internet address</span>
+          <span className="text-[10px] text-slate-500">{hasWan ? 'Internet address' : 'Peers on your network reach you here; use a relay invite across the internet'}</span>
         </div>
 
         {/* TCP Listening Port */}
@@ -1362,7 +1362,7 @@ export default function SovereignPeeringWindow({ initialTab } = {}) {
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Direct WAN (STUN)
+                    Direct
                   </button>
                   <button
                     onClick={() => setInviteMode('relay')}
@@ -1709,7 +1709,7 @@ export default function SovereignPeeringWindow({ initialTab } = {}) {
               <div>
                 <h2 className="text-sm font-bold text-white">Live Sovereign Mesh Terminal</h2>
                 <p className="text-xs text-slate-400">
-                  Real-time telemetry of direct TCP packets, STUN binding requests, and peer heartbeats.
+                  Real-time telemetry of direct TCP packets and peer heartbeats.
                 </p>
               </div>
               <button

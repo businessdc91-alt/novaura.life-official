@@ -140,6 +140,16 @@ fn clean_node_name(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).take(48).collect::<String>().trim().to_string()
 }
 
+/// This PC's address on the local network, for invite codes: the source address
+/// Windows would use to reach a private address. Connecting a UDP socket only
+/// picks a route; nothing is sent, so no traffic leaves the PC.
+fn detect_lan_ip() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("10.254.254.254:9").ok()?;
+    let ip = sock.local_addr().ok()?.ip();
+    (!ip.is_unspecified() && !ip.is_loopback()).then(|| ip.to_string())
+}
+
 /// Packet IDs go into the signed string, so they may not hold separators.
 fn is_valid_packet_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 80 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
@@ -593,7 +603,7 @@ impl MeshManager {
     /// The node has no ID until set_identity: its ID comes from the identity key,
     /// and the PC name is never announced (peers see the profile's display name).
     pub fn new() -> Self {
-        let lan_ip = "127.0.0.1".to_string();
+        let lan_ip = detect_lan_ip().unwrap_or_else(|| "127.0.0.1".to_string());
 
         let inner = MeshInner {
             node_id: String::new(),
@@ -1697,6 +1707,13 @@ impl MeshManager {
     }
 
     pub async fn get_status(&self) -> MeshStatus {
+        // The address can change (another network, a new DHCP lease); read it fresh.
+        if let Some(ip) = detect_lan_ip() {
+            let mut state = self.inner.write().await;
+            if state.lan_ip != ip {
+                state.lan_ip = ip;
+            }
+        }
         let state = self.inner.read().await;
         let public_host = if state.wan_ip != "0.0.0.0" && !state.wan_ip.is_empty() {
             state.wan_ip.clone()

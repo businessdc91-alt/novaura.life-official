@@ -1853,6 +1853,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 use tauri::Manager;
+                // Stop the engines here too: when the event loop can't take the exit
+                // request, Tauri ends the process at once and RunEvent::Exit never comes.
+                stop_local_engines();
                 window.app_handle().exit(0);
             }
         })
@@ -1926,6 +1929,7 @@ pub fn run() {
             engines::engine_download_cancel,
             engines::engine_list_models,
             engines::engine_hardware,
+            engines::engine_gpu_process_memory,
             cloud::cloud_ai_request,
             forge::forge_fetch_text,
             forge::forge_install_desktop_app,
@@ -1946,10 +1950,17 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
-                engines::shutdown();
-                llm::shutdown();
+                stop_local_engines();
             }
         });
+}
+
+/// Stops what Sovereign runs on this PC as it closes: downloads, the image and
+/// music engine (when AI Engines says so) and the built-in AI. Calling it twice
+/// is harmless; the second call finds nothing left to stop.
+fn stop_local_engines() {
+    engines::shutdown();
+    llm::shutdown();
 }
 
 #[cfg(test)]

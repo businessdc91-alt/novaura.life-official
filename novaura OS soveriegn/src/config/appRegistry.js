@@ -360,7 +360,7 @@ export const APP_REGISTRY = [
     category: 'mesh',
     icon: Globe,
     color: '#06b6d4',
-    title: 'NovAura Sovereign Peering — Global WAN STUN & Relay Network',
+    title: 'NovAura Sovereign Peering — LAN & Relay Network',
     component: SovereignPeeringWindow,
     defaultSize: { width: 1040, height: 680 },
   },
