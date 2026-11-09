@@ -461,6 +461,21 @@ fn confirm_on_this_pc(_title: &str, _message: &str) -> bool {
     false
 }
 
+/// Tells the person a second copy isn't needed (single-instance check in run()).
+#[cfg(target_os = "windows")]
+fn notify_already_open() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST};
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, caption) = (
+        wide("Novaura Sovereign OS is already open with this profile. Use the window that's open (check the taskbar)."),
+        wide("Novaura Sovereign OS"),
+    );
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn notify_already_open() {}
+
 #[cfg(target_os = "linux")]
 fn read_machine_guid() -> Option<String> {
     fs::read_to_string("/etc/machine-id")
@@ -1761,6 +1776,35 @@ async fn get_native_hardware_spec() -> Result<NativeHardwareSpec, String> {
     Err("Could not retrieve native hardware specifications".to_string())
 }
 
+/// One copy of Sovereign per profile. A second copy of the same profile would log
+/// in to the relay under the same node ID and fight over the built-in AI server,
+/// so it says the app is already open and exits. A restart into another profile
+/// starts the new process just before the old one closes, so this waits a few
+/// seconds for the old one to let go first. The mutex lives as long as the process.
+#[cfg(target_os = "windows")]
+fn claim_single_instance() -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let name: Vec<u16> = format!("Local\\NovauraSovereignOS.{}", profiles::active())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
+    if handle.is_null() {
+        return true; // Can't tell; don't stand in the way.
+    }
+    if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+        return true;
+    }
+    let waited = unsafe { WaitForSingleObject(handle, 5_000) };
+    waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED
+}
+
+#[cfg(not(target_os = "windows"))]
+fn claim_single_instance() -> bool {
+    true
+}
+
 /// The app's own pages: the bundled frontend (tauri.localhost on Windows), the
 /// dev server in debug builds, and blob:/about: pages it creates itself.
 fn is_app_url(url: &tauri::Url) -> bool {
@@ -1779,6 +1823,10 @@ fn is_app_url(url: &tauri::Url) -> bool {
 pub fn run() {
     // First, before any window: which profile's data this process opens.
     profiles::init_from_args();
+    if !claim_single_instance() {
+        notify_already_open();
+        return;
+    }
     let mut mesh_manager = MeshManager::new();
 
     tauri::Builder::default()

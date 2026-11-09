@@ -148,7 +148,6 @@ class SemanticsEngine {
     if (text.includes('open business card') || text.includes('business card')) return this.executeAction('window:open', { type: 'card_creator' });
     if (text.includes('open resume') || text.includes('build resume')) return this.executeAction('window:open', { type: 'resume_builder' });
     if (text.includes('open card forge') || text.includes('card forge') || text.includes('tcg')) return this.executeAction('window:open', { type: 'card_forge' });
-    if (text.includes('open platform') || text.includes('open cloud') || text.includes('open bridge') || text.includes('live platform')) return this.executeAction('window:open', { type: 'platform_bridge' });
     if (text.includes('open disk') || text.includes('open drive') || text.includes('disk architect') || text.includes('clean disk') || text.includes('boot manager')) return this.executeAction('window:open', { type: 'disk_architect' });
     if (text.includes('open settings')) return this.executeAction('window:open', { type: 'settings' });
     if (text.includes('open shield') || text.includes('open sentinel')) return this.executeAction('window:open', { type: 'sentinel' });

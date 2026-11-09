@@ -126,12 +126,6 @@ export default function SovereignChatBar({
           setIsProcessing(false);
           return;
         }
-        if (target.includes('platform') || target.includes('bridge') || target.includes('cloud portal') || target.includes('gateway')) {
-          openApp('platform_bridge');
-          toast.success('Opened Novaura Platform Bridge');
-          setIsProcessing(false);
-          return;
-        }
         if (target.includes('disk') || target.includes('drive') || target.includes('clean') || target.includes('boot')) {
           openApp('disk_architect');
           toast.success('Opened NovADrive AI (Disk Architect)');

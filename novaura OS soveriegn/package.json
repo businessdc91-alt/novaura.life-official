@@ -21,9 +21,6 @@
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-process": "^2.4.0",
     "@tauri-apps/plugin-updater": "^2.14.1",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "clsx": "^2.1.1",
     "dexie": "^4.4.6",
     "framer-motion": "^14.2.0",
     "lucide-react": "^1.52.0",
@@ -31,9 +28,7 @@
     "react-dom": "^19.2.8",
     "sonner": "^2.0.8",
     "sucrase": "^3.35.0",
-    "tailwind-merge": "^3.7.0",
-    "three": "^0.187.0",
-    "yjs": "^13.6.33"
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -44,5 +39,8 @@
     "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.0"
+  },
+  "overrides": {
+    "dompurify": "^3.4.17"
   }
 }

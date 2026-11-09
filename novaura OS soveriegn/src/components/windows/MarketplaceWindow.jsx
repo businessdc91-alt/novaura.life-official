@@ -182,7 +182,7 @@ export default function MarketplaceWindow() {
 
                   <div className="flex items-center gap-1 text-amber-400 text-xs font-bold">
                     <Star className="w-3.5 h-3.5 fill-amber-400" />
-                    <span>{item.rating || '5.0'}</span>
+                    <span>{item.ratingCount > 0 && Number.isFinite(item.rating) ? item.rating.toFixed(1) : 'No ratings'}</span>
                   </div>
                 </div>
 

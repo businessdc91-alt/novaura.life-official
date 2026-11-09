@@ -34,6 +34,9 @@ const EVENT = 'novaura:transfer_updated';
 // Either can end failed, declined or cancelled, or be interrupted by a restart.
 const ACTIVE = new Set(['waiting', 'sending', 'receiving', 'verifying']);
 const MAX_PENDING_OFFERS_PER_PEER = 20;
+// New identities cost nothing, so offers waiting for an answer are capped across
+// every sender too.
+const MAX_PENDING_OFFERS = 100;
 const MAX_BAD_PIECES = 6;
 const DONE_RETRY_MS = 60_000;
 
@@ -373,8 +376,9 @@ async function onOffer(payload, packet) {
     else await save(existing);
     return;
   }
-  const pending = (await listTransfers()).filter(r => r.direction === 'in' && r.peerDid === did && r.status === 'offered');
-  if (pending.length >= MAX_PENDING_OFFERS_PER_PEER) return;
+  const waiting = (await listTransfers()).filter(r => r.direction === 'in' && r.status === 'offered');
+  if (waiting.length >= MAX_PENDING_OFFERS) return;
+  if (waiting.filter(r => r.peerDid === did).length >= MAX_PENDING_OFFERS_PER_PEER) return;
 
   let meta = offer;
   if (offer.sealedMeta) {

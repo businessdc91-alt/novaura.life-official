@@ -56,7 +56,7 @@ if ($existing) {
 # ---- Environment -----------------------------------------------------------
 $env:PATH = "$MingwBin;$env:PATH"
 $env:RUSTUP_TOOLCHAIN = $Toolchain
-$LocalTargetDir = "C:\Users\Busin\.cargo\targets\novaura-sovereign"
+$LocalTargetDir = Join-Path $env:USERPROFILE ".cargo\targets\novaura-sovereign"
 if (-not (Test-Path $LocalTargetDir)) {
   New-Item -ItemType Directory -Path $LocalTargetDir -Force | Out-Null
 }

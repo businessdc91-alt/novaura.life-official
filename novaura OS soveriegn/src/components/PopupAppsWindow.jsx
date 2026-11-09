@@ -5,7 +5,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Code2, FolderOpen, Terminal as TerminalIcon, Globe, Hammer,
   BookOpen, PhoneCall, Mail, Users, Bot, ShieldCheck,
-  Palette, Settings, Layers, CreditCard, FileText, Network, HardDrive,
+  Palette, Settings, Layers, CreditCard, FileText, HardDrive,
   Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Sparkles,
   TrendingUp, Music, ShoppingBag, Gamepad2, Search, X, Grid,
   Maximize2, Minimize2, Check, ExternalLink
@@ -30,7 +30,6 @@ const TOOLBAR_APP_DEFS = {
   disk_architect:  { id: 'disk_architect',  label: 'Disks',        icon: HardDrive,    color: '#10b981', category: 'system' },
   terminal:        { id: 'terminal',        label: 'Terminal',     icon: TerminalIcon, color: '#34d399', category: 'engineering' },
   browser:         { id: 'browser',         label: 'Browser',      icon: Globe,        color: '#60a5fa', category: 'engineering' },
-  platform_bridge: { id: 'platform_bridge', label: 'Bridge',       icon: Network,      color: '#38bdf8', category: 'engineering' },
   website_builder: { id: 'website_builder', label: 'Builder',      icon: Hammer,       color: '#06b6d4', category: 'engineering' },
   literature:      { id: 'literature',      label: 'Word Studio',  icon: BookOpen,     color: '#38bdf8', category: 'creator' },
   novaphone:       { id: 'novaphone',       label: 'NovaPhone',    icon: PhoneCall,    color: '#10b981', category: 'mesh' },
@@ -55,7 +54,6 @@ const DEFAULT_TOOLBAR_APPS = [
   'files',
   'terminal',
   'browser',
-  'platform_bridge',
   'novaphone',
   'novamail',
   'credential_enclave',

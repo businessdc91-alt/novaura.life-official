@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, Search, Code2, Globe, Terminal,
   CreditCard, FileText, Layers, BookOpen, PhoneCall, Mail,
   Users, Bot, ShieldCheck, Settings, FolderOpen, Sparkles,
-  MonitorCog, Cpu, Zap, Palette, Hammer, Network, HardDrive, Flame,
+  MonitorCog, Cpu, Zap, Palette, Hammer, HardDrive, Flame,
   GitBranch, KeyRound, GitPullRequest
 } from 'lucide-react';
 import { APP_REGISTRY, getAppById } from '../config/appRegistry.js';
@@ -15,7 +15,6 @@ const CATEGORIES = [
     label: 'Engineering & Dev',
     color: 'text-cyan-400',
     apps: [
-      { id: 'platform_bridge', label: 'Platform Bridge', icon: Network, desc: 'Live Cloud Portal & File Bridge' },
       { id: 'cybeni', label: 'Cybeni Builder', icon: Code2, desc: 'Omni Architecture IDE' },
       { id: 'nova_hub', label: 'Nova Hub', icon: GitPullRequest, desc: 'Decentralized Git Forge & Repository Vault' },
       { id: 'hypervisor', label: 'Neural Hypervisor', icon: Cpu, desc: 'Local Model Deck & Speedometer' },
@@ -66,7 +65,6 @@ const CATEGORIES = [
 
 // Pinned rail apps shown in collapsed mode
 const PINNED_RAIL_APPS = [
-  { id: 'platform_bridge', label: 'Bridge', icon: Network },
   { id: 'cybeni', label: 'Cybeni', icon: Code2 },
   { id: 'nova_hub', label: 'Hub', icon: GitPullRequest },
   { id: 'hypervisor', label: 'Neural', icon: Cpu },

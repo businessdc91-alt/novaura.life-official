@@ -23,7 +23,8 @@ const SettingsDiagnosticsWindow = lazy(() => import('../components/windows/Setti
 const NeuralSetupGuideWindow = lazy(() => import('../components/windows/NeuralSetupGuideWindow.jsx'));
 const GraphicsSettingsWindow = lazy(() => import('../components/windows/GraphicsSettingsWindow.jsx'));
 const PersonalizationWindow = lazy(() => import('../components/windows/PersonalizationWindow.jsx'));
-const PlatformBridgeWindow = lazy(() => import('../components/windows/PlatformBridgeWindow.jsx'));
+// Platform Bridge (PlatformBridgeWindow.jsx) embedded the novaura.life cloud site with camera,
+// microphone and location access. Sovereign has no central cloud, so it isn't registered.
 const DiskArchitectWindow = lazy(() => import('../components/windows/DiskArchitectWindow.jsx'));
 const NeuralHypervisorWindow = lazy(() => import('../components/windows/NeuralHypervisorWindow.jsx'));
 const MediaFoundryWindow = lazy(() => import('../components/windows/MediaFoundryWindow.jsx'));
@@ -54,7 +55,7 @@ const GreetingCardWindow = lazy(() => import('../components/windows/GreetingCard
 const ModelBenchmarkWindow = lazy(() => import('../components/windows/ModelBenchmarkWindow.jsx'));
 const NovaRegistryWindow = lazy(() => import('../components/windows/NovaRegistryWindow.jsx'));
 const TemplateLibraryWindow = lazy(() => import('../components/windows/TemplateLibraryWindow.jsx'));
-import { Network, HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy } from 'lucide-react';
+import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy } from 'lucide-react';
 
 
 
@@ -251,16 +252,6 @@ export const APP_REGISTRY = [
     title: 'Desktop Personalization, Themes & Engine',
     component: PersonalizationWindow,
     defaultSize: { width: 880, height: 600 },
-  },
-  {
-    id: 'platform_bridge',
-    label: 'Platform Bridge',
-    category: 'engineering',
-    icon: Network,
-    color: '#38bdf8',
-    title: 'Novaura Platform Bridge — Live Cloud Portal & Sovereign File Bridge',
-    component: PlatformBridgeWindow,
-    defaultSize: { width: 1100, height: 720 },
   },
   {
     id: 'disk_architect',
@@ -631,9 +622,6 @@ export function getAppById(id) {
   }
   if (id === 'personalization' || id === 'theme' || id === 'themes' || id === 'customize') {
     return APP_MAP.get('personalization');
-  }
-  if (id === 'platform' || id === 'platform_bridge' || id === 'gateway' || id === 'cloud_bridge') {
-    return APP_MAP.get('platform_bridge');
   }
   if (id === 'disk_architect' || id === 'disk' || id === 'drive' || id === 'boot_manager') {
     return APP_MAP.get('disk_architect');

@@ -6,7 +6,9 @@
  *   starter items or other app data),
  * - it is bound to the publisher identity that signed the packet, and only that
  *   identity may replace it later,
- * - it never overwrites a listing created on this machine.
+ * - it never overwrites a listing created on this machine,
+ * - it is newer than the copy already stored, so an older signed copy replayed
+ *   from the relay archive (or within the five-minute window) changes nothing.
  * Text fields are trimmed to sane lengths; anything else in the packet is dropped.
  */
 
@@ -57,11 +59,14 @@ export async function admitMeshListing(listing, senderDid) {
   const existing = await db.marketplace_publications.get(record.id);
   // Local listings have no authorDid, so no peer can replace them.
   if (existing && existing.authorDid !== senderDid) return null;
+  if (existing && !(record.publishedAt > Number(existing.publishedAt || 0))) return null;
 
+  // No rating until someone actually rates it.
   await db.marketplace_publications.put({
     ...record,
     downloadCount: existing?.downloadCount || 0,
-    rating: existing?.rating || 5.0,
+    rating: existing?.ratingCount ? existing.rating : null,
+    ratingCount: existing?.ratingCount || 0,
   });
   return { record, isNew: !existing };
 }

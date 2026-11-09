@@ -153,8 +153,24 @@ pub fn finish(id: &str, sha256_hex: &str) -> Result<PathBuf, String> {
     }
     let target = unique_path(&dir, &name);
     fs::rename(&part, &target).map_err(|e| format!("Could not save {}: {}", target.display(), e))?;
+    mark_from_internet(&target);
     Ok(target)
 }
+
+/// Marks a received file as coming from the internet (Mark of the Web, zone 3),
+/// as a browser does, so Windows SmartScreen and Office warn before a stranger's
+/// program or macro runs. A drive that can't hold the mark (FAT32) just skips it.
+#[cfg(target_os = "windows")]
+fn mark_from_internet(path: &Path) {
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    if let Err(e) = fs::write(PathBuf::from(stream), "[ZoneTransfer]\r\nZoneId=3\r\n") {
+        log::warn!("[Transfers] Could not mark {} as downloaded: {}", path.display(), e);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn mark_from_internet(_path: &Path) {}
 
 /// Stops a transfer and deletes its partial file.
 pub fn cancel(dir: &Path, id: &str) -> Result<(), String> {
