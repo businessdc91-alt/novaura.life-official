@@ -3,7 +3,7 @@ import {
   HardDrive, Cpu, ShieldCheck, Trash2, Copy, CheckCircle2,
   AlertTriangle, RefreshCw, Sparkles, FolderOpen, ArrowRight,
   Database, Play, Check, X, Server, Layers, Terminal, Lock,
-  Sliders, Power, Zap, BarChart2, Radio, Disc, Usb, CheckSquare
+  Sliders, Power, Zap, BarChart2, Radio, Disc, Usb, CheckSquare, Shield
 } from 'lucide-react';
 import {
   getAuthenticDriveTelemetry,
@@ -79,40 +79,23 @@ export default function DiskArchitectWindow() {
           if (nonSystem) setFormatDrive(nonSystem.letter);
         }
 
-        // Generate authentic boot entries from live OS & hardware partition mapping
-        const esp = (data.partitions || []).find(p => p.IsSystem);
+        // Only the entry this PC is running from can be known without bcdedit as an
+        // administrator; other loaders are not guessed at.
         const bootPart = (data.partitions || []).find(p => p.IsBoot);
-        const osCaption = data.operatingSystem?.Caption || 'Microsoft Windows Boot Manager';
+        const osCaption = data.operatingSystem?.Caption || 'Windows';
 
-        const realBootList = [
+        setBootEntries([
           {
             id: '{current}',
-            name: `${osCaption} (Active UEFI Boot)`,
-            path: '\\EFI\\Microsoft\\Boot\\bootmgfw.efi',
+            name: `${osCaption} (running now)`,
+            path: '\\Windows\\system32\\winload.efi',
             disk: bootPart
               ? `Physical Disk ${bootPart.DiskNumber}, Partition ${bootPart.PartitionNumber} (${bootPart.DriveLetter || 'C'}:)`
-              : 'Physical Disk 1, Partition 3 (C:)',
+              : 'The partition Windows is running from',
             isDefault: true,
             isCurrent: true,
           },
-          ...(esp ? [{
-            id: '{bootmgr}',
-            name: 'Windows UEFI Boot Manager (ESP)',
-            path: '\\EFI\\Microsoft\\Boot\\bootmgr.efi',
-            disk: `Physical Disk ${esp.DiskNumber}, Partition ${esp.PartitionNumber} (ESP System Partition)`,
-            isDefault: false,
-            isCurrent: false,
-          }] : []),
-          {
-            id: '{recovery}',
-            name: 'Windows Recovery Environment (WinRE)',
-            path: '\\Recovery\\WindowsRE\\boot.sdi',
-            disk: 'Disk 1 Partition 4 (Recovery Image)',
-            isDefault: false,
-            isCurrent: false,
-          }
-        ];
-        setBootEntries(realBootList);
+        ]);
       }
     } catch (err) {
       console.error('[NovADrive] Failed to load authentic telemetry:', err);
@@ -687,7 +670,7 @@ export default function DiskArchitectWindow() {
                   className="w-full py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-cyan-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Copy className="w-4 h-4" />
-                  <span>Generate AI-Verified Migration Execution Plan ({sourceDrive} ➔ {targetDrive})</span>
+                  <span>Generate Migration Plan ({sourceDrive} ➔ {targetDrive})</span>
                 </button>
               )}
 

@@ -96,6 +96,11 @@ struct DecodedLicensePayload {
     pub kid: Option<String>,
     #[serde(default, rename = "licenseId")]
     pub license_id: Option<String>,
+    /// "machine" on licenses issued from 1.0.9 on: bound to the Windows
+    /// installation ID only. Older licenses (no field) still match the legacy
+    /// PC-name ID too, so they keep working.
+    #[serde(default)]
+    pub bind: Option<String>,
 }
 
 fn parse_license_timestamp(val: &Option<serde_json::Value>) -> Option<u64> {
@@ -310,7 +315,9 @@ fn verify_native_license(key: String) -> LicenseVerification {
         };
     }
 
-    if !accepted_hardware_fingerprints().iter().any(|id| id == licensed_node) {
+    let machine_only = payload.bind.as_deref() == Some("machine");
+    let accepted = if machine_only { vec![current_hardware_fingerprint()] } else { accepted_hardware_fingerprints() };
+    if !accepted.iter().any(|id| id == licensed_node) {
         return LicenseVerification {
             valid: false,
             tier: payload.tier,
@@ -386,26 +393,72 @@ fn legacy_hardware_fingerprint() -> String {
     fnv_node_hash(&format!("{}:{}:{}:{}", os, arch, hostname, username))
 }
 
-/// Windows installation GUID (HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid).
-/// Survives hostname and username changes; changes only on OS reinstall.
+/// Windows installation GUID (HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid),
+/// read through the registry API from the 64-bit view, so no program found on
+/// the search path (a planted reg.exe) can answer instead. Survives hostname and
+/// username changes; changes only on OS reinstall.
 #[cfg(target_os = "windows")]
 fn read_machine_guid() -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let output = std::process::Command::new("reg")
-        .args(["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY};
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (key, value) = (wide(r"SOFTWARE\Microsoft\Cryptography"), wide("MachineGuid"));
+    let mut buf = [0u16; 128];
+    let mut len = std::mem::size_of_val(&buf) as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    };
+    if status != 0 {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .find(|l| l.contains("MachineGuid"))
-        .and_then(|l| l.split_whitespace().last())
-        .map(|g| g.trim().to_lowercase())
-        .filter(|g| g.len() >= 32)
+    let chars = (len as usize / 2).min(buf.len());
+    let guid = String::from_utf16_lossy(&buf[..chars]).trim_end_matches('\0').trim().to_lowercase();
+    Some(guid).filter(|g| g.len() >= 32)
+}
+
+/// A Windows tool by its full path in System32, never found through the search
+/// path, which a planted program earlier in PATH could answer instead.
+#[cfg(target_os = "windows")]
+fn system_tool(exe: &str) -> std::process::Command {
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut buf = [0u16; 260];
+    let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    let dir = if n > 0 && n < buf.len() {
+        String::from_utf16_lossy(&buf[..n])
+    } else {
+        r"C:\Windows\System32".to_string()
+    };
+    std::process::Command::new(PathBuf::from(dir).join(exe))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_tool(exe: &str) -> std::process::Command {
+    std::process::Command::new(exe)
+}
+
+/// Asks the person at the PC directly, in a Windows dialog that page code can't
+/// see or click. Changes to how the PC boots go through this.
+#[cfg(target_os = "windows")]
+fn confirm_on_this_pc(title: &str, message: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, caption) = (wide(message), wide(title));
+    let flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND;
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), flags) == IDYES }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn confirm_on_this_pc(_title: &str, _message: &str) -> bool {
+    false
 }
 
 #[cfg(target_os = "linux")]
@@ -661,8 +714,14 @@ fn request_uefi_reboot_authorization() -> Result<u64, String> {
 #[tauri::command]
 fn trigger_uefi_firmware_reboot(authorization_token: u64) -> Result<String, String> {
     consume_firmware_authorization(authorization_token)?;
+    if !confirm_on_this_pc(
+        "Novaura Sovereign OS",
+        "Restart this PC into its firmware (UEFI) settings now?\n\nUnsaved work in other programs will be lost.",
+    ) {
+        return Err("CANCELLED: The restart was not confirmed.".to_string());
+    }
 
-    let output = std::process::Command::new("shutdown")
+    let output = system_tool("shutdown.exe")
         .args(&["/r", "/fw", "/t", "0"])
         .output()
         .map_err(|e| e.to_string())?;
@@ -714,8 +773,14 @@ fn set_uefi_boot_target(entry_id: String, authorization_token: u64) -> Result<St
         return Err("INVALID_BOOT_ENTRY: Expected a BCD identifier such as {current} or a braced GUID.".to_string());
     }
     consume_firmware_authorization(authorization_token)?;
+    if !confirm_on_this_pc(
+        "Novaura Sovereign OS",
+        &format!("Make {} the default boot entry on this PC?", entry_id.trim()),
+    ) {
+        return Err("CANCELLED: The change was not confirmed.".to_string());
+    }
 
-    let output = std::process::Command::new("bcdedit")
+    let output = system_tool("bcdedit.exe")
         .args(&["/default", entry_id.trim()])
         .output()
         .map_err(|e| e.to_string())?;
@@ -1351,19 +1416,24 @@ async fn fetch_onion_raw(
         return Err("HTTP_GET_WRITE_FAILED".to_string());
     }
 
+    // The whole response (status line, headers, body); a stalled onion service
+    // can't hold the read open past the deadline.
     let mut body = Vec::new();
-    let mut chunk = [0u8; 4096];
-    while let Ok(n) = stream.read(&mut chunk).await {
-        if n == 0 {
-            break;
+    let mut chunk = [0u8; 16384];
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(90);
+    loop {
+        match tokio::time::timeout_at(deadline, stream.read(&mut chunk)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => break,
+            Ok(Ok(n)) => body.extend_from_slice(&chunk[..n]),
+            Err(_) if body.is_empty() => return Err("ONION_TIMEOUT: the service did not answer.".to_string()),
+            Err(_) => break,
         }
-        body.extend_from_slice(&chunk[..n]);
-        if body.len() > 2 * 1024 * 1024 { // 2MB safety limit
+        if body.len() > 16 * 1024 * 1024 {
             break;
         }
     }
 
-    String::from_utf8(body).map_err(|e| e.to_string())
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

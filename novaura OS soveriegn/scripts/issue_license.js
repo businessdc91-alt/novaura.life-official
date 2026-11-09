@@ -85,6 +85,8 @@ export function issueLicenseToken({
     tier: tier.trim(),
     holder: holder.trim(),
     nodeId: nodeId.trim(),
+    // Bound to the Windows installation ID only (not the old PC-name ID)
+    bind: 'machine',
     issued: now,
     expires,
   };

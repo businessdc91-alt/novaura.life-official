@@ -55,13 +55,14 @@ function AppContent() {
     let cancelled = false;
 
     // Re-check a saved license against the native verifier, which binds it to
-    // this machine. A record copied from another machine's storage fails here.
+    // this machine. A record copied from another machine's storage fails here,
+    // and so does one the verifier couldn't check at all.
     const adoptRecord = async (record) => {
       if (!record) return;
       const native = await verifyNativeLicense(record.key).catch(() => null);
       if (cancelled) return;
-      if (native && !native.valid) {
-        console.warn('[Sovereign] Saved license rejected by native verifier:', native.reason);
+      if (!native || !native.valid) {
+        console.warn('[Sovereign] Saved license rejected by native verifier:', native?.reason || 'the verifier did not answer');
         await clearKeyRecord();
         setAuthRecord(null);
         return;

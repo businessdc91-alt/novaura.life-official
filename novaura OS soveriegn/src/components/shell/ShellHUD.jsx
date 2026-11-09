@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Command, 
-  Mic, 
-  Send, 
+  Mic,
+  MicOff,
+  Send,
   Sparkles, 
   Terminal, 
   Volume2, 

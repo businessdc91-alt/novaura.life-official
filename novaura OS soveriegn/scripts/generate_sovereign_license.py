@@ -101,6 +101,8 @@ def create_license(
         "holder": holder.strip(),
         "tier": tier.strip(),
         "nodeId": node_id.strip(),
+        # Bound to the Windows installation ID only (not the old PC-name ID)
+        "bind": "machine",
         "issued": now,
         "expires": expires
     }

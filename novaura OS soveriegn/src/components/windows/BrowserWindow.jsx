@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Globe, Search, ArrowLeft, ArrowRight, RotateCw, Home, Sparkles,
   ExternalLink, Bookmark, Plus, X, ShieldCheck, Loader2, Radio, Server,
-  Shield, Lock, Eye, Edit3, Share2, Code, Download, Check, Copy, Layers, Send, Play, Terminal, Key, Crown
+  Shield, Lock, Eye, Edit3, Share2, Code, Download, Check, Copy, Layers, Send, Play, Terminal, Key, Crown,
+  AlertTriangle
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { getLocalIdentity, publishHostedSite, queryRemoteSite } from '../../services/sovereignMesh.js';
-import { torOnion, VERIFIED_ONION_SERVICES } from '../../services/torOnionService.js';
+import { torOnion } from '../../services/torOnionService.js';
 import SovereignAuthModal from '../modals/SovereignAuthModal.jsx';
 import { getAuthorizedApps, revokeAppAccess } from '../../services/decentralizedAuthService.js';
 import MeshRegistryView from './browser/MeshRegistryView.jsx';
@@ -17,6 +18,30 @@ import { nameStatus } from '../../services/web/novaRegistry.js';
 
 const SPECIAL_PAGE_RE = /^nova:\/\/(search|registry)(\/|\?|$)/;
 const FOUNDER_PAGE_RE = /^(founder:\/\/|nova:\/\/office\.founder|aura:\/\/office\.founder)/;
+
+// A static copy of an onion page fetched through Tor: parsed inertly, stripped of
+// everything that would load or navigate (scripts, frames, images, styles, forms,
+// links), and shown under a policy that blocks every request, so nothing on the
+// page can reach the internet outside Tor. Link targets are kept as text.
+function onionSrcDoc(html, url) {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  doc.querySelectorAll('script,noscript,style,iframe,frame,frameset,object,embed,applet,link,meta,base,form,input,button,select,textarea,img,picture,source,video,audio,track,svg,canvas,map,area')
+    .forEach(n => n.remove());
+  for (const a of doc.querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href');
+    if (href && !href.startsWith('#')) a.insertAdjacentText('afterend', ` [${href}]`);
+  }
+  for (const el of doc.querySelectorAll('*')) {
+    for (const { name } of [...el.attributes]) {
+      if (/^(on|src|href|action|formaction|background|poster|style|xlink:)/i.test(name)) el.removeAttribute(name);
+    }
+  }
+  const title = String(doc.title || url).replace(/[<>&"]/g, '');
+  return '<!doctype html><html><head><meta charset="utf-8">'
+    + `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`
+    + `<title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;line-height:1.55;color:#111;background:#fff}</style>`
+    + `</head><body>${doc.body ? doc.body.innerHTML : ''}</body></html>`;
+}
 
 function registrationOf(status) {
   if (!status || status.state === 'invalid') return null;
@@ -341,9 +366,9 @@ const SEED_NOVA_SITES = {
 
       <div class="card">
         <div class="card-icon">🧅</div>
-        <h3>Tor Onion Gateway</h3>
-        <p>Dual-routing over local SOCKS5 proxy to access hidden darknet intelligence without DNS leaks.</p>
-        <div class="metric-value">127.0.0.1:9050 SOCKS5 Active</div>
+        <h3>.onion through Tor</h3>
+        <p>Opens .onion addresses through Tor Browser or the Tor service when one is running on this PC.</p>
+        <div class="metric-value">Uses 127.0.0.1:9150 or 9050</div>
       </div>
     </div>
 
@@ -885,7 +910,8 @@ export default function BrowserWindow({ props: windowProps } = {}) {
       }
     }
 
-    const renderUrl = isOnion ? torOnion.resolveOnionGatewayUrl(finalUrl) : finalUrl;
+    // An onion page is never loaded straight into the frame (see openOnionThroughTor).
+    const renderUrl = isOnion ? '' : finalUrl;
 
     setUrlInput(finalUrl);
     setTabs(prev => prev.map(t => t.id === activeTabId ? {
@@ -900,9 +926,34 @@ export default function BrowserWindow({ props: windowProps } = {}) {
       isNova,
       isAura,
       isOnion,
+      onion: isOnion ? { mode: 'loading' } : null,
       favicon: isAura ? '✨' : (isNova ? '🌐' : null),
     } : t));
     setSummary(null);
+    if (isOnion) openOnionThroughTor(activeTabId, finalUrl);
+  };
+
+  // .onion pages come through Tor on this PC, as a static copy (onionSrcDoc).
+  // Without Tor nothing is fetched; a public gateway is offered instead, and it is
+  // labelled for what it is: its operator sees the user's IP and every page.
+  const openOnionThroughTor = async (tabId, url) => {
+    const setOnion = (onion) => setTabs(prev => prev.map(t => (t.id === tabId && t.url === url ? { ...t, onion } : t)));
+    setOnion({ mode: 'loading' });
+    try {
+      const page = await torOnion.fetchThroughTor(url);
+      setOnion({ mode: 'tor', port: page.port, httpStatus: page.status, html: onionSrcDoc(page.body, url) });
+    } catch (err) {
+      const message = String(err?.message || err);
+      setOnion(message === 'TOR_NOT_RUNNING' ? { mode: 'no-tor' } : { mode: 'error', error: message });
+    }
+  };
+
+  const openOnionViaGateway = (tabId, url) => {
+    setTabs(prev => prev.map(t => (t.id === tabId && t.url === url ? {
+      ...t,
+      renderUrl: torOnion.resolveOnionGatewayUrl(url),
+      onion: { mode: 'gateway', gateway: torOnion.getStatus().preferredGateway || 'onion.ws' },
+    } : t)));
   };
 
   useEffect(() => {
@@ -1163,9 +1214,15 @@ export default function BrowserWindow({ props: windowProps } = {}) {
                 <ShieldCheck className="w-3 h-3" /> Nova Mesh
               </span>
             ) : activeTab.isOnion ? (
-              <span className="flex items-center gap-1 text-[10px] text-purple-300 bg-purple-950/80 border border-purple-500/40 px-2 py-0.5 rounded font-mono font-bold">
-                <Shield className="w-3 h-3 text-purple-400" /> Tor Onion (3-Hop)
-              </span>
+              activeTab.onion?.mode === 'gateway' ? (
+                <span className="flex items-center gap-1 text-[10px] text-amber-300 bg-amber-950/80 border border-amber-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                  <AlertTriangle className="w-3 h-3 text-amber-400" /> Gateway · not anonymous
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[10px] text-purple-300 bg-purple-950/80 border border-purple-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                  <Shield className="w-3 h-3 text-purple-400" /> {activeTab.onion?.mode === 'tor' ? 'Through Tor' : 'Tor address'}
+                </span>
+              )
             ) : (
               <span className="flex items-center gap-1 text-[10px] text-cyan-400 bg-cyan-950/60 border border-cyan-500/30 px-1.5 py-0.5 rounded">
                 <ShieldCheck className="w-3 h-3" /> HTTPS
@@ -1454,18 +1511,70 @@ export default function BrowserWindow({ props: windowProps } = {}) {
           )
         ) : (
           <div className="w-full h-full flex flex-col">
-            {activeTab.isOnion && (
-              <div className="px-4 py-1.5 bg-purple-950/40 border-b border-purple-500/30 flex items-center justify-between text-[11px] text-purple-300">
-                <div className="flex items-center gap-2">
-                  <Shield className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Tor Hidden Service: <b className="font-mono">{activeTab.url}</b></span>
-                  <span className="text-slate-400">• Circuit: Entry Guard → Middle Relay → Rendezvous Point</span>
-                </div>
-                <span className="text-[10px] bg-purple-500/20 px-2 py-0.5 rounded text-purple-300 font-mono">
-                  Anonymous 3-Hop Circuit
+            {activeTab.isOnion && (activeTab.onion?.mode === 'gateway' ? (
+              <div className="px-4 py-1.5 bg-amber-950/50 border-b border-amber-500/40 flex items-center gap-2 text-[11px] text-amber-200">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>
+                  Through the public gateway <b className="font-mono">{activeTab.onion.gateway}</b>. <b>Not anonymous:</b> the gateway's operator sees your IP address and every page you open here.
                 </span>
               </div>
-            )}
+            ) : (
+              <div className="px-4 py-1.5 bg-purple-950/40 border-b border-purple-500/30 flex items-center gap-2 text-[11px] text-purple-300">
+                <Shield className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                <span className="truncate">Tor address: <b className="font-mono">{activeTab.url}</b></span>
+                {activeTab.onion?.mode === 'tor' && (
+                  <span className="text-slate-400 shrink-0">
+                    • Fetched through Tor on this PC (127.0.0.1:{activeTab.onion.port}). A static copy: scripts, images and links are off, since they would load outside Tor.
+                  </span>
+                )}
+              </div>
+            ))}
+            {activeTab.isOnion && activeTab.onion?.mode === 'tor' ? (
+              <iframe
+                title={activeTab.title}
+                srcDoc={activeTab.onion.html}
+                className="w-full flex-1 border-none bg-white"
+                sandbox=""
+                referrerPolicy="no-referrer"
+              />
+            ) : activeTab.isOnion && activeTab.onion?.mode !== 'gateway' ? (
+              <div className="flex-1 flex items-center justify-center p-8 bg-slate-950">
+                <div className="max-w-lg text-center space-y-3">
+                  {activeTab.onion?.mode === 'loading' ? (
+                    <div className="text-sm text-purple-300">Opening through Tor…</div>
+                  ) : (
+                    <>
+                      <Shield className="w-8 h-8 text-purple-400 mx-auto" />
+                      <h3 className="text-sm font-bold text-slate-100">
+                        {activeTab.onion?.mode === 'error' ? 'Could not open this address through Tor' : 'Tor is not running on this PC'}
+                      </h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        {activeTab.onion?.mode === 'error'
+                          ? `Tor answered, but the page did not load (${activeTab.onion.error}).`
+                          : 'Sovereign opens .onion addresses through Tor Browser or the Tor service when one is running (it listens on 127.0.0.1:9150 or 9050). Start one and try again.'}
+                      </p>
+                      <div className="flex items-center justify-center gap-2 pt-1">
+                        <button
+                          onClick={() => openOnionThroughTor(activeTab.id, activeTab.url)}
+                          className="px-3 py-1.5 rounded-lg bg-purple-600/30 border border-purple-500/40 text-purple-200 text-xs hover:bg-purple-600/40"
+                        >
+                          Try again
+                        </button>
+                        <button
+                          onClick={() => openOnionViaGateway(activeTab.id, activeTab.url)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 border border-amber-500/40 text-amber-200 text-xs hover:bg-slate-700"
+                        >
+                          Open through a public gateway (not anonymous)
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-amber-300/80">
+                        A gateway fetches the page for you over the ordinary internet. Its operator sees your IP address and everything you open.
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : (
             <iframe
               ref={pageFrameRef}
               src={activeTab.renderUrl || activeTab.url}
@@ -1476,6 +1585,7 @@ export default function BrowserWindow({ props: windowProps } = {}) {
               sandbox={/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/:]*\.localhost)(:|\/|$)/i.test(activeTab.renderUrl || activeTab.url || '') ? 'allow-scripts allow-forms allow-popups' : 'allow-scripts allow-same-origin allow-forms allow-popups'}
               referrerPolicy="no-referrer"
             />
+            )}
           </div>
         )}
       </div>

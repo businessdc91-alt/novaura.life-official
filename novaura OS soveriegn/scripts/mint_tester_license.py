@@ -96,6 +96,8 @@ def mint_license(holder: str, node_id: str, tier: str = "PRO_SOVEREIGN", days_va
         "holder": holder,
         "tier": tier,
         "nodeId": node_id,
+        # Bound to the Windows installation ID only (not the old PC-name ID)
+        "bind": "machine",
         "issued": now,
         "expires": expires
     }
