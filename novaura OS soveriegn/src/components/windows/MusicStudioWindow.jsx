@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Music2, Sparkles, Library, Disc3, Globe, Scissors, Cpu, Settings2, X } from 'lucide-react';
-import { listTracks, listAlbums, generateSong, getMusicSettings, setMusicSettings, pickMusicModel } from '../../services/music/musicStudio.js';
+import { listTracks, listAlbums, generateSong, getMusicSettings, setMusicSettings, pickMusicModel, warmMusicModel } from '../../services/music/musicStudio.js';
 import { DEFAULT_SPEC } from '../../services/music/musicCatalog.js';
 import { probeComfy, installedModels, MODEL_CATALOG, isModelInstalled } from '../../services/engines/comfyEngine.js';
 import { listCybeniModels, describeModelKey } from '../../services/cybeni/models.js';
@@ -56,6 +56,11 @@ export default function MusicStudioWindow({ props: windowProps } = {}) {
     setMusicReady(hasMusic);
     setEngineReady(hasMusic);
     return { up, hasMusic };
+  }, []);
+
+  // Load the music model while the user picks a song, so the first one starts at once.
+  useEffect(() => {
+    warmMusicModel().catch(err => console.warn('[MusicStudio] Music model warm-up skipped:', err.message));
   }, []);
 
   useEffect(() => {

@@ -6,9 +6,12 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { isDynamicVramFailure } from './checkpoints.js';
+import { COMFY_URL, workflowModelFiles, jobNeedBytes, runsInFp32, deviceRoom, placeOnComfyCard, freeRoom, isOutOfMemory } from './mediaRoom.js';
+import { loadedChatModels, unloadChatModel } from './chatModelMemory.js';
+import { getBuiltinConfig } from './builtinAi.js';
 
+export { COMFY_URL };
 const CONFIG_KEY = 'ai_engine_config';
-export const COMFY_URL = 'http://127.0.0.1:8188';
 const isTauri = () => typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 
 async function invoke(cmd, args) {
@@ -59,13 +62,20 @@ export function modelFileName(entry) {
   return entry.files[0].rel.split('/').pop();
 }
 
+/** A readable name for a model file. */
+export function modelLabel(checkpoint) {
+  const entry = MODEL_CATALOG.find(m => modelFileName(m) === checkpoint);
+  return entry ? entry.name : String(checkpoint || '').replace(/\.(safetensors|ckpt|pt|pth|bin|gguf)$/i, '');
+}
+
 // ── Configuration ──────────────────────────────────────────────────────────
 
 // autoStart: start the engine when the desktop opens and load defaultModel
 // ('' picks the best installed image model). stopOnExit: stop it when Sovereign closes.
 // classicLoading: start ComfyUI with --disable-dynamic-vram (see isDynamicVramFailure).
+// makeRoom: unload chat models when a job does not fit on the graphics card (mediaRoom.js).
 export async function getEngineConfig() {
-  return { installDir: '', torchVariant: '', autoStart: true, stopOnExit: true, defaultModel: '', classicLoading: false, ...(await db.getSetting(CONFIG_KEY, {}).catch(() => ({}))) };
+  return { installDir: '', torchVariant: '', autoStart: true, stopOnExit: true, defaultModel: '', classicLoading: false, makeRoom: true, ...(await db.getSetting(CONFIG_KEY, {}).catch(() => ({}))) };
 }
 
 export async function setEngineConfig(patch) {
@@ -309,12 +319,89 @@ export async function uploadInput(file, name) {
   return (await res.json()).name;
 }
 
+// ── Room on the graphics card (mediaRoom.js) ───────────────────────────────
+
+// The room ComfyUI can get now and what a job's models need; null when either is unknown.
+async function measureJob(workflow) {
+  const files = workflowModelFiles(workflow);
+  if (!files.length) return null;
+  const room = deviceRoom(await probeComfy());
+  if (!room) return null;
+  const { installDir } = await getEngineConfig();
+  const [installed, install] = await Promise.all([installedModels(), installDir ? installStatus(installDir).catch(() => null) : null]);
+  const need = jobNeedBytes(files, installed, { fp32: room.kind === 'vram' && runsInFp32(install?.engine?.capability) });
+  return need ? { room, need, files } : null;
+}
+
+/** False when a job's models would not fit in the room ComfyUI can get now (true when that is unknown). */
+export async function hasRoomFor(workflow) {
+  const m = await measureJob(workflow).catch(() => null);
+  return !m || m.room.bytes >= m.need;
+}
+
 /**
- * Queue a workflow and wait for its outputs.
- * Calls onProgress({ value, max, node }) from ComfyUI's live progress stream.
+ * Before a job: when its models need more memory than ComfyUI can get, unload
+ * chat models until they fit (unless AI Engines has that turned off), and say
+ * so in a toast. extraBytes asks for more than the estimate, after an
+ * out-of-memory error. Resolves with the models unloaded.
+ */
+export async function makeRoomFor(workflow, { onStatus, extraBytes = 0 } = {}) {
+  const cfg = await getEngineConfig();
+  if (cfg.makeRoom === false) return [];
+  const m = await measureJob(workflow);
+  if (!m || m.room.bytes >= m.need + extraBytes) return [];
+  // Which chat models actually hold memory on ComfyUI's card (Windows reports it per process).
+  const [loaded, processes, builtin] = await Promise.all([
+    loadedChatModels(),
+    m.room.kind === 'vram' ? invoke('engine_gpu_process_memory').catch(() => []) : [],
+    getBuiltinConfig().catch(() => ({})),
+  ]);
+  const candidates = m.room.kind === 'vram' ? placeOnComfyCard(loaded, processes, { comfyDir: cfg.installDir, builtinDir: builtin.installDir }) : loaded;
+  const unloaded = await freeRoom({
+    need: m.need + extraBytes,
+    room: m.room.bytes,
+    candidates,
+    vram: m.room.kind === 'vram',
+    readRoom: async () => deviceRoom(await probeComfy())?.bytes ?? null,
+    unload: unloadChatModel,
+    onStatus,
+  });
+  if (unloaded.length && typeof window !== 'undefined') {
+    const [it, them] = unloaded.length > 1 ? ['They load', 'them'] : ['It loads', 'it'];
+    window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: {
+      type: 'info',
+      appId: 'ai_engines',
+      title: `Made room for ${modelLabel(m.files[0])}`,
+      message: `Unloaded ${unloaded.map(u => u.label).join(', ')}. ${it} again the next time you chat with ${them}.`,
+    } }));
+  }
+  return unloaded;
+}
+
+/**
+ * Queue a workflow and wait for its outputs. Makes room for its models first
+ * (makeRoomFor); after an out-of-memory error, makes more and tries once more.
+ * evict: false (warm-ups) never unloads chat models.
+ * Calls onProgress({ value, max, node }) from ComfyUI's live progress stream, and
+ * onProgress({ status }) while making room.
  * Resolves with [{ kind: 'audio' | 'image', filename, subfolder, type, url }].
  */
-export async function runWorkflow(workflow, { onProgress, timeoutMs = 30 * 60000 } = {}) {
+export async function runWorkflow(workflow, { onProgress, timeoutMs, evict = true } = {}) {
+  const onStatus = (status) => onProgress?.({ status });
+  if (evict) await makeRoomFor(workflow, { onStatus }).catch(err => console.warn('[Engine] Could not make room:', err.message));
+  try {
+    return await runJob(workflow, { onProgress, timeoutMs });
+  } catch (err) {
+    if (!evict || !isOutOfMemory(err.message)) throw err;
+    // ComfyUI unloads its own models after running out; free more and go again.
+    const unloaded = await makeRoomFor(workflow, { onStatus, extraBytes: 4 * 1024 ** 3 }).catch(() => []);
+    if (!unloaded.length) throw new Error(`${err.message} There is not enough memory for this job. Close other programs that use the graphics card, or unload a chat model in LM Studio or Ollama, then try again.`);
+    onStatus('Trying again with more room…');
+    return runJob(workflow, { onProgress, timeoutMs });
+  }
+}
+
+async function runJob(workflow, { onProgress, timeoutMs = 30 * 60000 } = {}) {
   const clientId = `nova_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   let ws = null;
   try {

@@ -1,39 +1,37 @@
 // engineAutostart.js — When the desktop opens, start the local AI engine and
 // load the default image model, so the first generation waits for neither.
 // AI Engines turns it off (autoStart) and picks the model (defaultModel).
+// Music Studio loads the music model the same way when it opens (warmModel).
 
 import {
-  MODEL_CATALOG, modelFileName, getEngineConfig, installStatus, ensureComfyRunning, applyStopOnExit, runWorkflow, setEngineStatus,
-  needsClassicLoading, restartWithClassicLoading,
+  getEngineConfig, installStatus, ensureComfyRunning, applyStopOnExit, runWorkflow, setEngineStatus, getEngineStatus,
+  needsClassicLoading, restartWithClassicLoading, hasRoomFor, modelLabel,
 } from './comfyEngine.js';
 import { buildWarmupWorkflow } from './checkpoints.js';
 import { pickImageModel } from './imageGen.js';
 
-/** A readable name for a checkpoint file. */
-export function modelLabel(checkpoint) {
-  const entry = MODEL_CATALOG.find(m => modelFileName(m) === checkpoint);
-  return entry ? entry.name : String(checkpoint || '').replace(/\.(safetensors|ckpt|pt|pth|bin|gguf)$/i, '');
-}
+export { modelLabel };
 
 let loadSeq = 0;
 
 /**
- * Load the default image model into the running engine.
- * Resolves with its file name, or null when no image model is installed.
+ * Load a model into the running engine with a throwaway job (`workflow`), so the
+ * next real job starts at once. evict: false uses spare room only and skips the
+ * warm-up when the model would not fit beside the chat models loaded now; the
+ * first real job then makes room. evict: true makes room first.
+ * Resolves true when loaded, false when skipped.
  */
-export async function loadDefaultModel() {
+export async function warmModel(checkpoint, workflow, { evict = false } = {}) {
   const seq = ++loadSeq;
   const latest = () => seq === loadSeq; // a newer choice owns the status
-  setEngineStatus({ phase: 'loading', message: 'Loading the default model…' });
-  const checkpoint = await pickImageModel();
-  if (!checkpoint) {
-    if (latest()) setEngineStatus({ phase: 'ready', message: 'The engine is running. No image model is installed yet.' });
-    return null;
-  }
   const name = modelLabel(checkpoint);
+  if (!evict && !(await hasRoomFor(workflow))) {
+    if (latest()) setEngineStatus({ phase: 'ready', message: `The engine is running. ${name} loads on first use: chat models fill the graphics card right now.` });
+    return false;
+  }
   const loading = { phase: 'loading', model: checkpoint, message: `Loading ${name}…` };
   if (latest()) setEngineStatus(loading);
-  const warm = () => runWorkflow(buildWarmupWorkflow(checkpoint), { timeoutMs: 10 * 60000 });
+  const warm = () => runWorkflow(workflow, { timeoutMs: 10 * 60000, evict });
   try {
     try {
       await warm();
@@ -50,7 +48,23 @@ export async function loadDefaultModel() {
     throw new Error(message);
   }
   if (latest()) setEngineStatus({ phase: 'ready', model: checkpoint, message: `${name} is loaded.` });
-  return checkpoint;
+  return true;
+}
+
+/**
+ * Load the default image model into the running engine.
+ * Resolves with its file name, or null when no image model is installed or it
+ * was left for later (see warmModel).
+ */
+export async function loadDefaultModel({ evict = false } = {}) {
+  const seq = ++loadSeq;
+  setEngineStatus({ phase: 'loading', message: 'Loading the default model…' });
+  const checkpoint = await pickImageModel();
+  if (!checkpoint) {
+    if (seq === loadSeq) setEngineStatus({ phase: 'ready', message: 'The engine is running. No image model is installed yet. Add one in AI Engines.' });
+    return null;
+  }
+  return (await warmModel(checkpoint, buildWarmupWorkflow(checkpoint), { evict })) ? checkpoint : null;
 }
 
 /** Start the engine if it isn't running, then load the default model. */
@@ -86,7 +100,7 @@ export async function autostartEngine({ notify } = {}) {
     const model = await loadDefaultModel();
     notify?.({
       title: 'Local AI engine ready',
-      message: model ? `${modelLabel(model)} is loaded, so image tools start right away.` : 'No image model is installed yet. Add one in AI Engines.',
+      message: model ? `${modelLabel(model)} is loaded, so image tools start right away.` : getEngineStatus().message,
     });
   } catch (err) {
     notify?.({ title: 'Local AI engine running', message: err.message });

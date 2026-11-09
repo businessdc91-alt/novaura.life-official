@@ -3,6 +3,7 @@
 // so nothing here can reach a cloud endpoint or another machine.
 
 import { probeLocalAi, queryLocalAi } from './nativeService.js';
+import { releaseComfyModels } from './engines/mediaRoom.js';
 
 // LM Studio is the preferred runtime, so it is listed (and picked) first. The
 // built-in AI is llama.cpp run by Sovereign itself (engines/builtinAi.js); the
@@ -104,6 +105,29 @@ export function setOllamaCpuOnly(enabled) {
   } catch { /* storage unavailable */ }
 }
 
+// A model that could not load for lack of memory. Not every "Failed to load
+// model": LM Studio says that for a crashed runtime too, and freeing the image
+// engine would not help then.
+const NO_ROOM_RE = /insufficient system resources|requires approximately|out of memory|outofdevicememory|unable to allocate|failed to allocate|not enough memory/i;
+
+/**
+ * When a chat model cannot load because the image and music engine fills the
+ * graphics card, ask the engine to let go of its models (they reload on its next
+ * job). Resolves true when the engine was running.
+ */
+async function freeMediaMemory(model) {
+  if (!(await releaseComfyModels())) return false;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: {
+      type: 'info',
+      appId: 'ai_engines',
+      title: `Made room for ${model}`,
+      message: 'The image and music engine unloaded its models so the chat model could load. They load again on the next image or song.',
+    } }));
+  }
+  return true;
+}
+
 // Reasoning models wrap their scratchpad in <think> tags; strip it from chat output.
 function cleanCompletion(text) {
   return String(text || '')
@@ -134,6 +158,10 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
       options: { temperature, num_predict: maxTokens, ...(cpuOnly ? { num_gpu: 0 } : {}) },
     });
     let res = await ask(ollamaCpuOnly());
+    // Out of VRAM because of image or music models: free those before blaming the GPU.
+    if (!ollamaCpuOnly() && NO_ROOM_RE.test(String(res?.error || '')) && await freeMediaMemory(parsed.model)) {
+      res = await ask(false);
+    }
     // Ollama's GPU build can crash on cards it does not support (for example
     // "the provided PTX was compiled with an unsupported toolchain" on older
     // NVIDIA cards). Retry on the CPU and remember the choice.
@@ -148,7 +176,7 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
     throw new Error(res?.error || `Ollama did not return a reply. Is "${parsed.model}" installed?`);
   }
 
-  const res = await queryLocalAi(cfg.port, '/v1/chat/completions', 'POST', {
+  const ask = () => queryLocalAi(cfg.port, '/v1/chat/completions', 'POST', {
     model: parsed.model,
     messages,
     temperature,
@@ -158,11 +186,18 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
     reasoning_effort: 'none',
     ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: jsonSchema } } } : {}),
   });
+  let res = await ask();
+  if (typeof res?.choices?.[0]?.message?.content !== 'string' && NO_ROOM_RE.test(String(res?.error?.message || res?.error || '')) && await freeMediaMemory(parsed.model)) {
+    res = await ask();
+  }
   const text = res?.choices?.[0]?.message?.content;
   if (typeof text === 'string') return cleanCompletion(text);
   const message = String(res?.error?.message || res?.error || `${cfg.label} did not return a reply. Is "${parsed.model}" loaded?`);
   if (/insufficient system resources|requires approximately/i.test(message)) {
     throw new Error(`${message} The memory estimate is driven mostly by the model's context length. In LM Studio, open the model's settings and lower its context length (32,768 is plenty for Cybeni), then try again.`);
+  }
+  if (/startup was aborted|exited before becoming healthy/i.test(message)) {
+    throw new Error(`${message} LM Studio's runtime crashed while loading it. Load the model in LM Studio itself to see the reason; a graphics card that fails under Vulkan is a common one (LM Studio's hardware settings can leave it out).`);
   }
   if (/failed to load model/i.test(message)) {
     throw new Error(`${message} LM Studio could not load it, most likely because the models already loaded leave too little VRAM. Unload a model in LM Studio, or pick a loaded model (marked ●).`);

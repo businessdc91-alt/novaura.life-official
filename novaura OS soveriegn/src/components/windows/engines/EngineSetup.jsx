@@ -113,9 +113,10 @@ export default function EngineSetup({ purpose, onReady }) {
     return next;
   };
 
+  // Asked for by name, so it may unload chat models to fit (when Make room is on).
   const doLoad = () => {
     setError('');
-    loadDefaultModel().catch(err => setError(err.message || String(err)));
+    loadDefaultModel({ evict: true }).catch(err => setError(err.message || String(err)));
   };
 
   const chooseDefault = async (defaultModel) => {
@@ -238,6 +239,10 @@ export default function EngineSetup({ purpose, onReady }) {
                 <input type="checkbox" checked={Boolean(config?.classicLoading)} onChange={e => saveConfig({ classicLoading: e.target.checked })} className="accent-cyan-500" />
                 Standard model loading (turns on by itself if a model fails to load; applies from the next start)
               </label>
+              <label className="flex items-center gap-2 text-[12px] cursor-pointer" title="Chat models in LM Studio, Ollama and the built-in AI load again by themselves the next time you chat with them. When a chat model can't load because image or music models fill the card, the engine lets go of those.">
+                <input type="checkbox" checked={config?.makeRoom !== false} onChange={e => saveConfig({ makeRoom: e.target.checked })} className="accent-cyan-500" />
+                Make room for image and music models: unload chat models (the smallest that's enough) when the graphics card is full
+              </label>
               <div className="flex items-center gap-2">
                 <label htmlFor="engine-default-model" className="text-[11px] text-slate-400 shrink-0">Default model</label>
                 <select id="engine-default-model" value={config?.defaultModel || ''} onChange={e => chooseDefault(e.target.value)} className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[12px]">
@@ -253,7 +258,7 @@ export default function EngineSetup({ purpose, onReady }) {
                 {engine.phase === 'loading' || engine.phase === 'starting' ? (
                   <><Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-300" /><span className="text-cyan-200">{engine.message}</span></>
                 ) : engine.phase === 'ready' && engine.model ? (
-                  <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" /><span className="text-emerald-200">{modelLabel(engine.model)} is loaded. Image tools start right away.</span></>
+                  <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" /><span className="text-emerald-200">{modelLabel(engine.model)} is loaded, so it starts right away.</span></>
                 ) : engine.phase === 'error' ? (
                   <><AlertTriangle className="w-3.5 h-3.5 text-amber-300" /><span className="text-amber-200">{engine.message}</span></>
                 ) : (

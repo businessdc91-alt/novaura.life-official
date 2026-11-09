@@ -504,6 +504,34 @@ pub fn engine_hardware() -> Result<EngineHardware, String> {
     Ok(EngineHardware { gpus, nvidia, drives })
 }
 
+#[derive(Serialize, serde::Deserialize)]
+pub struct GpuProcessMemory {
+    pid: u32,
+    adapter: String,
+    bytes: u64,
+    path: Option<String>,
+}
+
+/// Dedicated graphics memory per process and graphics card, as Task Manager
+/// shows it (the WMI class names are the same in every Windows language). The
+/// image and music engine uses it to tell how much of each chat runtime sits on
+/// its own card before unloading anything. Empty when Windows doesn't say.
+#[tauri::command]
+pub fn engine_gpu_process_memory() -> Result<Vec<GpuProcessMemory>, String> {
+    let mut ps = Command::new("powershell");
+    ps.args([
+        "-NoProfile", "-Command",
+        "$rows = @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory -ErrorAction SilentlyContinue | \
+           Where-Object { $_.DedicatedUsage -gt 32MB } | ForEach-Object { \
+             if ($_.Name -match '^pid_(\\d+)_luid_(0x[0-9A-Fa-f]+_0x[0-9A-Fa-f]+)') { \
+               $p = [int]$Matches[1]; \
+               [pscustomobject]@{ pid = $p; adapter = $Matches[2].ToLower(); bytes = [int64]$_.DedicatedUsage; path = (Get-Process -Id $p -ErrorAction SilentlyContinue).Path } } }); \
+         ConvertTo-Json -InputObject $rows -Compress -Depth 3",
+    ]);
+    let out = hide_window(&mut ps).output().map_err(|e| e.to_string())?;
+    Ok(serde_json::from_slice(&out.stdout).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

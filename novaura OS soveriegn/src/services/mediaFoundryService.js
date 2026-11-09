@@ -4,8 +4,9 @@
 // and universal BYOK cloud image inference without vendor lock-in.
 
 import { db } from '../database/sovereignDatabase.js';
+import { COMFY_URL, makeRoomFor } from './engines/comfyEngine.js';
 
-const COMFYUI_DEFAULT_ENDPOINT = 'http://127.0.0.1:8188';
+const COMFYUI_DEFAULT_ENDPOINT = COMFY_URL;
 
 export function getComfyUIEndpoint() {
   try {
@@ -164,9 +165,13 @@ export function buildComfyUIWorkflow({
 }
 
 /**
- * Submit a workflow prompt to ComfyUI queue
+ * Submit a workflow prompt to ComfyUI queue. On Sovereign's own engine, chat
+ * models are unloaded first when the job would not fit (AI Engines > Make room).
  */
 export async function queueComfyUIPrompt(workflow, endpoint = getComfyUIEndpoint()) {
+  if (endpoint.replace(/\/+$/, '').replace('localhost', '127.0.0.1') === COMFY_URL) {
+    await makeRoomFor(workflow).catch(err => console.warn('[MediaFoundry] Could not make room:', err.message));
+  }
   const clientId = `novaura_${Date.now()}`;
   const res = await fetch(`${endpoint}/prompt`, {
     method: 'POST',

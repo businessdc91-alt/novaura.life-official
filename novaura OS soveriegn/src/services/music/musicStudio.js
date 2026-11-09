@@ -6,7 +6,8 @@
 // leaves the GPU to ComfyUI).
 
 import { db } from '../../database/sovereignDatabase.js';
-import { ensureComfyRunning, availableOptions, nodeInfo, requireNodes, runWorkflow, fetchOutput, uploadInput } from '../engines/comfyEngine.js';
+import { ensureComfyRunning, probeComfy, availableOptions, nodeInfo, requireNodes, runWorkflow, fetchOutput, uploadInput } from '../engines/comfyEngine.js';
+import { warmModel } from '../engines/engineAutostart.js';
 import { generateImage, coverPrompt } from '../engines/imageGen.js';
 import { compose, offlineIdeas, DEFAULT_SPEC, GENRES, ERAS, MOODS, VOICES, LOOP_SCENES } from './musicCatalog.js';
 import { decodeAudio, makeSeamlessLoop, wavBlob, durationOf } from './audioTools.js';
@@ -221,6 +222,27 @@ async function buildSongWorkflow({ checkpoint, version, tags, lyrics, seconds, b
     7: { class_type: 'VAEDecodeAudio', inputs: { samples: ['6', 0], vae: ['1', 2] } },
     8: { class_type: 'SaveAudio', inputs: { audio: ['7', 0], filename_prefix: 'audio/Sovereign' } },
   };
+}
+
+/**
+ * Load the music model before the first song: Music Studio calls this when it
+ * opens. Only when the engine is already running, and only into spare room (see
+ * warmModel); the job is the song job cut to one step over a few seconds, and it
+ * saves nothing. Calls made while one runs share it. Resolves with the
+ * checkpoint once loaded, else null.
+ */
+let warming = null;
+export function warmMusicModel() {
+  warming ||= (async () => {
+    if (!(await probeComfy())) return null;
+    const model = await pickMusicModel();
+    if (!model) return null;
+    const wf = await buildSongWorkflow({ ...model, tags: 'instrumental', lyrics: '[Instrumental]', seconds: 4, bpm: DEFAULT_SPEC.bpm, key: DEFAULT_SPEC.key, timeSignature: DEFAULT_SPEC.timeSignature, language: DEFAULT_SPEC.language, seed: Math.floor(Math.random() * 2 ** 31), batch: 1, songPlan: false });
+    wf[6].inputs.steps = 1;
+    wf[8] = { class_type: 'PreviewAudio', inputs: { audio: ['7', 0] } };
+    return (await warmModel(model.checkpoint, wf)) ? model.checkpoint : null;
+  })().finally(() => { warming = null; });
+  return warming;
 }
 
 async function putBlob(kind, blob) {
