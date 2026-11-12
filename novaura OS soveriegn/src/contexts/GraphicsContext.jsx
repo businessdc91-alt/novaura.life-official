@@ -137,6 +137,15 @@ export function GraphicsProvider({ children }) {
     }
   });
 
+  // Pause the background while another app is in front (off: it keeps moving)
+  const [pauseUnfocusedBackground, setPauseUnfocusedBackgroundState] = useState(() => {
+    try {
+      return localStorage.getItem('novaura-pause-unfocused-background') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   const [detectedLevel, setDetectedLevel] = useState(null);
 
   const detectHardwareCapability = useCallback(() => {
@@ -211,6 +220,13 @@ export function GraphicsProvider({ children }) {
     } catch {}
   }, []);
 
+  const setPauseUnfocusedBackground = useCallback((enabled) => {
+    setPauseUnfocusedBackgroundState(Boolean(enabled));
+    try {
+      localStorage.setItem('novaura-pause-unfocused-background', Boolean(enabled).toString());
+    } catch {}
+  }, []);
+
   const settings = GRAPHICS_PRESETS[graphicsLevel] || GRAPHICS_PRESETS[GRAPHICS_LEVELS.MEDIUM];
 
   return (
@@ -230,6 +246,8 @@ export function GraphicsProvider({ children }) {
       setShockwavesEnabled,
       calmBehindWindows,
       setCalmBehindWindows,
+      pauseUnfocusedBackground,
+      setPauseUnfocusedBackground,
     }}>
       {children}
     </GraphicsContext.Provider>
@@ -255,6 +273,8 @@ export function useGraphics() {
       setShockwavesEnabled: () => {},
       calmBehindWindows: true,
       setCalmBehindWindows: () => {},
+      pauseUnfocusedBackground: false,
+      setPauseUnfocusedBackground: () => {},
     };
   }
   return context;

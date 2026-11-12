@@ -152,6 +152,8 @@ export default function PersonalizationWindow({ onThemeChange, currentTheme = 'c
     setShockwavesEnabled,
     calmBehindWindows,
     setCalmBehindWindows,
+    pauseUnfocusedBackground,
+    setPauseUnfocusedBackground,
   } = useGraphics();
 
   const handleSelectTheme = (themeId) => {
@@ -322,7 +324,7 @@ export default function PersonalizationWindow({ onThemeChange, currentTheme = 'c
             <div className="flex items-center justify-between pt-2 border-t border-slate-800">
               <div>
                 <span className="text-xs font-medium text-slate-200">Calm Background Behind Windows</span>
-                <p className="text-[10px] text-slate-400">Dims the background and slows it to half speed while app windows are open. It always pauses while Sovereign is minimized or another app has focus.</p>
+                <p className="text-[10px] text-slate-400">Dims the background and slows it to half speed while app windows are open. It always pauses while Sovereign is minimized.</p>
               </div>
               <button
                 onClick={() => setCalmBehindWindows(!calmBehindWindows)}
@@ -333,6 +335,25 @@ export default function PersonalizationWindow({ onThemeChange, currentTheme = 'c
                 <div
                   className={`w-4 h-4 bg-white rounded-full transition-transform absolute top-1 ${
                     calmBehindWindows ? 'left-7' : 'left-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+              <div>
+                <span className="text-xs font-medium text-slate-200">Pause When Another App Is in Front</span>
+                <p className="text-[10px] text-slate-400">Off: the background keeps moving while you use another app or a popped-out window. On: it pauses then, which leaves the graphics card to games and other apps.</p>
+              </div>
+              <button
+                onClick={() => setPauseUnfocusedBackground(!pauseUnfocusedBackground)}
+                className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer ${
+                  pauseUnfocusedBackground ? 'bg-cyan-500' : 'bg-slate-700'
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 bg-white rounded-full transition-transform absolute top-1 ${
+                    pauseUnfocusedBackground ? 'left-7' : 'left-1'
                   }`}
                 />
               </button>

@@ -3,7 +3,8 @@
  *
  * - The simulation steps at most 60 times a second, whatever the screen's refresh rate.
  * - Behind open windows ("calm") it eases down to half pace under a dimming veil.
- * - It stops while the app is minimized or another app has focus, and picks up again
+ * - It stops while the app is minimized. While another app has focus it keeps moving,
+ *   unless the "pause when another app is in front" setting is on. It picks up again
  *   when the app comes back.
  */
 
@@ -13,18 +14,20 @@ export const CALM_VEIL = 0.45;
 
 const STEP_MS = 1000 / 60;
 
-// Visible and focused. Focus inside an iframe on the page still counts as the app's.
-export function isAppActive() {
-  return !document.hidden && document.hasFocus();
+// Visible, and focused too when pauseUnfocused is set. Focus inside an iframe on the
+// page still counts as the app's.
+export function isAppActive(pauseUnfocused = false) {
+  return !document.hidden && (!pauseUnfocused || document.hasFocus());
 }
 
 /**
  * Runs step(time, veil) through requestAnimationFrame, at most 60 times a second.
  * `time` is the simulation clock in seconds; `veil` is 0 normally and eases toward
  * CALM_VEIL while getCalm() is true, for step() to lay over the frame it drew.
+ * getPauseUnfocused() true also stops the loop while another app has focus.
  * Returns a function that stops the loop and removes its listeners.
  */
-export function runPacedLoop(step, getCalm) {
+export function runPacedLoop(step, getCalm, getPauseUnfocused = () => false) {
   let raf = 0;
   let last = 0;
   let budget = 1; // steps owed
@@ -61,7 +64,7 @@ export function runPacedLoop(step, getCalm) {
     raf = 0;
     if (!poll) poll = setInterval(sync, 1000);
   };
-  const sync = () => (isAppActive() ? start() : stop());
+  const sync = () => (isAppActive(getPauseUnfocused()) ? start() : stop());
   // A blur can mean focus only moved into an iframe on the page; check once it has settled
   let blurTimer = 0;
   const onBlur = () => {

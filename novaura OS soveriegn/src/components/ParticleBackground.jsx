@@ -25,7 +25,8 @@
  *   lightning that forks down through them or crawls between them, while flocks of birds
  *   wheel through and scatter from the strikes and the cursor.
  * - Pacing (backgroundPacing.js): at most 60 steps a second on any screen, half pace under a
- *   dimming veil behind open windows, and paused while the app is minimized or unfocused.
+ *   dimming veil behind open windows, and paused while the app is minimized (also while
+ *   another app has focus, if that setting is on).
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
@@ -328,6 +329,7 @@ function ParticleBackgroundCanvas({
   gravityStrength = 1.0,
   shockwavesEnabled = true,
   calm = false,
+  pauseUnfocused = false,
 }) {
   const canvasRef = useRef(null);
   const particlesRef = useRef([]);
@@ -347,10 +349,15 @@ function ParticleBackgroundCanvas({
   const spritesRef = useRef(new Map());
   const themeRef = useRef(theme);
   const calmRef = useRef(calm);
+  const pauseUnfocusedRef = useRef(pauseUnfocused);
 
   useEffect(() => {
     calmRef.current = calm;
   }, [calm]);
+
+  useEffect(() => {
+    pauseUnfocusedRef.current = pauseUnfocused;
+  }, [pauseUnfocused]);
 
   useEffect(() => {
     themeRef.current = theme;
@@ -2641,7 +2648,7 @@ function ParticleBackgroundCanvas({
       }
     };
 
-    const stopLoop = runPacedLoop(step, () => calmRef.current);
+    const stopLoop = runPacedLoop(step, () => calmRef.current, () => pauseUnfocusedRef.current);
 
     return () => {
       stopLoop();
@@ -2673,6 +2680,7 @@ export default function ParticleBackground({ theme = 'cosmic', windowsOpen = fal
     gravityStrength,
     shockwavesEnabled,
     calmBehindWindows,
+    pauseUnfocusedBackground,
   } = useGraphics();
   const calm = calmBehindWindows && windowsOpen;
 
@@ -2683,6 +2691,7 @@ export default function ParticleBackground({ theme = 'cosmic', windowsOpen = fal
         theme={theme}
         gravityStrength={gravityStrength}
         calm={calm}
+        pauseUnfocused={pauseUnfocusedBackground}
       />
     );
   }
@@ -2708,6 +2717,7 @@ export default function ParticleBackground({ theme = 'cosmic', windowsOpen = fal
       gravityStrength={gravityStrength}
       shockwavesEnabled={shockwavesEnabled}
       calm={calm}
+      pauseUnfocused={pauseUnfocusedBackground}
     />
   );
 }

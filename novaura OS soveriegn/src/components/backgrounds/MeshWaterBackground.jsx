@@ -92,9 +92,11 @@ export default function MeshWaterBackground({
   showParticles = true,
   gravityStrength = 1.0,
   calm = false,
+  pauseUnfocused = false,
 }) {
   const canvasRef = useRef(null);
   const calmRef = useRef(calm);
+  const pauseUnfocusedRef = useRef(pauseUnfocused);
   const mouseRef = useRef({ x: -1000, y: -1000, vx: 0, vy: 0, down: false });
   const pointsRef = useRef({ points: [], cols: 0, rows: 0 });
   const particlesRef = useRef([]);
@@ -106,6 +108,10 @@ export default function MeshWaterBackground({
   useEffect(() => {
     calmRef.current = calm;
   }, [calm]);
+
+  useEffect(() => {
+    pauseUnfocusedRef.current = pauseUnfocused;
+  }, [pauseUnfocused]);
 
   // Initialize 2D grid matrix
   const initGrid = useCallback((width, height) => {
@@ -522,7 +528,7 @@ export default function MeshWaterBackground({
       }
     };
 
-    const stopLoop = runPacedLoop(step, () => calmRef.current);
+    const stopLoop = runPacedLoop(step, () => calmRef.current, () => pauseUnfocusedRef.current);
 
     return () => {
       window.removeEventListener('resize', resize);
