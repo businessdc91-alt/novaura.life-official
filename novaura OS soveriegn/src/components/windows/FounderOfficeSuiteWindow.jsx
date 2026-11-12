@@ -658,7 +658,7 @@ export default function FounderOfficeSuiteWindow({ onClose }) {
             <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-white">Decentralized Web Registry Administration</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Pin official portals to the top of the global directory or quarantine rogue domains</p>
+                <p className="text-xs text-slate-400 mt-0.5">Pin or quarantine sites in this PC's directory only. To approve, decline or revoke names for everyone, use Nova Registry → Operator.</p>
               </div>
               <button onClick={refreshTabData} className="p-1.5 text-slate-400 hover:text-cyan-400 rounded-lg hover:bg-slate-800">
                 <RotateCw className="w-4 h-4" />
