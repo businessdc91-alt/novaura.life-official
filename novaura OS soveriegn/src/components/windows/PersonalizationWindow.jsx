@@ -35,10 +35,10 @@ export const THEMES = [
   {
     id: 'stormy',
     name: 'Stormy Rain',
-    description: 'Thunder clouds with dynamic animated falling rain',
+    description: 'Rain in shifting waves over dark water: splashes, jumping fish & glowing orbs',
     icon: Cloud,
     preview: 'linear-gradient(135deg, #0d1117 0%, #1a1f29 100%)',
-    particleColors: ['#64748b', '#60a5fa', '#a855f7'],
+    particleColors: ['#93c5fd', '#a78bfa', '#67e8f9'],
   },
   {
     id: 'cyberstorm',

@@ -15,7 +15,10 @@
  *   - Constellation links with distance attenuation and mouse link glow
  * - 9 Complete Themes:
  *   cosmic, blue-night, matrix, stormy, cyberstorm, aurora, meshwater, blaze, light
- * - Micro dust luminescence, rain splash physics, heat convection embers
+ * - Micro dust luminescence, heat convection embers
+ * - Stormy Rain (backgrounds/rainfallScene.js): rain in shifting spells over a pool of water,
+ *   with ripples, splashes, light streaks and jumping fish; a few glowing orbs drift above
+ *   the water and flare when a drop hits them.
  * - Matrix: glowing gravity bodies plunge through (and off) the screen, pulling particles along,
  *   while the micro particles swim in schools like fish. Bodies that meet merge, absorb
  *   particles and grow into ringed planets, which in time collapse and burst back into bodies.
@@ -33,6 +36,7 @@ import React, { useEffect, useRef, useCallback } from 'react';
 import { useGraphics, GRAVITY_MODES } from '../contexts/GraphicsContext';
 import MeshWaterBackground from './backgrounds/MeshWaterBackground';
 import { runPacedLoop } from './backgrounds/backgroundPacing';
+import { createRainfall, resizeRainfall, placeOrbs, drawRainfall } from './backgrounds/rainfallScene';
 
 // ============================================
 // THEME CONFIGURATIONS
@@ -148,11 +152,11 @@ export const THEME_CONFIGS = {
   
   stormy: {
     background: '#0d1117',
+    // The orbs: bright enough to glow against the dark sky
     colors: [
-      '#64748b', '#475569', '#334155',
-      '#94a3b8', '#cbd5e1', '#e2e8f0',
-      '#60a5fa', '#3b82f6', '#2563eb',
-      '#a855f7', '#8b5cf6', '#7c3aed',
+      '#93c5fd', '#60a5fa', '#bfdbfe',
+      '#a78bfa', '#c4b5fd', '#818cf8',
+      '#67e8f9', '#a5f3fc', '#e2e8f0',
     ],
     microColors: [
       '#94a3b8', '#a8b5c4', '#bcc8d4',
@@ -161,11 +165,17 @@ export const THEME_CONFIGS = {
     ],
     linkColor: '148, 163, 184',
     mouseLinkColor: '96, 165, 250',
-    particleSizeMultiplier: 0.8,
-    flowSpeed: 1.5,
-    glowIntensity: 0.9,
-    hasRain: true,
-    rainCount: 160,
+    particleSizeMultiplier: 1.5,
+    flowSpeed: 0.6,
+    glowIntensity: 1.5,
+    // Rain in shifting spells over a pool of water, with ripples, splashes and jumping fish;
+    // drops that hit an orb make it flare (backgrounds/rainfallScene.js)
+    rainfall: true,
+    // Only a scattered few glowing orbs: no micro dust and no links between them
+    particleShare: 0.09,
+    particleCap: 26,
+    microShare: 0,
+    noLinks: true,
     fontFamily: "'Cinzel', 'Playfair Display', serif",
   },
 
@@ -194,7 +204,7 @@ export const THEME_CONFIGS = {
     particleShare: 0.45,
     // Flocks of birds wheel through the storm and scatter from strikes and the cursor
     flocks: { count: 3, perFlock: 26 },
-    // A light slanted drizzle (the particles don't fall with it, as they do in Stormy)
+    // A light slanted drizzle (the particles don't fall with it)
     drizzle: true,
     rainCount: 110,
     rainColor: '150, 170, 255',
@@ -384,11 +394,12 @@ function ParticleBackgroundCanvas({
     const colors = themeConfig.colors;
     const microColors = themeConfig.microColors;
 
-    // A theme with its own scenery can ask for a share of the preset's particles
+    // A theme with its own scenery can ask for a share of the preset's particles (at most
+    // particleCap), a different share of the micro dust, and no links
     const particleShare = themeConfig.particleShare || 1;
-    const particleCount = Math.round(settings.particles.count * particleShare);
-    const microCount = Math.round(settings.particles.microCount * particleShare);
-    const enableLinks = settings.particles.links;
+    const particleCount = Math.min(themeConfig.particleCap || Infinity, Math.round(settings.particles.count * particleShare));
+    const microCount = Math.round(settings.particles.microCount * (themeConfig.microShare ?? particleShare));
+    const enableLinks = settings.particles.links && !themeConfig.noLinks;
     const enableColorCycling = settings.particles.colorCycling;
 
     const sizeMultiplier = themeConfig.particleSizeMultiplier || 1;
@@ -407,9 +418,11 @@ function ParticleBackgroundCanvas({
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const microTotal = schoolCfg ? Math.round(microCount * schoolCfg.density) : microCount;
 
+    let rainfall = null;
     const resize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      if (rainfall) resizeRainfall(rainfall, canvas.width, canvas.height);
     };
     resize();
     window.addEventListener('resize', resize);
@@ -438,7 +451,6 @@ function ParticleBackgroundCanvas({
           driftAngle: Math.random() * Math.PI * 2,
           driftSpeed: (0.15 + Math.random() * 0.45) * flowSpeedMult,
           swirlOffset: Math.random() * 1000,
-          fallBias: themeConfig.hasRain ? 2.5 : 0,
         });
       }
     }
@@ -506,8 +518,14 @@ function ParticleBackgroundCanvas({
       }
     }
 
-    // Initialize stormy rain (or Cyber Storm's drizzle)
-    if ((themeConfig.hasRain || themeConfig.drizzle) && rainRef.current.length === 0) {
+    // Stormy Rain's water, weather and fish; the orbs start above the water
+    if (themeConfig.rainfall) {
+      rainfall = createRainfall(canvas.width, canvas.height, { busy, reduceMotion });
+      placeOrbs(rainfall, particlesRef.current);
+    }
+
+    // Initialize Cyber Storm's drizzle
+    if (themeConfig.drizzle && rainRef.current.length === 0) {
       const count = themeConfig.rainCount || 150;
       rainRef.current = [];
       for (let i = 0; i < count; i++) {
@@ -2353,8 +2371,10 @@ function ParticleBackgroundCanvas({
         drawStorm(time);
       }
 
-      // Render Stormy Rain (or a slanted drizzle, lit by lightning) with interactive cursor wind deflection
-      if (currentTheme.hasRain || currentTheme.drizzle) {
+      if (rainfall) drawRainfall(rainfall, ctx, time, mouse, particlesRef.current);
+
+      // Render Cyber Storm's slanted drizzle, lit by lightning, with interactive cursor wind deflection
+      if (currentTheme.drizzle) {
         const rain = rainRef.current;
         const slant = currentTheme.rainSlant || 0;
         const rainLight = currentTheme.drizzle ? 0.6 * (1 + (stormRef.current?.sky || 0) * 1.5) : 1;
@@ -2507,7 +2527,7 @@ function ParticleBackgroundCanvas({
 
         p.driftAngle += 0.006;
         p.vx += Math.cos(p.driftAngle) * p.driftSpeed * 0.01;
-        p.vy += Math.sin(p.driftAngle) * p.driftSpeed * 0.01 + (p.fallBias || 0);
+        p.vy += Math.sin(p.driftAngle) * p.driftSpeed * 0.01;
 
         if (currentTheme.current) {
           // Large eddies that slide across the screen. The field has no sources or sinks,
@@ -2557,15 +2577,18 @@ function ParticleBackgroundCanvas({
           const cIndex = Math.floor(cycleProgress * currentTheme.colors.length);
           pColor = currentTheme.colors[cIndex];
         }
+        p.drawnColor = pColor;
+        // A rain hit (Stormy Rain) makes the orb flare: bigger, brighter, wider glow
+        const flare = p.flare || 0;
 
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.size * (1 + flare * 0.5), 0, Math.PI * 2);
         ctx.fillStyle = pColor;
-        ctx.globalAlpha = p.opacity * (p.fade ?? 1);
+        ctx.globalAlpha = Math.min(1, p.opacity * (p.fade ?? 1) + flare * 0.3);
         ctx.fill();
 
         const glowMult = currentTheme.glowIntensity || 1;
-        ctx.shadowBlur = 14 * glowMult;
+        ctx.shadowBlur = 14 * glowMult * (1 + flare);
         ctx.shadowColor = pColor;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size * 0.5, 0, Math.PI * 2);
