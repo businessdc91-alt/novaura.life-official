@@ -4,6 +4,7 @@
 
 import React, { Suspense, useEffect } from 'react';
 import { Undo2 } from 'lucide-react';
+import { Toaster } from 'sonner';
 import { KernelProvider } from '../kernel/KernelProvider';
 import { GraphicsProvider } from '../contexts/GraphicsContext';
 import { KernelErrorBoundary } from '../kernel/KernelErrorBoundary';
@@ -56,6 +57,7 @@ function PopoutApp({ appDef, props }) {
           </Suspense>
         </KernelErrorBoundary>
       </main>
+      <Toaster theme="dark" position="bottom-left" closeButton />
     </div>
   );
 }

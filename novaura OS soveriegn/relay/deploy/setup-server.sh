@@ -3,9 +3,14 @@
 # (Oracle Cloud Always Free, or any Linux VPS with a public IP).
 #
 #   sudo bash deploy/setup-server.sh [--public-ip X.X.X.X] [--relay-port 43889]
+#                                    [--update-domain relay.novaura.life]
 #
 # Run it from the uploaded relay folder. Safe to re-run after updating the relay
 # source: it rebuilds, restarts, and keeps the existing TURN secret.
+#
+# --update-domain also serves Sovereign's update feed over HTTPS (Caddy, with a
+# free certificate it renews itself) from /var/www/novaura/sovereign/. The
+# domain's DNS A record must already point at this server.
 set -euo pipefail
 
 RELAY_PORT=43889
@@ -13,12 +18,14 @@ TURN_PORT=3478
 MEDIA_MIN_PORT=49152
 MEDIA_MAX_PORT=50151
 PUBLIC_IP=""
+UPDATE_DOMAIN=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --public-ip) PUBLIC_IP="$2"; shift 2 ;;
     --relay-port) RELAY_PORT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    --update-domain) UPDATE_DOMAIN="$2"; shift 2 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -144,6 +151,31 @@ if getent group turnserver >/dev/null; then
 fi
 [ -f /etc/default/coturn ] && sed -i 's/^#\?TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/coturn
 
+# ---- Update feed (optional) -------------------------------------------------
+# Installers are minisign-signed, so this host only has to serve the files.
+if [ -n "$UPDATE_DOMAIN" ]; then
+  step "Serving the update feed at https://${UPDATE_DOMAIN}/sovereign/ (Caddy)"
+  if ! apt-cache show caddy >/dev/null 2>&1; then
+    apt-get install -y -q debian-keyring debian-archive-keyring apt-transport-https gnupg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -q
+  fi
+  apt-get install -y -q caddy
+  mkdir -p /var/www/novaura/sovereign
+  # The account that ran sudo can copy new releases in without sudo
+  chown "${SUDO_USER:-root}" /var/www/novaura/sovereign
+  cat > /etc/caddy/Caddyfile <<EOF
+# Managed by NovAura deploy/setup-server.sh (re-running it rewrites this file).
+${UPDATE_DOMAIN} {
+	root * /var/www/novaura
+	file_server
+	@feed path /sovereign/latest.json
+	header @feed Cache-Control "no-cache"
+}
+EOF
+fi
+
 # ---- Relay service ---------------------------------------------------------
 step "Installing the novaura-relay service"
 cat > /etc/systemd/system/novaura-relay.service <<EOF
@@ -192,6 +224,10 @@ open_port tcp "$RELAY_PORT"
 open_port tcp "$TURN_PORT"
 open_port udp "$TURN_PORT"
 open_port udp "${MEDIA_MIN_PORT}:${MEDIA_MAX_PORT}"
+if [ -n "$UPDATE_DOMAIN" ]; then
+  open_port tcp 80
+  open_port tcp 443
+fi
 command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null
 
 # ---- Start -----------------------------------------------------------------
@@ -209,6 +245,11 @@ check "relay listening on TCP ${RELAY_PORT}" "ss -ltn | grep -q ':${RELAY_PORT} 
 check "TURN listening on UDP ${TURN_PORT}"   "ss -lun | grep -q ':${TURN_PORT} '"
 check "relay issuing TURN logins" "journalctl -u novaura-relay -n 50 --no-pager | grep -q 'TURN credentials: turn:'"
 check "listing archive on disk"   "journalctl -u novaura-relay -n 50 --no-pager | grep -q 'stored in /var/lib/novaura'"
+if [ -n "$UPDATE_DOMAIN" ]; then
+  systemctl enable caddy >/dev/null
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+  check "update feed web server running" "systemctl is-active --quiet caddy"
+fi
 
 cat <<EOF
 
@@ -224,6 +265,11 @@ cat <<EOF
      TCP  ${TURN_PORT}               TURN
      UDP  ${TURN_PORT}               TURN
      UDP  ${MEDIA_MIN_PORT}-${MEDIA_MAX_PORT}       call media
+     TCP  80, 443               update feed (only with --update-domain)
+
+ Update feed: copy release files into /var/www/novaura/sovereign/
+ (latest.json, the installer and its .sig), then check that
+ https://<update domain>/sovereign/latest.json opens in a browser.
 
  Logs:  journalctl -u novaura-relay -f      journalctl -u coturn -f
 ────────────────────────────────────────────────────────────────────

@@ -75,7 +75,7 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
   const [generatedAudioBlob, setGeneratedAudioBlob] = useState(null);
 
   // TTS State
-  const [ttsText, setTtsText] = useState('NovAura Sovereign OS operates in full air-gapped sovereign mode. All neural weights, embeddings, and cryptographic identities are hosted on-device.');
+  const [ttsText, setTtsText] = useState('NovAura Sovereign OS runs on your own hardware. All neural weights, embeddings, and cryptographic identities are hosted on-device.');
   const [ttsRate, setTtsRate] = useState(1.0);
   const [ttsPitch, setTtsPitch] = useState(1.0);
   const [availableVoices, setAvailableVoices] = useState([]);
@@ -1259,7 +1259,7 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
                 <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
                   <div className="font-semibold text-slate-200 flex items-center gap-1.5">
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Air-Gapped Speech Architecture</span>
+                    <span>Local Speech Synthesis</span>
                   </div>
                   <p className="text-[10px] leading-relaxed">
                     Zero voice data ever leaves this workstation. Compatible with local Kokoro-82M ONNX server 

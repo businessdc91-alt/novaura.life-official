@@ -7,20 +7,15 @@ import {
 import { useKernel } from '../../kernel/useKernel.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { interAppSecurityBroker, APP_CAPABILITY_PROFILES } from '../../kernel/InterAppSecurityBroker.js';
+import { getAgentPolicy, setAgentPolicy } from '../../services/agentToolPolicy.js';
 
 export default function SentinelShieldWindow() {
   const { kernel } = useKernel();
   const [auditLogs, setAuditLogs] = useState([]);
   const [activeSecTab, setActiveSecTab] = useState('audit'); // 'audit' | 'sandboxes'
   const [brokerStats, setBrokerStats] = useState(() => interAppSecurityBroker.getSecurityTelemetry().stats);
-  const [permissions, setPermissions] = useState({
-    aiTerminalExec: true,
-    aiFileWrite: true,
-    cloudSyncPrompt: true,
-    webgpuSandbox: true,
-    interAppIsolation: true,
-    vaultSecretScrub: true,
-  });
+  // The AI agent's tool settings (agentToolPolicy.js); NovaAgent reads the same store
+  const [permissions, setPermissions] = useState(() => getAgentPolicy());
 
   useEffect(() => {
     loadAuditLogs();
@@ -55,11 +50,9 @@ export default function SentinelShieldWindow() {
   };
 
   const togglePermission = (key) => {
-    setPermissions(prev => {
-      const updated = { ...prev, [key]: !prev[key] };
-      kernel?.ipc.emit('sentinel:permission_changed', updated);
-      return updated;
-    });
+    const updated = setAgentPolicy({ [key]: !permissions[key] });
+    setPermissions(updated);
+    kernel?.ipc.emit('sentinel:permission_changed', updated);
   };
 
   return (
@@ -78,7 +71,7 @@ export default function SentinelShieldWindow() {
               </span>
             </h2>
             <p className="text-xs text-slate-400">
-              Autonomous on-device privacy protection, zero cloud surveillance, and process isolation.
+              What the AI agent may do on its own, and a log of security events on this PC.
             </p>
           </div>
         </div>
@@ -103,7 +96,7 @@ export default function SentinelShieldWindow() {
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              Inter-App Sandboxes ({Object.keys(APP_CAPABILITY_PROFILES).length})
+              Message Bus ({Object.keys(APP_CAPABILITY_PROFILES).length})
             </button>
           </div>
 
@@ -137,15 +130,12 @@ export default function SentinelShieldWindow() {
             </div>
           </div>
 
-          <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Subsystem Policies</h3>
+          <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">AI Agent Permissions</h3>
 
           <div className="space-y-2">
             {[
-              { key: 'interAppIsolation', title: 'Inter-App Sandbox Isolation', desc: 'Strict capability envelopes preventing cross-app data leakage' },
-              { key: 'vaultSecretScrub', title: 'Vault Credential Scrubbing', desc: 'Auto-redact API keys and private tokens from generic IPC payloads' },
-              { key: 'aiFileWrite', title: 'AI File System Write', desc: 'Permit NovaAgent to write/edit local files' },
-              { key: 'aiTerminalExec', title: 'Terminal Execution', desc: 'Allow AI agent to run local shell commands' },
-              { key: 'cloudSyncPrompt', title: 'On-Demand Cloud Gating', desc: 'Require explicit user approval for cloud connections' },
+              { key: 'aiFileWrite', title: 'AI File Writes', desc: 'On: Nova and Aura may write files in your Sovereign files, after you say yes each time. Off: they never do.' },
+              { key: 'aiTerminalExec', title: 'AI Terminal Commands', desc: 'On: they may run Sovereign Terminal commands (not Windows commands), after you say yes each time. Off: they never do.' },
             ].map(item => (
               <div
                 key={item.key}
@@ -166,10 +156,10 @@ export default function SentinelShieldWindow() {
           <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 rounded-xl text-xs space-y-1.5 text-emerald-300">
             <div className="flex items-center gap-1.5 font-semibold">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span>Decentralized Isolation</span>
+              <span>What is isolated</span>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Every application runs in an isolated process envelope. Apps cannot query unauthorized database namespaces or eavesdrop on other apps.
+              Sovereign's own apps share one process and one local database. What other people send you is kept apart: mesh sites, shared pages and Cybeni previews run in a separate sandboxed origin that can't reach your files, keys or the OS.
             </p>
           </div>
         </div>
@@ -180,9 +170,9 @@ export default function SentinelShieldWindow() {
             <div className="flex items-center justify-between pb-2 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-emerald-400" />
-                <span className="text-xs font-semibold text-slate-200">Active App Capability Envelopes</span>
+                <span className="text-xs font-semibold text-slate-200">Kernel Message-Bus Permissions</span>
               </div>
-              <span className="text-[10px] text-slate-400">Strict zero-leak boundaries active</span>
+              <span className="text-[10px] text-slate-400">What each app may send and receive over the kernel's message bus</span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -197,9 +187,9 @@ export default function SentinelShieldWindow() {
 
                   <div className="grid grid-cols-2 gap-2 text-[10px]">
                     <div className="p-1.5 bg-slate-950 rounded border border-slate-800/80">
-                      <span className="text-slate-500 block">Vault Secrets:</span>
+                      <span className="text-slate-500 block">Keys over the bus:</span>
                       <span className={`font-semibold ${profile.canAccessVaultSecrets ? 'text-amber-400' : 'text-emerald-400'}`}>
-                        {profile.canAccessVaultSecrets ? 'ALLOWED' : 'BLOCKED (ZERO-LEAK)'}
+                        {profile.canAccessVaultSecrets ? 'ALLOWED' : 'REDACTED'}
                       </span>
                     </div>
                     <div className="p-1.5 bg-slate-950 rounded border border-slate-800/80">

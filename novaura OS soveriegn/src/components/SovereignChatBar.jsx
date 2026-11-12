@@ -4,6 +4,7 @@ import { queryAuraCommander, executeAuraAction } from '../services/sovereignComm
 import { chainLogicWeaver } from '../services/chainLogicWeaverService.js';
 import { executeNovaFounderCommand } from '../services/founderAuthService.js';
 import { toast } from 'sonner';
+import { cloudSpeechAllowed } from '../services/speechConsent.js';
 
 export default function SovereignChatBar({
   openApp,
@@ -226,6 +227,7 @@ export default function SovereignChatBar({
       return;
     }
 
+    if (!cloudSpeechAllowed()) return;
     const rec = new SpeechRecognition();
     rec.continuous = false;
     rec.interimResults = true;

@@ -320,7 +320,7 @@ fn fetch(spec: &FileSpec, target: &Path, stage: &str, token: Option<&str>) -> Re
             set_progress(|p| p.bytes = bytes);
             let mut st = state().lock().map_err(|_| "Built-in AI state unavailable")?;
             if st.cancel {
-                if let Some(mut c) = st.curl.take() { let _ = c.kill(); }
+                if let Some(mut c) = st.curl.take() { let _ = c.kill(); let _ = c.wait(); }
                 return Err("Cancelled".into());
             }
             let Some(child) = st.curl.as_mut() else { return Err("Cancelled".into()) };

@@ -162,6 +162,17 @@ export default function MarketplaceWindow() {
 
       {/* Main Grid Viewport */}
       <div className="flex-1 overflow-y-auto p-5">
+        {listings.length === 0 && (
+          <div className="max-w-md mx-auto mt-16 text-center text-sm text-slate-400 space-y-2">
+            <p className="text-slate-200 font-semibold">
+              {searchQuery ? 'Nothing matches that search.' : 'No listings yet.'}
+            </p>
+            <p>
+              Listings appear here when you or people on the mesh publish a creation. Publish yours from Cybeni, Music Studio
+              or Discovery Forge.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {listings.map(item => (
             <div

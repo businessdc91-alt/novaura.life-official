@@ -7,6 +7,7 @@ import { MODES, SECURITY_LEVELS, QUALITY_LEVELS } from '../../../services/cybeni
 import { describeModelKey } from '../../../services/cybeni/models.js';
 import { DESIGN_SYSTEMS } from '../../../services/cybeniStudioEngine.js';
 import { ollamaCpuOnly, setOllamaCpuOnly } from '../../../services/localModels.js';
+import { cloudSpeechAllowed } from '../../../services/speechConsent.js';
 
 const ROLE_LABELS = {
   architect: ['Architect & orchestrator', 'Plans, oversees each checkpoint, can redirect or take over, signs off'],
@@ -154,7 +155,7 @@ export default function AgentPanel({
 
   const dictate = () => {
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Rec) return;
+    if (!Rec || !cloudSpeechAllowed()) return;
     const rec = new Rec();
     rec.onresult = (e) => setPrompt(p => `${p ? `${p} ` : ''}${e.results[0][0].transcript}`);
     rec.onend = () => setListening(false);

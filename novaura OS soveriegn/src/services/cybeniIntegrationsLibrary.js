@@ -67,7 +67,7 @@ const CORE_INTEGRATIONS = [
         answer: 'Configure setPersistence(auth, browserLocalPersistence) on initialization before firing any sign-in actions.'
       },
       {
-        question: 'Can this run in air-gapped Sovereign mode?',
+        question: 'Can this run offline in Sovereign?',
         answer: 'Yes, if offline, you can route auth through the Sovereign Local Mesh Keyring (sovereignAuth.js) which generates local Ed25519 node tokens.'
       }
     ],

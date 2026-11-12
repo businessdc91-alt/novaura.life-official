@@ -32,8 +32,8 @@ use tokio::sync::{mpsc, Mutex};
 // ---- Hardened Limits & Operational Parameters -------------------------------
 pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;  // 16 MB per packet; files of any size go in chunks
 pub const MAX_GLOBAL_CONNS: usize = 2048;            // Global server connection cap
-pub const MAX_CONNS_PER_IP: usize = 4;               // Max sockets per remote IP
-pub const MAX_ROOM_PEERS: usize = 128;               // Max members per swarm room
+pub const MAX_CONNS_PER_IP: usize = 32;              // Max sockets per remote IP (carrier NAT puts many users on one)
+pub const MAX_ROOM_PEERS: usize = 512;               // Max members per swarm room
 pub const RATE_LIMIT_BURST: u32 = 30;                // Max burst packet allowance
 pub const RATE_LIMIT_REFILL_PER_SEC: f64 = 15.0;     // Token refill rate per second
 pub const BYTE_RATE_BURST: f64 = 64.0 * 1024.0 * 1024.0;  // Bytes a socket may send at once...
@@ -78,16 +78,18 @@ impl TokenBucket {
         }
     }
 
-    fn check_and_consume(&mut self) -> bool {
+    /// Charges one packet and returns how long to pause before reading on. Like the
+    /// byte limit, a sender over its rate is slowed down (TCP backs up), never
+    /// dropped: a node that just reconnected and flushes its outbox loses nothing.
+    fn take(&mut self) -> Duration {
         let now = current_timestamp_ms();
         let elapsed_sec = (now.saturating_sub(self.last_update_ms)) as f64 / 1000.0;
         self.last_update_ms = now;
-        self.tokens = (self.tokens + elapsed_sec * RATE_LIMIT_REFILL_PER_SEC).min(RATE_LIMIT_BURST as f64);
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
+        self.tokens = (self.tokens + elapsed_sec * RATE_LIMIT_REFILL_PER_SEC).min(RATE_LIMIT_BURST as f64) - 1.0;
+        if self.tokens >= 0.0 {
+            Duration::ZERO
         } else {
-            false
+            Duration::from_secs_f64(-self.tokens / RATE_LIMIT_REFILL_PER_SEC)
         }
     }
 }
@@ -717,11 +719,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // Rate limiting check
-                if !rate_limiter.check_and_consume() {
-                    eprintln!("[Relay] Rate limit exceeded by {}. Throttling packet.", peer_addr);
-                    line.clear();
-                    continue;
+                // Packets per second: over the rate, this socket waits (nothing is dropped)
+                let pause = rate_limiter.take();
+                if !pause.is_zero() {
+                    tokio::time::sleep(pause).await;
                 }
 
                 let packet: RelayPacket = match serde_json::from_str(trimmed) {

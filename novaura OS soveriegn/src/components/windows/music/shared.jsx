@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Repeat, Volume2, Music2 } from 'lucide-react';
 import { getBlob } from '../../../services/music/musicStudio.js';
+import { cloudSpeechAllowed } from '../../../services/speechConsent.js';
 
 // Object URLs for stored blobs, cached and revoked when no component uses them.
 const cache = new Map(); // blobId -> { url, refs }
@@ -136,7 +137,7 @@ export function useDictation(onText) {
   const [listening, setListening] = useState(false);
   const Rec = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
   const start = () => {
-    if (!Rec || listening) return;
+    if (!Rec || listening || !cloudSpeechAllowed()) return;
     const rec = new Rec();
     rec.continuous = false;
     rec.interimResults = false;

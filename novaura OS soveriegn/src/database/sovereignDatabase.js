@@ -6,6 +6,9 @@ import Dexie from 'dexie';
  * Zero cloud dependency. Automatically initializes and manages the user's local database.
  */
 
+// The disk mirror leaves out records with a field this long (see exportMirrorSnapshot)
+const MIRROR_MAX_FIELD_CHARS = 2 * 1024 * 1024;
+
 // Tables included in backups and the encrypted disk mirror. Add new user-data
 // tables here, or they will not survive a reinstall. Left out on purpose: caches
 // (inference_hosts) and bulky regenerable history (cybeni_checkpoints).
@@ -236,6 +239,17 @@ class SovereignDatabase extends Dexie {
     this.social_channels = this.table('social_channels');
     this.authorized_apps = this.table('authorized_apps');
     this.founder_directives = this.table('founder_directives');
+
+    // Any write to a backed-up table makes the disk mirror out of date; the first
+    // mirror after start always runs
+    this._mirrorDirty = true;
+    const markDirty = () => { this._mirrorDirty = true; };
+    for (const name of BACKUP_TABLES) {
+      const table = this.table(name);
+      table.hook('creating', markDirty);
+      table.hook('updating', markDirty);
+      table.hook('deleting', markDirty);
+    }
   }
 
 
@@ -364,13 +378,32 @@ class SovereignDatabase extends Dexie {
     return true;
   }
 
-  // Mirror full database snapshot to permanent physical disk file
+  // The disk mirror: the backed-up tables, compact, without any record that has a
+  // field over MIRROR_MAX_FIELD_CHARS (a big uploaded file stored as a data URL).
+  // Serialising and sending tens of MB every minute froze the UI for seconds; those
+  // files stay in IndexedDB and in .novabackup backups, and are listed in `omitted`.
+  async exportMirrorSnapshot() {
+    const data = { version: 1, exportedAt: new Date().toISOString(), omitted: [] };
+    for (const name of BACKUP_TABLES) {
+      const rows = await this.table(name).toArray();
+      data[name] = rows.filter((row) => {
+        const big = Object.values(row).some(v => typeof v === 'string' && v.length > MIRROR_MAX_FIELD_CHARS);
+        if (big) data.omitted.push({ table: name, id: row.id ?? row.key ?? null, name: row.name || row.title || null });
+        return !big;
+      });
+    }
+    return JSON.stringify(data);
+  }
+
+  // Mirror the database to a file on disk (DPAPI-sealed natively), when it changed
   async mirrorToPhysicalDisk() {
+    if (!this._mirrorDirty) return;
+    this._mirrorDirty = false;
     try {
       const { syncVaultState } = await import('../services/nativeService.js');
-      const snapshot = await this.exportSnapshot();
-      await syncVaultState('sovereign_db_snapshot.json', snapshot);
+      await syncVaultState('sovereign_db_snapshot.json', await this.exportMirrorSnapshot());
     } catch (e) {
+      this._mirrorDirty = true;
       console.warn('[SovereignDB] Physical disk sync note:', e);
     }
   }
@@ -388,7 +421,16 @@ class SovereignDatabase extends Dexie {
         const diskSnapshot = await loadVaultState('sovereign_db_snapshot.json');
         if (diskSnapshot) {
           console.info('[SovereignDB] Rehydrating private database from physical disk vault...');
-          await this.importSnapshot(typeof diskSnapshot === 'string' ? diskSnapshot : JSON.stringify(diskSnapshot));
+          const text = typeof diskSnapshot === 'string' ? diskSnapshot : JSON.stringify(diskSnapshot);
+          await this.importSnapshot(text);
+          const omitted = JSON.parse(text).omitted || [];
+          if (omitted.length) {
+            window.dispatchEvent(new CustomEvent('novaura:mesh_toast', { detail: {
+              type: 'info',
+              title: 'Restored from the automatic copy',
+              message: `${omitted.length} large file${omitted.length === 1 ? ' was' : 's were'} too big for the automatic copy. Restore ${omitted.length === 1 ? 'it' : 'them'} from a .novabackup in Settings → Vault Backup.`,
+            } }));
+          }
         }
       }
     } catch (e) {

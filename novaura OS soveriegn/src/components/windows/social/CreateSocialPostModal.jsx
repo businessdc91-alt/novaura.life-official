@@ -157,7 +157,7 @@ export default function CreateSocialPostModal({ onClose, onCreated }) {
               Publish to Sovereign Social Mesh
             </h3>
             <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-              Air-gapped peer broadcast across machine-to-machine network
+              Signed peer-to-peer broadcast to the mesh
             </span>
           </div>
           <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>

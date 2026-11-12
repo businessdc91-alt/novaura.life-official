@@ -415,7 +415,7 @@ export default function SovereignEncyclopediaWindow({ onClose, props }) {
               {/* Local Cached Articles List */}
               <div className="flex-1 overflow-y-auto p-3">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2 flex items-center justify-between">
-                  <span>Air-Gapped Cache</span>
+                  <span>Offline Cache</span>
                   <span className="text-[9px] text-slate-500 font-normal">Dexie DB</span>
                 </span>
                 {storedArticles.length === 0 ? (
@@ -843,13 +843,13 @@ export default function SovereignEncyclopediaWindow({ onClose, props }) {
                       <span>Offline Knowledge Packs & ZIM Planetary Archives</span>
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
-                      Download complete air-gapped snapshots of human knowledge ranging from compact 1.2GB starter packs to the full 102GB all-media encyclopedia.
+                      Download complete offline snapshots of human knowledge ranging from compact 1.2GB starter packs to the full 102GB all-media encyclopedia.
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2 bg-amber-950/40 border border-amber-500/30 px-3 py-1.5 rounded-lg text-amber-300 text-xs">
                     <ShieldCheck size={14} className="text-amber-400" />
-                    <span>100% Air-Gapped Survival Ready</span>
+                    <span>Works Fully Offline</span>
                   </div>
                 </div>
               </div>

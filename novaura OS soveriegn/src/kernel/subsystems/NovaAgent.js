@@ -15,6 +15,7 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { hasCore, prepareTurn, settleTurn } from '../../services/auraCore/auraCore.js';
+import { approveAgentTool } from '../../services/agentToolPolicy.js';
 
 export const AGENT_TOOLS = [
   {
@@ -180,7 +181,7 @@ export class NovaAgent {
     }
 
     // 5. Detect and execute tool calls in response (JSON block or tag format)
-    const toolResult = await this._checkAndExecuteTools(responseText);
+    const toolResult = await this._checkAndExecuteTools(responseText, persona);
     if (toolResult) {
       responseText += `\n\n${toolResult}`;
     }
@@ -204,7 +205,7 @@ export class NovaAgent {
 
   // ─── Tool Call Execution ───────────────────────────────────────────────────
 
-  async _checkAndExecuteTools(text) {
+  async _checkAndExecuteTools(text, persona = 'nova') {
     // Look for ```tool_call { ... } ``` or ```json { "tool": "..." } ```
     const match = text.match(/```(?:tool_call|json)\s*([\s\S]*?)\s*```/);
     if (!match) return null;
@@ -215,6 +216,14 @@ export class NovaAgent {
       const params = parsed.parameters || parsed.args || parsed;
 
       if (!toolName) return null;
+
+      // Writing files and running commands: off, or only after you say yes
+      // (agentToolPolicy.js, set in Sentinel Shield)
+      const name = persona.toLowerCase() === 'aura' ? 'Aura' : 'Nova';
+      const approval = approveAgentTool(toolName, params, { persona: name });
+      if (!approval.ok) {
+        return `[System: \`${toolName}\` was not run: ${approval.reason}.]`;
+      }
 
       const result = await this.executeTool(toolName, params);
       return `[System: Executed \`${toolName}\` → ${JSON.stringify(result)}]`;

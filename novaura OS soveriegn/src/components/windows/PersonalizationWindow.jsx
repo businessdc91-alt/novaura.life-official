@@ -27,7 +27,7 @@ export const THEMES = [
   {
     id: 'matrix',
     name: 'Matrix Rain',
-    description: 'Air-gapped digital phosphor green code trails',
+    description: 'Digital phosphor green code trails',
     icon: Monitor,
     preview: 'linear-gradient(135deg, #000a00 0%, #001400 100%)',
     particleColors: ['#00ff00', '#00f500', '#39ff14'],

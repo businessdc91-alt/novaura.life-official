@@ -198,7 +198,7 @@ export default function SovereignRightSidebar({ openApp, preferences, onUpdatePr
           <div className="p-3.5 bg-slate-900/70 border border-slate-800/90 rounded-2xl space-y-2">
             <div className="flex items-center gap-2 text-cyan-400 text-xs font-semibold">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Air-Gapped Sovereign Node</span>
+              <span>Local-First Sovereign Node</span>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
               All database records, AI inference routing, and encryption keys reside strictly on this machine.

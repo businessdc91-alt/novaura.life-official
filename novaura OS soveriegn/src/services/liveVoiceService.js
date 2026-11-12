@@ -10,6 +10,7 @@
  */
 
 import { dualInference } from './dualInferenceService.js';
+import { cloudSpeechAllowed } from './speechConsent.js';
 
 export class LiveVoiceService {
   constructor() {
@@ -83,7 +84,8 @@ export class LiveVoiceService {
 
       // 3. Initialize Speech Recognition (Web Speech API)
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
+      // Microsoft's online service in WebView2: asked once (speechConsent.js)
+      if (SpeechRecognition && cloudSpeechAllowed()) {
         this.recognition = new SpeechRecognition();
         this.recognition.continuous = true;
         this.recognition.interimResults = true;

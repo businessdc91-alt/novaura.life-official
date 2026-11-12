@@ -120,7 +120,7 @@ class SovereignSearchService {
           status: 'online',
           tags: ['Active Node', 'Sovereign Operator'],
           description: myId.bio || 'Local sovereign mesh participant.',
-          capabilities: ['Dual Neural Inference', 'Dexie Cloud Engine', 'Air-Gapped Literature Studio'],
+          capabilities: ['Dual Neural Inference', 'Local Database Engine', 'Offline Literature Studio'],
         },
       });
     } catch (e) {

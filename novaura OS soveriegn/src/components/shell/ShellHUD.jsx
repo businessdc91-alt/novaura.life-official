@@ -24,6 +24,7 @@ import {
 import { executeAuraAction } from '../../services/sovereignCommandService';
 import { queryAuraCommander } from '../../services/sovereignCommandService';
 import { toast } from 'sonner';
+import { cloudSpeechAllowed } from '../../services/speechConsent.js';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function ShellHUD({ openApp }) {
@@ -103,6 +104,7 @@ export default function ShellHUD({ openApp }) {
       return;
     }
 
+    if (!cloudSpeechAllowed()) return;
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
     

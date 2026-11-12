@@ -6,6 +6,7 @@ import {
   FileText, Users, Mail, Compass, Play, RefreshCw, Zap, CheckCircle2
 } from 'lucide-react';
 import { queryAuraCommander, executeAuraAction } from '../../services/sovereignCommandService';
+import { cloudSpeechAllowed } from '../../services/speechConsent.js';
 
 export default function AuraVoiceAssistantWindow({ openApp }) {
   const [messages, setMessages] = useState([
@@ -64,6 +65,7 @@ export default function AuraVoiceAssistantWindow({ openApp }) {
     if (isListening) {
       recognitionRef.current.stop();
     } else {
+      if (!cloudSpeechAllowed()) return;
       try {
         recognitionRef.current.start();
       } catch (err) {
@@ -157,7 +159,7 @@ export default function AuraVoiceAssistantWindow({ openApp }) {
         {
           id: 'aura_err_' + Date.now(),
           sender: 'aura',
-          text: "I encountered an internal telemetry error processing that directive. All data remains air-gapped.",
+          text: "I hit an error processing that request. Nothing was sent anywhere.",
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);

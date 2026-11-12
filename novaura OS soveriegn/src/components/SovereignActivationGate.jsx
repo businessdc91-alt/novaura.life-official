@@ -159,7 +159,7 @@ export default function SovereignActivationGate({ onAuthorized }) {
           Sovereign Node Activation
         </h2>
         <p style={{ margin: '0.5rem 0 1.25rem 0', color: '#94a3b8', fontSize: '0.85rem', lineHeight: '1.5' }}>
-          Escape the cloud subscription treadmill. This workstation runs 100% on your own hardware with a single-time perpetual purchase—replacing over a dozen monthly SaaS fees with permanent, air-gapped sovereignty.
+          Escape the cloud subscription treadmill. This workstation runs 100% on your own hardware with a single-time perpetual purchase—replacing over a dozen monthly SaaS fees with software you own, local-first.
         </p>
 
         {/* 12 Subscriptions Eliminated Highlight */}

@@ -603,7 +603,7 @@ export default function AICoAuthorPanel({
         {panelTab === 'memories' && (
           <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
             <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>
-              Persistent RAG Memory: Facts, character rules, and style preferences stored safely in your air-gapped Dexie database for continuous narrative coherence.
+              Persistent RAG Memory: Facts, character rules, and style preferences stored on this PC in your local database for continuous narrative coherence.
             </div>
 
             {/* Add Memory Box */}

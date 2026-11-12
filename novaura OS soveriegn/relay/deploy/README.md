@@ -51,6 +51,14 @@ The first run takes a few minutes. It installs Rust and coturn, builds the relay
 
 If the public IP can't be detected, pass it: `sudo bash deploy/setup-server.sh --public-ip YOUR_IP`.
 
+**Update feed (in-app updates):** Sovereign checks `https://relay.novaura.life/sovereign/latest.json`. Point the DNS A record of `relay.novaura.life` at this server first, then run the script with `--update-domain relay.novaura.life`. It installs Caddy, which gets and renews the HTTPS certificate itself, and serves `/var/www/novaura/sovereign/`. On Oracle, also open TCP 80 and 443 in the security list. For each release, copy `latest.json`, the installer and its `.sig` from your PC's `release\` folder (after `scripts\publish-update.ps1`):
+
+```bash
+scp release/* ubuntu@YOUR_IP:/var/www/novaura/sovereign/
+```
+
+The installers are signed with your updater key, so the server can't slip in a changed one.
+
 **Updating:** upload the new `relay` folder and run the script again. It keeps the existing secret.
 
 ## 4. Point Sovereign at it

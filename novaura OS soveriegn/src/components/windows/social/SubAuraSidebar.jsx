@@ -11,8 +11,6 @@ const SUB_AURA_DATA = {
     title: 'r/general',
     tagline: 'Main Sovereign Swarm Wall',
     description: 'The open sovereign commons for general node transmissions, status updates, and peer discoveries across the local and wide-area mesh.',
-    members: '12.4k Nodes',
-    online: '418 Active',
     rules: [
       'Authentic Machine-to-Machine transmissions only.',
       'Cryptographically signed packets; zero spoofing.',
@@ -24,8 +22,6 @@ const SUB_AURA_DATA = {
     title: 'r/local-llms',
     tagline: 'Local Model Engineering & Quants',
     description: 'High-performance offline inference, GGUF quants, MoE sparse activation architectures, and Ollama/LM Studio optimizations.',
-    members: '8.9k Nodes',
-    online: '342 Active',
     rules: [
       'Include quant format & hardware specs in benchmark posts.',
       'Zero cloud dependency requirement for local tagged posts.',
@@ -37,8 +33,6 @@ const SUB_AURA_DATA = {
     title: 'r/comfy-art',
     tagline: 'Diffusion, ComfyUI & Wan 2.1 Video',
     description: 'Creative visual neural synthesis, node graph workflows, LoRA training, and generative art pipelines directly on local GPUs.',
-    members: '6.2k Nodes',
-    online: '215 Active',
     rules: [
       'Attach workflow JSON or node screenshot with media posts.',
       'Credit base checkpoints and LoRA models used.',
@@ -50,8 +44,6 @@ const SUB_AURA_DATA = {
     title: 'r/sovereign-mesh',
     tagline: 'Decentralized P2P Networking & Protocols',
     description: 'TCP peer socket topologies, UDP LAN discovery beacons, relay store-and-forward outboxes, and Web-of-Trust cryptosystems.',
-    members: '5.1k Nodes',
-    online: '189 Active',
     rules: [
       'Prioritize privacy-preserving E2EE architectures.',
       'Report network latency and relay throughput anomalies.',
@@ -63,10 +55,8 @@ const SUB_AURA_DATA = {
     title: 'r/novadev',
     tagline: 'Sovereign OS Kernel & Architecture',
     description: 'Tauri Rust native bridges, Dexie private cloud engines, sandboxed .nova sites, and universal IDE tooling.',
-    members: '3.8k Nodes',
-    online: '124 Active',
     rules: [
-      'Follow zero-leak air-gapped security protocols.',
+      'Never post keys, passwords or private data about other people.',
       'Post clean, typed code snippets and diffs.',
       'Verify builds across Linux, Windows and macOS.',
     ],
@@ -76,8 +66,6 @@ const SUB_AURA_DATA = {
     title: 'r/show-and-tell',
     tagline: 'Peer Project Showcases & Demonstrations',
     description: 'Showcase your local software creations, AI workflows, musical compositions, and sovereign manuscripts to the network.',
-    members: '4.5k Nodes',
-    online: '160 Active',
     rules: [
       'Provide interactive demo or playable media preview.',
       'Be welcoming to novice sovereign node builders.',
@@ -243,7 +231,7 @@ export default function SubAuraSidebar({
         </div>
       </div>
 
-      {/* Sovereign Air-Gapped Network Guarantee Badge */}
+      {/* Where social data lives */}
       <div
         style={{
           backgroundColor: 'rgba(2,6,23,0.5)',
@@ -259,7 +247,7 @@ export default function SubAuraSidebar({
         <div style={{ fontSize: '0.68rem', color: '#94a3b8', lineHeight: 1.35 }}>
           <strong style={{ color: '#10b981' }}>100% User-Owned Data</strong>
           <br />
-          All social posts, videos, and comments live in your local Dexie private cloud and sync purely P2P.
+          All social posts, videos, and comments live in the local database on this PC and sync peer to peer.
         </div>
       </div>
 

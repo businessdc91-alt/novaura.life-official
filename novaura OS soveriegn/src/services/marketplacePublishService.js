@@ -22,90 +22,6 @@ export const MARKETPLACE_CATEGORIES = [
   { id: 'assets', label: '3D Models & UI Design Assets', icon: 'Layers' },
 ];
 
-// Curated sovereign starter ecosystem creations (always available offline)
-export const STARTER_MARKETPLACE_ITEMS = [
-  {
-    id: 'pub_godot_rpg_controller',
-    title: 'AuraQuest: 28-Skill RPG Character Controller',
-    category: 'games',
-    authorHandle: '@sovereign_dev',
-    version: '1.4.0',
-    license: 'MIT / Sovereign Open',
-    price: 0,
-    isFreeSovereign: true,
-    downloadCount: 384,
-    rating: 4.9,
-    description: 'Complete Godot 4 GDScript character controller featuring stamina, 28 combat skills, state machine, and local AI dialogue hook.',
-    tags: ['godot4', 'gdscript', 'rpg', 'game-dev'],
-    payloadSnippet: 'extends CharacterBody3D\n# Complete AuraQuest 28-Skill Controller',
-    publishedAt: 1729000000000,
-  },
-  {
-    id: 'pub_sovereign_epics_manuscript',
-    title: 'The Sovereign Node: Decentralized Civilization',
-    category: 'books',
-    authorHandle: '@philosopher_node',
-    version: '2.0.1',
-    license: 'Creative Commons BY-SA',
-    price: 0,
-    isFreeSovereign: true,
-    downloadCount: 612,
-    rating: 5.0,
-    description: 'A 14-chapter philosophical and technical treatise on sovereign private compute, air-gapped local intelligence, and post-cloud society.',
-    tags: ['literature', 'word-studio', 'manifesto', 'sovereign'],
-    payloadSnippet: '# The Sovereign Node\n## Chapter 1: The Reclamation of Compute',
-    publishedAt: 1729100000000,
-  },
-  {
-    id: 'pub_fastapi_ollama_blueprint',
-    title: 'Ultra-Fast Python 3.12 FastAPI + Ollama Streaming Core',
-    category: 'blueprints',
-    authorHandle: '@cybeni_master',
-    version: '3.1.0',
-    license: 'Apache 2.0',
-    price: 0,
-    isFreeSovereign: true,
-    downloadCount: 940,
-    rating: 4.8,
-    description: 'Production-ready FastAPI backend with Pydantic v2 schemas, token streaming SSE, and local Ollama / LM Studio failover.',
-    tags: ['python', 'fastapi', 'ollama', 'cybeni'],
-    payloadSnippet: 'from fastapi import FastAPI\n# Production Cybeni Core',
-    publishedAt: 1729200000000,
-  },
-  {
-    id: 'pub_synthwave_soundtrack',
-    title: 'Neon Orbit: 5-Track Sovereign Cyberpunk Synth OST',
-    category: 'media',
-    authorHandle: '@sound_architect',
-    version: '1.0.0',
-    license: 'Royalty-Free Open Music',
-    price: 0,
-    isFreeSovereign: true,
-    downloadCount: 520,
-    rating: 4.9,
-    description: 'High-energy cyberpunk instrumental OST generated with neural audio synthesizers. Ready for game backgrounds and stream overlays.',
-    tags: ['music', 'suno', 'synthwave', 'audio'],
-    payloadSnippet: 'Audio Album: Neon Orbit (Lossless FLAC & MP3)',
-    publishedAt: 1729300000000,
-  },
-  {
-    id: 'pub_cyberpunk_ui_tokens',
-    title: 'Cyberpunk Neon Glass React 19 UI Kit',
-    category: 'assets',
-    authorHandle: '@ui_artisan',
-    version: '2.2.0',
-    license: 'MIT',
-    price: 0,
-    isFreeSovereign: true,
-    downloadCount: 1120,
-    rating: 4.9,
-    description: 'Complete CSS Variable design tokens and React 19 components: glowing cards, sovereign data tables, and glassmorphic dialogs.',
-    tags: ['react19', 'tailwind', 'ui-kit', 'cyberpunk'],
-    payloadSnippet: ':root { --color-neon-cyan: #06b6d4; }',
-    publishedAt: 1729400000000,
-  },
-];
-
 class MarketplacePublishService {
   constructor() {
     this.subscribers = new Set();
@@ -123,7 +39,7 @@ class MarketplacePublishService {
   }
 
   /**
-   * Fetch all marketplace publications (starter items + user published + mesh received)
+   * Fetch all marketplace publications (user published + mesh received)
    */
   async getAllListings(category = 'all', search = '') {
     let localItems = [];
@@ -133,7 +49,7 @@ class MarketplacePublishService {
       console.warn('Could not read marketplace_publications from DB:', e);
     }
 
-    const combined = [...localItems, ...STARTER_MARKETPLACE_ITEMS];
+    const combined = localItems;
     // Deduplicate by ID
     const uniqueMap = new Map();
     combined.forEach(item => uniqueMap.set(item.id, item));

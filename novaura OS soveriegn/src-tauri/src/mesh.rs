@@ -48,7 +48,7 @@ fn save_relay_setting(relay_address: &Option<String>) {
 }
 /// One packet at most; files of any size travel as a series of chunk packets.
 pub const MAX_PACKET_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_PEERS_PER_ROOM: usize = 100;
+pub const MAX_PEERS_PER_ROOM: usize = 512;
 pub const MAX_CONCURRENT_SOCKETS_PER_IP: usize = 8;
 pub const RELAY_OUTBOUND_QUEUE: usize = 256;
 /// Unsent bytes allowed in the relay tunnel before a send waits, so a big upload
@@ -71,6 +71,9 @@ pub const MAX_LAN_PEERS: usize = 256;
 /// Packet IDs remembered for duplicate detection. Each is kept for the drift
 /// window, after which a replay fails the timestamp check anyway.
 pub const MAX_SEEN_PACKETS: usize = 200_000;
+/// One sender's share of that within the drift window (about 66 packets a second
+/// sustained, far above any real use, transfers included).
+pub const MAX_SEEN_PER_SENDER: usize = 20_000;
 /// Packets and beacons more than this far from the local clock are dropped.
 pub const MAX_CLOCK_DRIFT_MS: u64 = 300_000;
 pub const DIRECT_CONNECT_TIMEOUT_SECS: u64 = 3;
@@ -565,6 +568,8 @@ struct MeshInner {
     pub peers: HashMap<String, MeshPeer>,
     /// "sender|packet id" -> the packet's timestamp, for duplicate detection.
     pub seen_packet_ids: HashMap<String, u64>,
+    /// How many of those each sender has, so one sender can't fill the table for everyone.
+    seen_per_sender: HashMap<String, usize>,
     /// Node ID -> timestamp of the newest beacon accepted for it.
     beacon_seen: HashMap<String, u64>,
     /// No relay login before this time (set when the relay says the ID is in use elsewhere).
@@ -583,6 +588,18 @@ impl MeshInner {
     /// Whether this node answers for `id` (its own ID or an alias).
     fn is_mine(&self, id: &str) -> bool {
         self.keys.iter().any(|k| k.node_id == id)
+    }
+
+    /// Forgets packet IDs past the drift window (a packet that old fails the
+    /// timestamp check anyway) and recounts the rest per sender.
+    fn prune_seen(&mut self, now: u64) {
+        self.seen_packet_ids.retain(|_, ts| *ts + MAX_CLOCK_DRIFT_MS >= now);
+        self.seen_per_sender.clear();
+        for key in self.seen_packet_ids.keys() {
+            if let Some((sender, _)) = key.split_once('|') {
+                *self.seen_per_sender.entry(sender.to_string()).or_insert(0) += 1;
+            }
+        }
     }
 }
 
@@ -616,6 +633,7 @@ impl MeshManager {
             wan_ip: "0.0.0.0".to_string(),
             peers: HashMap::new(),
             seen_packet_ids: HashMap::new(),
+            seen_per_sender: HashMap::new(),
             beacon_seen: HashMap::new(),
             relay_retry_at_ms: 0,
             relay_address: load_relay_setting(),
@@ -1281,7 +1299,7 @@ impl MeshManager {
 
                 // A packet older than the drift window fails the timestamp check, so
                 // its ID no longer needs remembering; nor does a beacon's.
-                state.seen_packet_ids.retain(|_, ts| *ts + MAX_CLOCK_DRIFT_MS >= now);
+                state.prune_seen(now);
                 state.beacon_seen.retain(|_, ts| *ts + MAX_CLOCK_DRIFT_MS >= now);
             }
 
@@ -1438,13 +1456,18 @@ impl MeshManager {
                 (true, false)
             } else {
                 if state.seen_packet_ids.len() >= MAX_SEEN_PACKETS {
-                    state.seen_packet_ids.retain(|_, ts| *ts + MAX_CLOCK_DRIFT_MS >= now);
+                    state.prune_seen(now);
                     if state.seen_packet_ids.len() >= MAX_SEEN_PACKETS {
                         log::warn!("[SovereignMesh] Dropped packet {}: too many packets in the last few minutes.", packet.id);
                         return;
                     }
                 }
+                if state.seen_per_sender.get(&packet.sender_id).copied().unwrap_or(0) >= MAX_SEEN_PER_SENDER {
+                    log::warn!("[SovereignMesh] Dropped packet {}: {} sent too many in the last few minutes.", packet.id, packet.sender_id);
+                    return;
+                }
                 state.seen_packet_ids.insert(seen_key, packet.timestamp_ms);
+                *state.seen_per_sender.entry(packet.sender_id.clone()).or_insert(0) += 1;
                 let matches_recipient = match packet.recipient_id.as_deref() {
                     Some(rec) => rec == "*" || state.is_mine(rec),
                     None => true,

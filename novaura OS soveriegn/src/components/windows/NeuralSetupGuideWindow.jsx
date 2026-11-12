@@ -89,7 +89,7 @@ export default function NeuralSetupGuideWindow({ onClose }) {
             </button>
           ))}
           <div style={{ marginTop: 'auto', padding: '0.75rem', backgroundColor: 'rgba(2,6,23,0.5)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', fontSize: '0.7rem', color: '#64748b' }}>
-            <div style={{ fontWeight: 600, color: '#38bdf8', marginBottom: '0.2rem' }}>Air-Gapped Guarantee</div>
+            <div style={{ fontWeight: 600, color: '#38bdf8', marginBottom: '0.2rem' }}>Local Models</div>
             All models run on your GPU/CPU. Zero data leaves your machine.
           </div>
         </div>

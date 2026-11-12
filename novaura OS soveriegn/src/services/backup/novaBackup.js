@@ -102,6 +102,7 @@ export async function restoreArchive(archive, { onStage } = {}) {
   } catch { /* storage full or blocked: the database restore still stands */ }
   // Refresh the sealed disk mirror now, so a crash before the next minute cannot bring back the old data.
   onStage?.('disk');
+  db._mirrorDirty = true;
   await db.mirrorToPhysicalDisk().catch(() => {});
   return { tables: names.length };
 }

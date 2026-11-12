@@ -142,7 +142,7 @@ export default function LiveVoiceWindow({ windowId, props, onClose }) {
 
           <div className="text-xs font-mono px-3 py-1 bg-slate-900 rounded-xl border border-slate-800 text-slate-300 flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Air-Gapped Speech</span>
+            <span>Voice input: Microsoft online speech</span>
           </div>
         </div>
       </div>

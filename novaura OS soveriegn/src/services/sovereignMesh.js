@@ -18,6 +18,7 @@ import {
 } from './meshSocial.js';
 import { isPopoutWindow } from './popoutWindows.js';
 import { meshNodeIdFor, meshNodeIdForPub } from './meshNodeIds.js';
+import { createInboundLimiter } from './meshInboundLimits.js';
 import { MESH_PAYLOAD_BYTES, formatBytes } from '../config/meshLimits.js';
 import {
   FEEDBACK_INBOX_PUBKEY,
@@ -379,6 +380,18 @@ export function getMeshNodeId() {
 
 // ── Inbound Packet Processor (Common to BroadcastChannel & Native TCP) ──────
 
+const _inboundLimiter = createInboundLimiter();
+const _throttleLogged = new Map(); // sender -> last time a drop was logged
+
+// One console line a minute per sender, however many packets it sends
+function noteThrottled(sender, type) {
+  const t = Date.now();
+  if (t - (_throttleLogged.get(sender) || 0) < 60_000) return;
+  if (_throttleLogged.size > 1000) _throttleLogged.clear();
+  _throttleLogged.set(sender, t);
+  console.warn(`[SovereignMesh] ${sender} is over its packet budget (${type}); its packets are dropped for now.`);
+}
+
 function handleIncomingMeshPacket(type, payload, packet = {}) {
   if (!payload && !packet) return;
 
@@ -402,6 +415,16 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
   if (!isInfraPacket && !verifyPacketSignature(packet)) {
     console.warn(`[SovereignMesh] SECURITY ALERT: Dropped unverified/forged packet ${packet?.id || 'unknown'} of type ${type}`);
     return;
+  }
+
+  // Per-sender budgets (meshInboundLimits.js); this node's own packets are never limited
+  if (!isInfraPacket) {
+    const sender = verifiedSenderDid(packet);
+    const own = (getLocalIdentity()?.publicKey || '').replace(/^0x/, '').toLowerCase();
+    if (sender !== `did:nova:${own}` && !_inboundLimiter.allow(sender, type)) {
+      noteThrottled(sender, type);
+      return;
+    }
   }
 
   switch (type) {
@@ -459,7 +482,8 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_POSTS_REQUEST': {
-      if (packet.sender_id) sendSocialBatches(packet.sender_id, 'MESH_POSTS_RESPONSE', 'posts', shareablePosts(40));
+      const since = Number(payload?.since) || 0;
+      if (packet.sender_id) sendSocialBatches(packet.sender_id, 'MESH_POSTS_RESPONSE', 'posts', shareablePosts(40, since), syncAnswerBytes(packet));
       break;
     }
 
@@ -485,7 +509,7 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
     }
 
     case 'MESH_STORIES_REQUEST': {
-      if (packet.sender_id) sendSocialBatches(packet.sender_id, 'MESH_STORIES_RESPONSE', 'stories', getStories().filter(st => st.sig).map(({ reactions: _r, myReaction: _m, viewed: _v, authorNodeId: _a, ...st }) => st));
+      if (packet.sender_id) sendSocialBatches(packet.sender_id, 'MESH_STORIES_RESPONSE', 'stories', getStories().filter(st => st.sig).map(({ reactions: _r, myReaction: _m, viewed: _v, authorNodeId: _a, ...st }) => st), syncAnswerBytes(packet));
       break;
     }
 
@@ -630,7 +654,8 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
 
     case 'MESH_INFERENCE_RESPONSE': {
       const { jobId, answer, model, durationMs, providerName } = payload || packet?.payload || {};
-      if (jobId) {
+      // Only answers to a job this node asked for (and is still waiting on)
+      if (jobId && _pendingLegacyJobs.has(jobId)) {
         window.dispatchEvent(new CustomEvent('novaura:peer_inference_response', {
           detail: { jobId, answer, model, durationMs, providerName }
         }));
@@ -652,11 +677,15 @@ function handleIncomingMeshPacket(type, payload, packet = {}) {
       const room = payload?.room || '#general';
       if (peerId) {
         flushOutboxForPeer(peerId);
-        dispatchMeshToast({
-          type: 'peer',
-          title: 'Peer Joined Swarm',
-          message: `${peerName} connected to ${room}`
-        });
+        // Only for people in your contacts: in a busy room every join (and every
+        // reconnect) would otherwise pop up a toast.
+        (async () => {
+          const contacts = await db.contacts.toArray();
+          const contact = contacts.find(c => c.nodeId === peerId || meshNodeIdFor(c.publicKey) === peerId);
+          if (!contact || contact.trustTier === 'blocked') return;
+          const name = String(contact.name || contact.displayName || contact.handle || peerName).slice(0, 60);
+          dispatchMeshToast({ type: 'peer', title: `${name} is online`, message: `Connected to ${String(room).slice(0, 40)}` });
+        })().catch(() => {});
       }
       break;
     }
@@ -1414,9 +1443,12 @@ export async function switchSwarmRoom(room) {
 }
 
 export function requestRoomSocialSync() {
+  // Peers answer with posts newer than this, so a sync only moves what's new
+  const newest = (_socialCache.posts || []).reduce((t, p) => Math.max(t, Date.parse(p.timestamp) || 0), 0);
   broadcastMeshPacket('MESH_POSTS_REQUEST', {
     requesterId: getLocalIdentity()?.publicKey || 'local-op',
     timestamp: Date.now(),
+    since: newest ? newest - SYNC_OVERLAP_MS : 0,
   });
   requestStoriesSync();
 }
@@ -1727,24 +1759,36 @@ function admitIncomingComment(raw) {
 }
 
 /** Signed posts this node can pass on (newest first): its own and verified ones from others. */
-function shareablePosts(limit) {
+function shareablePosts(limit, since = 0) {
   const mine = myDid();
   return _socialCache.posts
-    .filter(p => p.sig && (p.authorDid === mine || admitSocialPost(p)))
+    .filter(p => p.sig && (p.authorDid === mine || admitSocialPost(p)) && !(Date.parse(p.timestamp) <= since))
     .slice(0, limit)
     .map(wireSocialPost);
 }
 
 // One feed/stories sync answer per requester every 30 s, in packets that fit the
-// relay, newest first and at most SOCIAL_LIMITS.syncBytes in all.
+// relay, newest first and at most `totalBytes` in all.
 const _socialSyncServedAt = new Map();
-function sendSocialBatches(requesterId, type, key, items) {
+function sendSocialBatches(requesterId, type, key, items, totalBytes = SOCIAL_LIMITS.syncBytes) {
   const last = _socialSyncServedAt.get(`${type}:${requesterId}`) || 0;
   if (Date.now() - last < 30000 || !items.length) return;
   _socialSyncServedAt.set(`${type}:${requesterId}`, Date.now());
-  for (const batch of socialPacketBatches(items, SOCIAL_LIMITS.packetBudget, SOCIAL_LIMITS.syncBytes)) {
+  for (const batch of socialPacketBatches(items, SOCIAL_LIMITS.packetBudget, totalBytes)) {
     sendDirectMeshPacket(requesterId, type, { [key]: batch });
   }
+}
+
+// A sync request sent to the whole room is answered by every node in it, mostly
+// with the same posts, so each answer to one is kept small; a request sent to one
+// node gets the full SOCIAL_LIMITS.syncBytes.
+const ROOM_SYNC_BYTES = 8 * 1024 * 1024;
+// A sync asks for posts from a day before the newest one it has, which picks up
+// recent comments and votes on recent posts as well.
+const SYNC_OVERLAP_MS = 24 * 3600_000;
+
+function syncAnswerBytes(packet) {
+  return !packet?.recipient_id || packet.recipient_id === '*' ? ROOM_SYNC_BYTES : SOCIAL_LIMITS.syncBytes;
 }
 
 export function getSocialProfile() {
@@ -2289,9 +2333,11 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
+      _pendingLegacyJobs.delete(jobId);
       window.removeEventListener('novaura:peer_inference_response', onResponse);
     };
 
+    _pendingLegacyJobs.add(jobId);
     window.addEventListener('novaura:peer_inference_response', onResponse);
 
     timer = setTimeout(() => {
@@ -2323,6 +2369,9 @@ export async function requestPeerInference(targetOrPeerId = null, options = {}) 
     }
   });
 }
+
+// Legacy swarm jobs this node sent and is still waiting on
+const _pendingLegacyJobs = new Set();
 
 const LEGACY_INFERENCE_MAX_PROMPT = 1_000_000;
 const LEGACY_INFERENCE_MAX_TOKENS = 1024;

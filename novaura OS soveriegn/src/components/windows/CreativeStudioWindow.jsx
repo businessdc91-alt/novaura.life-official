@@ -346,7 +346,7 @@ export default function CreativeStudioWindow() {
   const memeCanvasRef = useRef(null);
   const [selectedMemeTemplate, setSelectedMemeTemplate] = useState(MEME_TEMPLATES[0]);
   const [memeTopText, setMemeTopText] = useState('WHEN YOU RUN YOUR AI');
-  const [memeBottomText, setMemeBottomText] = useState('100% LOCAL & AIR-GAPPED');
+  const [memeBottomText, setMemeBottomText] = useState('100% LOCAL & PRIVATE');
 
   useEffect(() => {
     renderMeme();

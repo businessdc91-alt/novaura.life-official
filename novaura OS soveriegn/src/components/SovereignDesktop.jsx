@@ -33,6 +33,7 @@ import { Phone, PhoneCall, PhoneOff, Video, ChevronUp, ChevronDown, Sparkles } f
 import SovereignLeftSidebar from './SovereignLeftSidebar';
 import SovereignRightSidebar from './SovereignRightSidebar';
 import SovereignChatBar from './SovereignChatBar';
+import { Toaster } from 'sonner';
 import { useGraphics } from '../contexts/GraphicsContext';
 
 const VALID_THEMES = ['cosmic', 'blue-night', 'matrix', 'stormy', 'cyberstorm', 'aurora', 'meshwater', 'blaze', 'light'];
@@ -525,6 +526,10 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
           </div>
         </div>
       )}
+
+      {/* Short app messages and approval prompts from apps that use sonner
+          (NovaHub, the chat bar's "Authorize / Deny") */}
+      <Toaster theme="dark" position="bottom-left" closeButton />
 
       {/* 10. Swarm Mesh Real-Time Notification Toasts Stack */}
       {meshToasts.length > 0 && (

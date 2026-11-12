@@ -36,6 +36,13 @@ const ALLOWED_ATTRS = new Set([
 const SAFE_LINK_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
 const SAFE_DATA_IMAGE = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/=\s]+$/i;
 const UNSAFE_STYLE = /url\s*\(|expression\s*\(|javascript:|vbscript:|behavior|binding|@import|\\/i;
+// Content is drawn inside the OS's own page, so it may not lift itself out of its
+// box: a fixed, full-screen layer could pose as an OS dialog (asking for a vault
+// passphrase, say). Positioning, stacking and transforms are dropped, both as
+// styles and as the OS's own utility classes (offsets such as top-0 do nothing
+// once the positioning itself is gone).
+const POSITIONING_STYLE = /^\s*(position|z-index|inset|transform|translate|scale|rotate)\s*:/i;
+const POSITIONING_CLASS = /^-?(fixed|absolute|sticky|relative|z|translate|scale|rotate|transform|w-screen|h-screen|min-h-screen|min-w-screen|max-h-screen|max-w-screen)(-|$)/;
 
 /** Strip characters browsers ignore inside a scheme ("java\nscript:") before testing it. */
 function normaliseUrl(value) {
@@ -59,12 +66,20 @@ function safeImageSrc(value, allowRemoteImages) {
   return null;
 }
 
-function cleanStyle(value) {
+export function cleanStyle(value) {
   return String(value || '')
     .split(';')
     .map((d) => d.trim())
-    .filter((d) => d && !UNSAFE_STYLE.test(d))
+    .filter((d) => d && !UNSAFE_STYLE.test(d) && !POSITIONING_STYLE.test(d))
     .join('; ');
+}
+
+// Variants such as md:fixed or hover:z-50 count as the utility they apply
+export function cleanClass(value) {
+  return String(value || '')
+    .split(/\s+/)
+    .filter((c) => c && !POSITIONING_CLASS.test(c.slice(c.lastIndexOf(':') + 1).replace(/^!/, '')))
+    .join(' ');
 }
 
 function cleanNode(node, doc, allowRemoteImages) {
@@ -104,6 +119,10 @@ function cleanNode(node, doc, allowRemoteImages) {
         const style = cleanStyle(attr.value);
         if (style) child.setAttribute('style', style);
         else child.removeAttribute('style');
+      } else if (name === 'class') {
+        const cls = cleanClass(attr.value);
+        if (cls) child.setAttribute('class', cls);
+        else child.removeAttribute('class');
       }
     }
     if (tag === 'A') child.setAttribute('rel', 'noopener noreferrer');

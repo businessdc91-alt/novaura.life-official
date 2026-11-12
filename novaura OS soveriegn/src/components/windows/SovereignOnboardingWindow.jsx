@@ -1416,14 +1416,14 @@ export default function SovereignOnboardingWindow() {
                 {
                   id: 'nova_hub',
                   name: 'Nova Hub Decentralized Git Forge',
-                  desc: 'GitHub-clone running on local IndexedDB. Real SHA-256 DAG commit hashing, line diffs, pull requests, and air-gapped bundles.',
+                  desc: 'GitHub-clone running on local IndexedDB. Real SHA-256 DAG commit hashing, line diffs, pull requests, and offline bundles.',
                   icon: GitPullRequest,
                   color: '#38bdf8',
                 },
                 {
                   id: 'literature',
                   name: 'Word Studio & Literature IDE',
-                  desc: 'Air-gapped manuscript writer, real-time word counting, Chapter outline tree, and local TF-IDF semantic RAG.',
+                  desc: 'Offline manuscript writer, real-time word counting, Chapter outline tree, and local TF-IDF semantic RAG.',
                   icon: BookOpen,
                   color: '#34d399',
                 },
