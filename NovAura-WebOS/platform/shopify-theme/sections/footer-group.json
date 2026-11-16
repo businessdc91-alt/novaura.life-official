@@ -1,0 +1,39 @@
+{
+  "type": "footer",
+  "name": "Footer Group",
+  "sections": {
+    "footer": {
+      "type": "novaura-footer",
+      "settings": {
+        "logo_text": "Catalyst's Corner",
+        "tagline": "Home wares & tech items galore. Curated essentials for the modern lifestyle.",
+        "show_social": true
+      },
+      "blocks": {
+        "menu_1": {
+          "type": "link_list",
+          "settings": {
+            "heading": "Shop",
+            "menu": "footer"
+          }
+        },
+        "menu_2": {
+          "type": "link_list",
+          "settings": {
+            "heading": "Support",
+            "menu": "footer"
+          }
+        },
+        "contact": {
+          "type": "text",
+          "settings": {
+            "heading": "Contact",
+            "text": "<p>Have questions?<br>Email us at support@catalystscorner.com</p>"
+          }
+        }
+      },
+      "block_order": ["menu_1", "menu_2", "contact"]
+    }
+  },
+  "order": ["footer"]
+}

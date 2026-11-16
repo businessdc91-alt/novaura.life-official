@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shop - Premium Products</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary: #4C65FF;
+            --primary-light: #7B8FFF;
+            --dark: #07080D;
+            --light: #F4F6FF;
+            --gray: #A7B0C8;
+            --success: #10B981;
+            --card-bg: #0F111A;
+            --border: #1E2130;
+        }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: var(--dark);
+            color: var(--light);
+            line-height: 1.6;
+        }
+        
+        /* Header */
+        header {
+            background: rgba(7, 8, 13, 0.95);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 5%;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--light);
+            text-decoration: none;
+        }
+        
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+        
+        .nav-links a {
+            color: var(--gray);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: var(--light);
+        }
+        
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+        
+        .cart-btn {
+            position: relative;
+            background: none;
+            border: none;
+            color: var(--light);
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+        
+        .cart-count {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: var(--primary);
+            color: white;
+            font-size: 0.7rem;
+            font-weight: bold;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Hero */
+        .hero {
+            text-align: center;
+            padding: 5rem 5% 3rem;
+            background: linear-gradient(180deg, rgba(76, 101, 255, 0.1) 0%, transparent 100%);
+        }
+        
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--light) 0%, var(--primary-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--gray);
+            max-width: 600px;
+            margin: 0 auto 2rem;
+        }
+        
+        /* Search & Filter */
+        .filter-section {
+            padding: 2rem 5%;
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .search-box {
+            position: relative;
+            flex: 1;
+            max-width: 400px;
+        }
+        
+        .search-box input {
+            width: 100%;
+            padding: 0.875rem 1rem 0.875rem 3rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--light);
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        
+        .search-box input:focus {
+            border-color: var(--primary);
+        }
+        
+        .search-icon {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--gray);
+        }
+        
+        .filter-tags {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        
+        .filter-tag {
+            padding: 0.5rem 1rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            color: var(--gray);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .filter-tag:hover,
+        .filter-tag.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+        
+        /* Products Grid */
+        .products-section {
+            padding: 2rem 5% 5rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+        
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 2rem;
+        }
+        
+        .product-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .product-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(76, 101, 255, 0.15);
+        }
+        
+        .product-image {
+            aspect-ratio: 1;
+            background: linear-gradient(135deg, #1a1d2e 0%, #0F111A 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 4rem;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .product-badge {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            padding: 0.25rem 0.75rem;
+            background: var(--success);
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 20px;
+        }
+        
+        .product-badge.sale {
+            background: #EF4444;
+        }
+        
+        .product-info {
+            padding: 1.5rem;
+        }
+        
+        .product-category {
+            font-size: 0.75rem;
+            color: var(--primary-light);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .product-name {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .product-description {
+            font-size: 0.875rem;
+            color: var(--gray);
+            margin-bottom: 1rem;
+            line-height: 1.5;
+        }
+        
+        .product-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .product-price {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .price-current {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--light);
+        }
+        
+        .price-original {
+            font-size: 0.875rem;
+            color: var(--gray);
+            text-decoration: line-through;
+        }
+        
+        .add-to-cart {
+            padding: 0.75rem 1.5rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .add-to-cart:hover {
+            background: var(--primary-light);
+        }
+        
+        /* Features */
+        .features {
+            padding: 5rem 5%;
+            background: var(--card-bg);
+            border-top: 1px solid var(--border);
+        }
+        
+        .features-grid {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 3rem;
+            text-align: center;
+        }
+        
+        .feature {
+            padding: 1rem;
+        }
+        
+        .feature-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            font-size: 1.5rem;
+        }
+        
+        .feature h3 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .feature p {
+            color: var(--gray);
+            font-size: 0.875rem;
+        }
+        
+        /* Footer */
+        footer {
+            padding: 3rem 5%;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--gray);
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+            
+            .nav-links {
+                display: none;
+            }
+            
+            .products-grid {
+                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+                gap: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <nav>
+            <a href="#" class="logo">
+                <div class="logo-icon">S</div>
+                ShopNova
+            </a>
+            
+            <ul class="nav-links">
+                <li><a href="#">New Arrivals</a></li>
+                <li><a href="#">Categories</a></li>
+                <li><a href="#">Deals</a></li>
+                <li><a href="#">About</a></li>
+            </ul>
+            
+            <div class="nav-actions">
+                <button class="cart-btn">
+                    <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path d="M9 2L6 7H3L5.5 20H18.5L21 7H18L15 2H9Z"/>
+                        <path d="M9 11V17M15 11V17"/>
+                    </svg>
+                    <span class="cart-count">3</span>
+                </button>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero">
+        <h1>Curated Premium Products</h1>
+        <p>Discover our handpicked collection of high-quality items designed to elevate your everyday experience.</p>
+    </section>
+
+    <!-- Filter Section -->
+    <section class="filter-section">
+        <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" placeholder="Search products...">
+        </div>
+        
+        <div class="filter-tags">
+            <button class="filter-tag active">All</button>
+            <button class="filter-tag">Electronics</button>
+            <button class="filter-tag">Fashion</button>
+            <button class="filter-tag">Home</button>
+            <button class="filter-tag">Accessories</button>
+        </div>
+    </section>
+
+    <!-- Products -->
+    <section class="products-section">
+        <h2 class="section-title">Featured Products</h2>
+        
+        <div class="products-grid">
+            <!-- Product 1 -->
+            <div class="product-card">
+                <div class="product-image">
+                    <span>🎧</span>
+                    <span class="product-badge sale">-20%</span>
+                </div>
+                <div class="product-info">
+                    <div class="product-category">Electronics</div>
+                    <h3 class="product-name">Premium Wireless Headphones</h3>
+                    <p class="product-description">Active noise cancellation with 30-hour battery life and crystal-clear sound.</p>
+                    <div class="product-footer">
+                        <div class="product-price">
+                            <span class="price-current">$199</span>
+                            <span class="price-original">$249</span>
+                        </div>
+                        <button class="add-to-cart">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 2 -->
+            <div class="product-card">
+                <div class="product-image">
+                    <span>⌚</span>
+                    <span class="product-badge">New</span>
+                </div>
+                <div class="product-info">
+                    <div class="product-category">Wearables</div>
+                    <h3 class="product-name">Smart Watch Pro</h3>
+                    <p class="product-description">Track your fitness, sleep, and health with our most advanced wearable yet.</p>
+                    <div class="product-footer">
+                        <div class="product-price">
+                            <span class="price-current">$299</span>
+                        </div>
+                        <button class="add-to-cart">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 3 -->
+            <div class="product-card">
+                <div class="product-image">
+                    <span>👜</span>
+                </div>
+                <div class="product-info">
+                    <div class="product-category">Fashion</div>
+                    <h3 class="product-name">Designer Leather Bag</h3>
+                    <p class="product-description">Handcrafted from genuine Italian leather. Timeless elegance meets functionality.</p>
+                    <div class="product-footer">
+                        <div class="product-price">
+                            <span class="price-current">$189</span>
+                        </div>
+                        <button class="add-to-cart">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 4 -->
+            <div class="product-card">
+                <div class="product-image">
+                    <span>☕</span>
+                    <span class="product-badge">Best Seller</span>
+                </div>
+                <div class="product-info">
+                    <div class="product-category">Home</div>
+                    <h3 class="product-name">Smart Coffee Maker</h3>
+                    <p class="product-description">Brew the perfect cup every time with app control and scheduling.</p>
+                    <div class="product-footer">
+                        <div class="product-price">
+                            <span class="price-current">$149</span>
+                        </div>
+                        <button class="add-to-cart">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 5 -->
+            <div class="product-card">
+                <div class="product-image">
+                    <span>💡</span>
+                    <span class="product-badge sale">-15%</span>
+                </div>
+                <div class="product-info">
+                    <div class="product-category">Smart Home</div>
+                    <h3 class="product-name">Smart Light System</h3>
+                    <p class="product-description">Transform your space with millions of colors and voice control compatibility.</p>
+                    <div class="product-footer">
+                        <div class="product-price">
+                            <span class="price-current">$89</span>
+                            <span class="price-original">$105</span>
+                        </div>
+                        <button class="add-to-cart">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Product 6 -->
+            <div class="product-card">
+                <div class="product-image">
+                    <span>🎒</span>
+                    <span class="product-badge">New</span>
+                </div>
+                <div class="product-info">
+                    <div class="product-category">Accessories</div>
+                    <h3 class="product-name">Tech Backpack</h3>
+                    <p class="product-description">Water-resistant with laptop compartment and USB charging port.</p>
+                    <div class="product-footer">
+                        <div class="product-price">
+                            <span class="price-current">$79</span>
+                        </div>
+                        <button class="add-to-cart">Add to Cart</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features">
+        <div class="features-grid">
+            <div class="feature">
+                <div class="feature-icon">🚚</div>
+                <h3>Free Shipping</h3>
+                <p>On all orders over $50. Express delivery available.</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🛡️</div>
+                <h3>Secure Payment</h3>
+                <p>256-bit SSL encryption for safe transactions.</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">↩️</div>
+                <h3>Easy Returns</h3>
+                <p>30-day hassle-free return policy on all items.</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">💬</div>
+                <h3>24/7 Support</h3>
+                <p>Our team is here to help you anytime, anywhere.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <p>&copy; 2025 ShopNova. Built with 💙 by NovAura.</p>
+    </footer>
+</body>
+</html>

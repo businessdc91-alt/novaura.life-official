@@ -1,0 +1,165 @@
+{% comment %}
+  NovAura Product Grid Section
+  Features: Animated cards, RGB hover effects, quick add to cart
+{% endcomment %}
+
+<section class="novaura-section">
+  <div class="container">
+    {% if section.settings.eyebrow != blank or section.settings.heading != blank %}
+      <div class="novaura-section__header">
+        {% if section.settings.eyebrow != blank %}
+          <span class="novaura-section__eyebrow">{{ section.settings.eyebrow }}</span>
+        {% endif %}
+        {% if section.settings.heading != blank %}
+          <h2 class="novaura-section__title">{{ section.settings.heading }}</h2>
+        {% endif %}
+        {% if section.settings.description != blank %}
+          <p class="novaura-section__description">{{ section.settings.description }}</p>
+        {% endif %}
+      </div>
+    {% endif %}
+    
+    {% assign collection = collections[section.settings.collection] %}
+    {% if collection != blank and collection.products.size > 0 %}
+      <div class="novaura-product-grid">
+        {% for product in collection.products limit: section.settings.products_to_show %}
+          <article class="novaura-product-card">
+            {% if product.compare_at_price > product.price %}
+              <span class="novaura-product-card__badge">Sale</span>
+            {% endif %}
+            
+            <a href="{{ product.url }}" class="novaura-product-card__image-wrapper">
+              {% if product.featured_image %}
+                <img 
+                  src="{{ product.featured_image | image_url: width: 600 }}" 
+                  alt="{{ product.featured_image.alt | escape }}"
+                  class="novaura-product-card__image"
+                  loading="lazy"
+                  width="600"
+                  height="600"
+                >
+              {% else %}
+                {{ 'product-1' | placeholder_svg_tag: 'novaura-product-card__image' }}
+              {% endif %}
+              
+              <div class="novaura-product-card__overlay">
+                <button 
+                  type="button"
+                  class="novaura-product-card__quick-add"
+                  {% if product.available %}
+                    data-product-id="{{ product.selected_or_first_available_variant.id }}"
+                  {% else %}
+                    disabled
+                  {% endif %}
+                >
+                  {% if product.available %}
+                    Quick Add
+                  {% else %}
+                    Sold Out
+                  {% endif %}
+                </button>
+              </div>
+            </a>
+            
+            <div class="novaura-product-card__info">
+              <h3 class="novaura-product-card__title">
+                <a href="{{ product.url }}">{{ product.title }}</a>
+              </h3>
+              
+              {% if product.type != blank %}
+                <span class="novaura-product-card__type">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                    <line x1="7" y1="7" x2="7.01" y2="7"/>
+                  </svg>
+                  {{ product.type }}
+                </span>
+              {% endif %}
+              
+              <div class="novaura-product-card__price">
+                <span class="novaura-product-card__price-current">
+                  {{ product.price | money }}
+                </span>
+                {% if product.compare_at_price > product.price %}
+                  <span class="novaura-product-card__price-compare">
+                    {{ product.compare_at_price | money }}
+                  </span>
+                {% endif %}
+              </div>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+      
+      {% if section.settings.show_view_all and collection.url != blank %}
+        <div style="text-align: center; margin-top: 4rem;">
+          <a href="{{ collection.url }}" class="novaura-button novaura-button--primary">
+            View All Products
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </a>
+        </div>
+      {% endif %}
+    {% else %}
+      <div style="text-align: center; padding: 6rem 0;">
+        <p style="color: var(--color-text-muted); font-size: 1.8rem;">
+          No products found in this collection.
+        </p>
+      </div>
+    {% endif %}
+  </div>
+</section>
+
+{% schema %}
+{
+  "name": "NovAura Product Grid",
+  "tag": "section",
+  "class": "section-novaura-products",
+  "settings": [
+    {
+      "type": "text",
+      "id": "eyebrow",
+      "label": "Eyebrow Text",
+      "default": "Featured"
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Trending Products"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "Hand-picked favorites from our curated collection"
+    },
+    {
+      "type": "collection",
+      "id": "collection",
+      "label": "Collection"
+    },
+    {
+      "type": "range",
+      "id": "products_to_show",
+      "min": 2,
+      "max": 12,
+      "step": 1,
+      "default": 8,
+      "label": "Products to show"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_view_all",
+      "default": true,
+      "label": "Show 'View All' button"
+    }
+  ],
+  "presets": [
+    {
+      "name": "NovAura Product Grid"
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,5 @@
+src/config/firebase.ts(16,12): error TS7005: Variable 'app' implicitly has an 'any' type.
+src/config/firebase.ts(17,12): error TS7005: Variable 'db' implicitly has an 'any' type.
+src/config/firebase.ts(18,12): error TS7005: Variable 'auth' implicitly has an 'any' type.
+src/config/firebase.ts(19,12): error TS7005: Variable 'storage' implicitly has an 'any' type.
+src/services/marketService.ts(3,44): error TS6133: 'setDoc' is declared but its value is never read.

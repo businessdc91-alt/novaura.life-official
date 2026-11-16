@@ -1,0 +1,213 @@
+{
+  "$schema": "./api-key-registry.schema.json",
+  "_description": "API Key Registry - Indirect key references for compliance. Actual keys stored in Firebase Functions config or Google Secret Manager only.",
+  "_policy": {
+    "no_hardcoded_keys": true,
+    "indirect_reference_required": true,
+    "audit_all_access": true,
+    "key_rotation_enforced": true
+  },
+  "version": "1.0.0",
+  "last_updated": "2026-04-01T20:30:00-05:00",
+  
+  "key_definitions": {
+    "ai_providers": {
+      "gemini": {
+        "key_id": "ai.gemini.primary",
+        "storage": {
+          "type": "firebase_config",
+          "path": "ai.gemini_api_key"
+        },
+        "rotation_policy": {
+          "frequency_days": 90,
+          "last_rotated": null,
+          "notify_before_days": 7
+        },
+        "usage_limits": {
+          "requests_per_minute": 60,
+          "requests_per_day": 10000,
+          "tokens_per_day": 1000000
+        },
+        "allowed_origins": ["*"],
+        "requires_auth": false,
+        "audit_level": "full"
+      },
+      "claude": {
+        "key_id": "ai.claude.primary",
+        "storage": {
+          "type": "firebase_config",
+          "path": "ai.claude_api_key"
+        },
+        "rotation_policy": {
+          "frequency_days": 90,
+          "last_rotated": null
+        },
+        "usage_limits": {
+          "requests_per_minute": 30,
+          "requests_per_day": 5000
+        },
+        "requires_auth": true,
+        "audit_level": "full"
+      },
+      "openai": {
+        "key_id": "ai.openai.primary",
+        "storage": {
+          "type": "firebase_config",
+          "path": "ai.openai_api_key"
+        },
+        "rotation_policy": {
+          "frequency_days": 90,
+          "last_rotated": null
+        },
+        "usage_limits": {
+          "requests_per_minute": 60,
+          "requests_per_day": 10000
+        },
+        "requires_auth": true,
+        "audit_level": "full"
+      },
+      "kimi": {
+        "key_id": "ai.kimi.primary",
+        "storage": {
+          "type": "firebase_config",
+          "path": "ai.kimi_api_key"
+        },
+        "rotation_policy": {
+          "frequency_days": 90,
+          "last_rotated": null
+        },
+        "usage_limits": {
+          "requests_per_minute": 60,
+          "requests_per_day": 10000
+        },
+        "requires_auth": false,
+        "audit_level": "full"
+      },
+      "vertex_ai": {
+        "key_id": "ai.vertex.primary",
+        "storage": {
+          "type": "firebase_config",
+          "path": "ai.vertex_api_key"
+        },
+        "additional_config": {
+          "project_id_path": "ai.vertex_project_id"
+        },
+        "rotation_policy": {
+          "frequency_days": 90,
+          "last_rotated": null
+        },
+        "usage_limits": {
+          "requests_per_minute": 30,
+          "requests_per_day": 5000
+        },
+        "requires_auth": false,
+        "audit_level": "full"
+      }
+    },
+    
+    "domain_services": {
+      "namecom": {
+        "key_id": "domains.namecom.api_token",
+        "storage": {
+          "type": "firebase_config",
+          "path": "domains.namecom_api_token"
+        },
+        "additional_config": {
+          "username_path": "domains.namecom_username"
+        },
+        "rotation_policy": {
+          "frequency_days": 180,
+          "last_rotated": null
+        },
+        "requires_auth": true,
+        "audit_level": "full"
+      }
+    },
+    
+    "payment_services": {
+      "stripe": {
+        "key_id": "payments.stripe.secret",
+        "storage": {
+          "type": "firebase_config",
+          "path": "stripe.secret_key"
+        },
+        "additional_config": {
+          "webhook_secret_path": "stripe.webhook_secret",
+          "publishable_key_path": "stripe.publishable_key"
+        },
+        "rotation_policy": {
+          "frequency_days": 90,
+          "last_rotated": null
+        },
+        "requires_auth": true,
+        "audit_level": "full"
+      }
+    },
+    
+    "database": {
+      "neon": {
+        "key_id": "db.neon.url",
+        "storage": {
+          "type": "firebase_config",
+          "path": "database.url"
+        },
+        "rotation_policy": {
+          "frequency_days": 365,
+          "last_rotated": null
+        },
+        "requires_auth": true,
+        "audit_level": "summary"
+      }
+    }
+  },
+  
+  "environments": {
+    "development": {
+      "key_prefix": "dev",
+      "inherit_from": null,
+      "override_keys": ["ai.gemini.primary"]
+    },
+    "staging": {
+      "key_prefix": "stg",
+      "inherit_from": "development",
+      "override_keys": []
+    },
+    "production": {
+      "key_prefix": "prod",
+      "inherit_from": null,
+      "override_keys": [],
+      "restrictions": {
+        "allowed_ips": [],
+        "require_mfa_for_admin": true
+      }
+    }
+  },
+  
+  "audit_configuration": {
+    "enabled": true,
+    "destination": "firestore",
+    "collection": "api_key_audit_logs",
+    "retention_days": 365,
+    "log_fields": [
+      "timestamp",
+      "key_id",
+      "key_path",
+      "action",
+      "user_id",
+      "ip_address",
+      "user_agent",
+      "request_id",
+      "success",
+      "error_message"
+    ],
+    "sensitive_fields_mask": ["key_value"]
+  },
+  
+  "emergency_access": {
+    "enabled": true,
+    "requires_approval": true,
+    "approvers": ["admin"],
+    "max_duration_minutes": 60,
+    "audit_level": "full"
+  }
+}

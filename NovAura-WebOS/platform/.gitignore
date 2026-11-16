@@ -1,0 +1,75 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ⚠️  AUDIT REMINDER: RECORD ALL FILE OPERATIONS IN AUDIT_LOG.json
+# 
+# After ANY file operation (create, move, delete, update):
+# 1. Add entry to AUDIT_LOG.json with timestamp, action, file path, reason
+# 2. Commit both the change AND the audit log update together
+# 
+# Format:
+#   {
+#     "timestamp": "2026-04-01T20:30:00-05:00",
+#     "action": "MOVED|DELETED|CREATED|UPDATED",
+#     "file": "path/to/file",
+#     "reason": "why this was done",
+#     "performed_by": "who did it"
+#   }
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Dependencies
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+
+# Build output
+# dist/  # REMOVED: We need dist in repo for deployment
+dist-ssr/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+
+# Testing
+coverage/
+*.lcov
+.nyc_output/
+
+# Cache
+.cache/
+.temp/
+.eslintcache
+stylelintcache
+.parcel-cache
+
+# Misc
+*.tgz
+*.tar.gz
+*.zip
+
+# Environment — NEVER commit live API keys
+.env
+.env.local
+.env.production
+.env.*.local

@@ -1,0 +1,19 @@
+src/config/firebase.ts(16,12): error TS7005: Variable 'app' implicitly has an 'any' type.
+src/config/firebase.ts(17,12): error TS7005: Variable 'db' implicitly has an 'any' type.
+src/config/firebase.ts(18,12): error TS7005: Variable 'auth' implicitly has an 'any' type.
+src/config/firebase.ts(19,12): error TS7005: Variable 'storage' implicitly has an 'any' type.
+src/pages/creator/CreatorDashboard.tsx(56,11): error TS2554: Expected 1 arguments, but got 0.
+src/pages/creator/CreatorDashboard.tsx(57,11): error TS2554: Expected 1 arguments, but got 0.
+src/pages/creator/CreatorSettings.tsx(60,20): error TS2552: Cannot find name 'Input'. Did you mean 'oninput'?
+src/pages/creator/CreatorSettings.tsx(92,20): error TS2339: Property 'stripeConnectStatus' does not exist on type 'User'.
+src/pages/creator/CreatorSettings.tsx(158,20): error TS2552: Cannot find name 'Input'. Did you mean 'oninput'?
+src/pages/creator/CreatorSettings.tsx(170,20): error TS2552: Cannot find name 'Input'. Did you mean 'oninput'?
+src/pages/creator/CreatorSettings.tsx(182,20): error TS2552: Cannot find name 'Input'. Did you mean 'oninput'?
+src/pages/public/AdminSetupPage.tsx(13,11): error TS2339: Property 'setUser' does not exist on type 'AuthState'.
+src/pages/public/FreeItemsPage.tsx(245,66): error TS2339: Property 'suggestedDonation' does not exist on type 'Asset'.
+src/pages/public/FreeItemsPage.tsx(249,60): error TS2339: Property 'suggestedDonation' does not exist on type 'Asset'.
+src/pages/public/MusicMarketplacePage.tsx(81,10): error TS6133: 'loading' is declared but its value is never read.
+src/pages/public/NovaSysPage.tsx(97,11): error TS2339: Property 'setUser' does not exist on type 'AuthState'.
+src/pages/public/StaffLoginPage.tsx(34,11): error TS2339: Property 'setUser' does not exist on type 'AuthState'.
+src/services/marketService.ts(3,44): error TS6133: 'setDoc' is declared but its value is never read.
+src/stores/authStore.ts(116,13): error TS2353: Object literal may only specify known properties, and 'status' does not exist in type 'Omit<User, "id">'.

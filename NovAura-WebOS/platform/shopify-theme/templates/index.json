@@ -1,0 +1,31 @@
+{
+  "sections": {
+    "hero": {
+      "type": "novaura-hero",
+      "settings": {
+        "eyebrow": "Catalyst's Corner",
+        "heading": "Home Wares & Tech <span>Galore</span>",
+        "subheading": "Discover curated home essentials, cutting-edge tech gadgets, and lifestyle products that elevate your everyday experience.",
+        "button_label": "Shop Now",
+        "button_link": "/collections/all",
+        "secondary_button_label": "View Catalog",
+        "secondary_button_link": "/collections/all"
+      }
+    },
+    "featured_products": {
+      "type": "novaura-product-grid",
+      "settings": {
+        "eyebrow": "Featured",
+        "heading": "Trending Products",
+        "description": "Hand-picked favorites from our curated collection",
+        "collection": "frontpage",
+        "products_to_show": 8,
+        "show_view_all": true
+      }
+    }
+  },
+  "order": [
+    "hero",
+    "featured_products"
+  ]
+}

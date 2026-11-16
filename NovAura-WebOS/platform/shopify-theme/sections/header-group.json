@@ -1,0 +1,22 @@
+{
+  "type": "header",
+  "name": "Header Group",
+  "sections": {
+    "announcement": {
+      "type": "novaura-announcement",
+      "settings": {
+        "text": "Free shipping on orders over $50! 🚀",
+        "link": "/collections/all",
+        "show_announcement": true
+      }
+    },
+    "header": {
+      "type": "novaura-header",
+      "settings": {
+        "logo_text": "Catalyst's Corner",
+        "menu": "main-menu"
+      }
+    }
+  },
+  "order": ["announcement", "header"]
+}

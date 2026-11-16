@@ -1,0 +1,148 @@
+[
+  {
+    "name": "Colors",
+    "settings": [
+      {
+        "type": "header",
+        "content": "NovAura Color System"
+      },
+      {
+        "type": "color",
+        "id": "color_void",
+        "label": "Void (Background)",
+        "default": "#0a0a0f"
+      },
+      {
+        "type": "color",
+        "id": "color_void_light",
+        "label": "Void Light",
+        "default": "#12121a"
+      },
+      {
+        "type": "color",
+        "id": "color_neon_cyan",
+        "label": "Neon Cyan",
+        "default": "#00f5d4"
+      },
+      {
+        "type": "color",
+        "id": "color_neon_magenta",
+        "label": "Neon Magenta",
+        "default": "#ff006e"
+      },
+      {
+        "type": "color",
+        "id": "color_neon_lime",
+        "label": "Neon Lime",
+        "default": "#39ff14"
+      },
+      {
+        "type": "color",
+        "id": "color_text_primary",
+        "label": "Text Primary",
+        "default": "#ffffff"
+      },
+      {
+        "type": "color",
+        "id": "color_text_secondary",
+        "label": "Text Secondary",
+        "default": "#a0a0b0"
+      }
+    ]
+  },
+  {
+    "name": "Typography",
+    "settings": [
+      {
+        "type": "header",
+        "content": "Fonts"
+      },
+      {
+        "type": "font_picker",
+        "id": "type_body_font",
+        "label": "Body font",
+        "default": "inter_n4"
+      },
+      {
+        "type": "font_picker",
+        "id": "type_header_font",
+        "label": "Heading font",
+        "default": "inter_n7"
+      },
+      {
+        "type": "range",
+        "id": "body_scale",
+        "min": 100,
+        "max": 130,
+        "step": 5,
+        "unit": "%",
+        "label": "Body scale",
+        "default": 100
+      },
+      {
+        "type": "range",
+        "id": "heading_scale",
+        "min": 100,
+        "max": 150,
+        "step": 5,
+        "unit": "%",
+        "label": "Heading scale",
+        "default": 100
+      }
+    ]
+  },
+  {
+    "name": "Logo",
+    "settings": [
+      {
+        "type": "image_picker",
+        "id": "logo",
+        "label": "Logo image"
+      },
+      {
+        "type": "range",
+        "id": "logo_width",
+        "min": 50,
+        "max": 250,
+        "step": 10,
+        "unit": "px",
+        "label": "Logo width",
+        "default": 100
+      }
+    ]
+  },
+  {
+    "name": "Social Media",
+    "settings": [
+      {
+        "type": "header",
+        "content": "Social accounts"
+      },
+      {
+        "type": "url",
+        "id": "social_facebook",
+        "label": "Facebook"
+      },
+      {
+        "type": "url",
+        "id": "social_instagram",
+        "label": "Instagram"
+      },
+      {
+        "type": "url",
+        "id": "social_twitter",
+        "label": "Twitter / X"
+      },
+      {
+        "type": "url",
+        "id": "social_youtube",
+        "label": "YouTube"
+      },
+      {
+        "type": "url",
+        "id": "social_tiktok",
+        "label": "TikTok"
+      }
+    ]
+  }
+]

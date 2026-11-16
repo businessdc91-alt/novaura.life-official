@@ -34,3 +34,6 @@ stderr.txt
 
 # Rust/Tauri build output (any project)
 **/src-tauri/target/
+
+# Replit's local agent/cache folder (Replit exports)
+.local/

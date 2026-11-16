@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Analytics & Overview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary: #4C65FF;
+            --primary-light: #7B8FFF;
+            --primary-dark: #3A4FCC;
+            --dark: #07080D;
+            --darker: #05060A;
+            --light: #F4F6FF;
+            --gray: #A7B0C8;
+            --gray-dark: #6B7280;
+            --success: #10B981;
+            --success-light: rgba(16, 185, 129, 0.1);
+            --warning: #F59E0B;
+            --warning-light: rgba(245, 158, 11, 0.1);
+            --danger: #EF4444;
+            --danger-light: rgba(239, 68, 68, 0.1);
+            --card-bg: #0F111A;
+            --sidebar-bg: #0A0C14;
+            --border: #1E2130;
+        }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: var(--dark);
+            color: var(--light);
+            line-height: 1.6;
+        }
+        
+        /* Layout */
+        .app {
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        
+        .sidebar-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--light);
+            text-decoration: none;
+        }
+        
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
+        .nav-section {
+            padding: 1.5rem 1rem;
+        }
+        
+        .nav-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--gray-dark);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 0 1rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .nav-items {
+            list-style: none;
+        }
+        
+        .nav-item {
+            margin-bottom: 0.25rem;
+        }
+        
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 0.875rem;
+            padding: 0.75rem 1rem;
+            color: var(--gray);
+            text-decoration: none;
+            border-radius: 10px;
+            transition: all 0.2s;
+            font-size: 0.9375rem;
+        }
+        
+        .nav-link:hover,
+        .nav-link.active {
+            background: var(--card-bg);
+            color: var(--light);
+        }
+        
+        .nav-link.active {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        }
+        
+        .nav-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .nav-badge {
+            margin-left: auto;
+            padding: 0.125rem 0.5rem;
+            background: var(--danger);
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 10px;
+        }
+        
+        /* Main Content */
+        .main {
+            flex: 1;
+            margin-left: 260px;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Header */
+        .header {
+            padding: 1rem 2rem;
+            background: var(--sidebar-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .search-bar {
+            position: relative;
+            width: 320px;
+        }
+        
+        .search-bar input {
+            width: 100%;
+            padding: 0.625rem 1rem 0.625rem 2.5rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--light);
+            font-size: 0.875rem;
+            outline: none;
+        }
+        
+        .search-bar input::placeholder {
+            color: var(--gray-dark);
+        }
+        
+        .search-icon {
+            position: absolute;
+            left: 0.875rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--gray-dark);
+        }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .header-btn {
+            position: relative;
+            width: 40px;
+            height: 40px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--gray);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .header-btn:hover {
+            background: var(--border);
+            color: var(--light);
+        }
+        
+        .notification-badge {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 18px;
+            height: 18px;
+            background: var(--danger);
+            color: white;
+            font-size: 0.625rem;
+            font-weight: 700;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.375rem 0.75rem 0.375rem 0.375rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            cursor: pointer;
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .user-name {
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+        
+        .user-role {
+            font-size: 0.75rem;
+            color: var(--gray-dark);
+        }
+        
+        /* Content */
+        .content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+        
+        .page-header {
+            margin-bottom: 2rem;
+        }
+        
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        
+        .page-subtitle {
+            color: var(--gray);
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+        }
+        
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--gray);
+        }
+        
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+        
+        .stat-icon.blue {
+            background: rgba(76, 101, 255, 0.1);
+        }
+        
+        .stat-icon.green {
+            background: var(--success-light);
+        }
+        
+        .stat-icon.orange {
+            background: var(--warning-light);
+        }
+        
+        .stat-icon.red {
+            background: var(--danger-light);
+        }
+        
+        .stat-value {
+            font-size: 1.875rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-change {
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            font-size: 0.875rem;
+        }
+        
+        .stat-change.positive {
+            color: var(--success);
+        }
+        
+        .stat-change.negative {
+            color: var(--danger);
+        }
+        
+        /* Dashboard Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+        }
+        
+        @media (max-width: 1200px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Card */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+        
+        .card-header {
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        
+        .card-action {
+            padding: 0.5rem 1rem;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--gray);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .card-action:hover {
+            background: var(--border);
+            color: var(--light);
+        }
+        
+        .card-body {
+            padding: 1.5rem;
+        }
+        
+        /* Chart Placeholder */
+        .chart-container {
+            height: 300px;
+            background: linear-gradient(180deg, rgba(76, 101, 255, 0.05) 0%, transparent 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-around;
+            padding: 1.5rem;
+            gap: 1rem;
+        }
+        
+        .chart-bar {
+            flex: 1;
+            background: linear-gradient(180deg, var(--primary) 0%, var(--primary-dark) 100%);
+            border-radius: 6px 6px 0 0;
+            min-height: 40px;
+            position: relative;
+            transition: opacity 0.2s;
+        }
+        
+        .chart-bar:hover {
+            opacity: 0.8;
+        }
+        
+        .chart-bar::after {
+            content: attr(data-label);
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            color: var(--gray);
+            white-space: nowrap;
+        }
+        
+        /* Activity List */
+        .activity-list {
+            list-style: none;
+        }
+        
+        .activity-item {
+            display: flex;
+            gap: 1rem;
+            padding: 1rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .activity-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        
+        .activity-avatar {
+            width: 40px;
+            height: 40px;
+            background: var(--border);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            flex-shrink: 0;
+        }
+        
+        .activity-content {
+            flex: 1;
+        }
+        
+        .activity-text {
+            font-size: 0.9375rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        .activity-time {
+            font-size: 0.75rem;
+            color: var(--gray-dark);
+        }
+        
+        .activity-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .activity-status.success {
+            background: var(--success-light);
+            color: var(--success);
+        }
+        
+        .activity-status.pending {
+            background: var(--warning-light);
+            color: var(--warning);
+        }
+        
+        /* Table */
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th {
+            text-align: left;
+            padding: 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--gray);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9375rem;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .customer-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .customer-avatar {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.375rem 0.875rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .status-badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        
+        .status-badge.completed {
+            background: var(--success-light);
+            color: var(--success);
+        }
+        
+        .status-badge.completed::before {
+            background: var(--success);
+        }
+        
+        .status-badge.pending {
+            background: var(--warning-light);
+            color: var(--warning);
+        }
+        
+        .status-badge.pending::before {
+            background: var(--warning);
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            
+            .main {
+                margin-left: 0;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .search-bar {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <a href="#" class="logo">
+                    <div class="logo-icon">N</div>
+                    NovaDash
+                </a>
+            </div>
+            
+            <nav class="nav-section">
+                <div class="nav-label">Main</div>
+                <ul class="nav-items">
+                    <li class="nav-item">
+                        <a href="#" class="nav-link active">
+                            <span class="nav-icon">📊</span>
+                            Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <span class="nav-icon">📈</span>
+                            Analytics
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <span class="nav-icon">👥</span>
+                            Customers
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <span class="nav-icon">📦</span>
+                            Products
+                            <span class="nav-badge">12</span>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+            
+            <nav class="nav-section">
+                <div class="nav-label">System</div>
+                <ul class="nav-items">
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <span class="nav-icon">⚙️</span>
+                            Settings
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <span class="nav-icon">🔔</span>
+                            Notifications
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#" class="nav-link">
+                            <span class="nav-icon">🎁</span>
+                            Integrations
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Header -->
+            <header class="header">
+                <div class="search-bar">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" placeholder="Search anything...">
+                </div>
+                
+                <div class="header-actions">
+                    <button class="header-btn">
+                        🔔
+                        <span class="notification-badge">3</span>
+                    </button>
+                    <div class="user-menu">
+                        <div class="user-avatar">DC</div>
+                        <div class="user-info">
+                            <span class="user-name">Dillan Copeland</span>
+                            <span class="user-role">Admin</span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Content -->
+            <div class="content">
+                <div class="page-header">
+                    <h1 class="page-title">Dashboard Overview</h1>
+                    <p class="page-subtitle">Welcome back! Here's what's happening with your business.</p>
+                </div>
+
+                <!-- Stats -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">Total Revenue</span>
+                            <div class="stat-icon blue">💰</div>
+                        </div>
+                        <div class="stat-value">$48,294</div>
+                        <div class="stat-change positive">
+                            ↑ 12.5% from last month
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">Active Users</span>
+                            <div class="stat-icon green">👥</div>
+                        </div>
+                        <div class="stat-value">2,847</div>
+                        <div class="stat-change positive">
+                            ↑ 8.2% from last month
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">Pending Orders</span>
+                            <div class="stat-icon orange">📦</div>
+                        </div>
+                        <div class="stat-value">45</div>
+                        <div class="stat-change negative">
+                            ↓ 3.1% from last month
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">Conversion Rate</span>
+                            <div class="stat-icon red">📊</div>
+                        </div>
+                        <div class="stat-value">3.24%</div>
+                        <div class="stat-change positive">
+                            ↑ 2.1% from last month
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dashboard Grid -->
+                <div class="dashboard-grid">
+                    <!-- Chart Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Revenue Overview</h3>
+                            <button class="card-action">View Report</button>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-container">
+                                <div class="chart-bar" style="height: 40%" data-label="Jan"></div>
+                                <div class="chart-bar" style="height: 65%" data-label="Feb"></div>
+                                <div class="chart-bar" style="height: 45%" data-label="Mar"></div>
+                                <div class="chart-bar" style="height: 80%" data-label="Apr"></div>
+                                <div class="chart-bar" style="height: 55%" data-label="May"></div>
+                                <div class="chart-bar" style="height: 90%" data-label="Jun"></div>
+                                <div class="chart-bar" style="height: 75%" data-label="Jul"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">Recent Activity</h3>
+                            <button class="card-action">View All</button>
+                        </div>
+                        <div class="card-body">
+                            <ul class="activity-list">
+                                <li class="activity-item">
+                                    <div class="activity-avatar">🛒</div>
+                                    <div class="activity-content">
+                                        <p class="activity-text"><strong>New order</strong> #1234 received</p>
+                                        <span class="activity-time">2 minutes ago</span>
+                                    </div>
+                                    <span class="activity-status success">Completed</span>
+                                </li>
+                                <li class="activity-item">
+                                    <div class="activity-avatar">👤</div>
+                                    <div class="activity-content">
+                                        <p class="activity-text"><strong>New user</strong> Sarah M. signed up</p>
+                                        <span class="activity-time">15 minutes ago</span>
+                                    </div>
+                                    <span class="activity-status success">Active</span>
+                                </li>
+                                <li class="activity-item">
+                                    <div class="activity-avatar">💳</div>
+                                    <div class="activity-content">
+                                        <p class="activity-text"><strong>Payment</strong> processed for #1230</p>
+                                        <span class="activity-time">1 hour ago</span>
+                                    </div>
+                                    <span class="activity-status success">Paid</span>
+                                </li>
+                                <li class="activity-item">
+                                    <div class="activity-avatar">📧</div>
+                                    <div class="activity-content">
+                                        <p class="activity-text"><strong>Campaign</strong> "Summer Sale" sent</p>
+                                        <span class="activity-time">3 hours ago</span>
+                                    </div>
+                                    <span class="activity-status pending">Pending</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Orders -->
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-header">
+                        <h3 class="card-title">Recent Orders</h3>
+                        <button class="card-action">View All</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Order ID</th>
+                                        <th>Customer</th>
+                                        <th>Product</th>
+                                        <th>Amount</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>#1234</td>
+                                        <td>
+                                            <div class="customer-info">
+                                                <div class="customer-avatar">JD</div>
+                                                John Doe
+                                            </div>
+                                        </td>
+                                        <td>Premium Headphones</td>
+                                        <td>$199.00</td>
+                                        <td><span class="status-badge completed">Completed</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>#1233</td>
+                                        <td>
+                                            <div class="customer-info">
+                                                <div class="customer-avatar">AS</div>
+                                                Alice Smith
+                                            </div>
+                                        </td>
+                                        <td>Smart Watch Pro</td>
+                                        <td>$299.00</td>
+                                        <td><span class="status-badge pending">Pending</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>#1232</td>
+                                        <td>
+                                            <div class="customer-info">
+                                                <div class="customer-avatar">RJ</div>
+                                                Robert Johnson
+                                            </div>
+                                        </td>
+                                        <td>Tech Backpack</td>
+                                        <td>$79.00</td>
+                                        <td><span class="status-badge completed">Completed</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>#1231</td>
+                                        <td>
+                                            <div class="customer-info">
+                                                <div class="customer-avatar">EW</div>
+                                                Emma Wilson
+                                            </div>
+                                        </td>
+                                        <td>Smart Coffee Maker</td>
+                                        <td>$149.00</td>
+                                        <td><span class="status-badge completed">Completed</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

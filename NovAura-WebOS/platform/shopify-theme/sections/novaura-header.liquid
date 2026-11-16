@@ -1,0 +1,101 @@
+{% comment %}
+  NovAura Header - Sticky with glassmorphism effect
+{% endcomment %}
+
+<header class="novaura-header">
+  <div class="container">
+    <div class="novaura-header__inner">
+      <a href="/" class="novaura-header__logo">
+        {{ section.settings.logo_text }}
+      </a>
+      
+      <nav class="novaura-header__nav">
+        {% for link in section.settings.menu.links %}
+          <a href="{{ link.url }}" class="novaura-header__nav-link{% if link.active %} is-active{% endif %}">
+            {{ link.title }}
+          </a>
+        {% endfor %}
+      </nav>
+      
+      <div class="novaura-header__actions">
+        <a href="/search" class="novaura-header__icon-btn" aria-label="Search">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.35-4.35"/>
+          </svg>
+        </a>
+        
+        <a href="/account" class="novaura-header__icon-btn" aria-label="Account">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        </a>
+        
+        <button 
+          type="button"
+          class="novaura-header__icon-btn"
+          aria-label="Cart"
+          data-cart-toggle
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="9" cy="21" r="1"/>
+            <circle cx="20" cy="21" r="1"/>
+            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+          </svg>
+          <span data-cart-count class="cart-count{% if cart.item_count == 0 %} is-empty{% endif %}">
+            {{ cart.item_count }}
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<style>
+  .cart-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 18px;
+    height: 18px;
+    background: var(--color-neon-magenta);
+    color: white;
+    font-size: 1rem;
+    font-weight: 700;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .cart-count.is-empty {
+    display: none;
+  }
+  
+  .novaura-header__icon-btn {
+    position: relative;
+  }
+</style>
+
+{% schema %}
+{
+  "name": "NovAura Header",
+  "tag": "header",
+  "class": "section-header",
+  "settings": [
+    {
+      "type": "text",
+      "id": "logo_text",
+      "label": "Logo Text",
+      "default": "Catalyst's Corner"
+    },
+    {
+      "type": "link_list",
+      "id": "menu",
+      "label": "Menu",
+      "default": "main-menu"
+    }
+  ]
+}
+{% endschema %}

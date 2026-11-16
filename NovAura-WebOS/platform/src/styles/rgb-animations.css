@@ -1,0 +1,219 @@
+/* RGB Flowing Animations - Follow the Leader Style */
+
+/* ============================================
+   CORE RGB FLOW ANIMATIONS
+   ============================================ */
+
+/* Flowing RGB Border - Follow the Leader */
+@keyframes rgb-flow-border {
+  0% { border-color: #00F0FF; box-shadow: 0 0 20px #00F0FF, inset 0 0 20px rgba(0, 240, 255, 0.2); }
+  25% { border-color: #8B5CF6; box-shadow: 0 0 20px #8B5CF6, inset 0 0 20px rgba(139, 92, 246, 0.2); }
+  50% { border-color: #FF006E; box-shadow: 0 0 20px #FF006E, inset 0 0 20px rgba(255, 0, 110, 0.2); }
+  75% { border-color: #39FF14; box-shadow: 0 0 20px #39FF14, inset 0 0 20px rgba(57, 255, 20, 0.2); }
+  100% { border-color: #00F0FF; box-shadow: 0 0 20px #00F0FF, inset 0 0 20px rgba(0, 240, 255, 0.2); }
+}
+
+/* Flowing RGB Text Gradient */
+@keyframes rgb-flow-text {
+  0%, 100% { 
+    background: linear-gradient(90deg, #00F0FF, #8B5CF6, #FF006E, #39FF14);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  25% { 
+    background: linear-gradient(90deg, #8B5CF6, #FF006E, #39FF14, #00F0FF);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  50% { 
+    background: linear-gradient(90deg, #FF006E, #39FF14, #00F0FF, #8B5CF6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  75% { 
+    background: linear-gradient(90deg, #39FF14, #00F0FF, #8B5CF6, #FF006E);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* Flowing RGB Background - Wave Effect */
+@keyframes rgb-flow-bg {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Pulse Glow Animation */
+@keyframes rgb-pulse-glow {
+  0%, 100% { 
+    filter: drop-shadow(0 0 10px #00F0FF) drop-shadow(0 0 20px #00F0FF);
+  }
+  25% { 
+    filter: drop-shadow(0 0 10px #8B5CF6) drop-shadow(0 0 20px #8B5CF6);
+  }
+  50% { 
+    filter: drop-shadow(0 0 10px #FF006E) drop-shadow(0 0 20px #FF006E);
+  }
+  75% { 
+    filter: drop-shadow(0 0 10px #39FF14) drop-shadow(0 0 20px #39FF14);
+  }
+}
+
+/* Neon Flicker Effect */
+@keyframes neon-flicker {
+  0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
+    text-shadow: 
+      0 0 5px #00F0FF,
+      0 0 10px #00F0FF,
+      0 0 20px #00F0FF,
+      0 0 40px #00F0FF;
+  }
+  20%, 24%, 55% {
+    text-shadow: none;
+  }
+}
+
+/* Shimmer Wave */
+@keyframes shimmer-wave {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+.rgb-border-flow {
+  border: 2px solid transparent;
+  animation: rgb-flow-border 4s linear infinite;
+}
+
+.rgb-text-flow {
+  animation: rgb-flow-text 3s ease infinite;
+  background-size: 300% 300%;
+}
+
+.rgb-bg-flow {
+  background: linear-gradient(-45deg, #00F0FF, #8B5CF6, #FF006E, #39FF14, #00F0FF);
+  background-size: 400% 400%;
+  animation: rgb-flow-bg 8s ease infinite;
+}
+
+.rgb-pulse {
+  animation: rgb-pulse-glow 3s ease-in-out infinite;
+}
+
+.neon-flicker {
+  animation: neon-flicker 2s infinite;
+}
+
+.shimmer-rgb {
+  background: linear-gradient(90deg, transparent 0%, rgba(0, 240, 255, 0.4) 25%, rgba(139, 92, 246, 0.4) 50%, rgba(255, 0, 110, 0.4) 75%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-wave 2s linear infinite;
+}
+
+.rgb-shadow-pulse {
+  animation: rgb-shadow-pulse 4s ease-in-out infinite;
+}
+
+@keyframes rgb-shadow-pulse {
+  0%, 100% { box-shadow: 0 0 30px #00F0FF, 0 0 60px rgba(0, 240, 255, 0.5); }
+  25% { box-shadow: 0 0 30px #8B5CF6, 0 0 60px rgba(139, 92, 246, 0.5); }
+  50% { box-shadow: 0 0 30px #FF006E, 0 0 60px rgba(255, 0, 110, 0.5); }
+  75% { box-shadow: 0 0 30px #39FF14, 0 0 60px rgba(57, 255, 20, 0.5); }
+}
+
+.btn-rgb-living {
+  background: linear-gradient(45deg, #00F0FF, #8B5CF6, #FF006E);
+  background-size: 300% 300%;
+  animation: rgb-flow-bg 4s ease infinite;
+  border: none;
+  color: #0A0A0F;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.3s ease;
+}
+
+.btn-rgb-living:hover {
+  transform: translateY(-2px) scale(1.02);
+  filter: brightness(1.2);
+}
+
+.rgb-underline-flow {
+  position: relative;
+}
+
+.rgb-underline-flow::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, #00F0FF, #8B5CF6, #FF006E, #39FF14);
+  background-size: 300% 100%;
+  animation: rgb-flow-bg 3s linear infinite;
+}
+
+.matrix-rgb {
+  animation: matrix-rain 2s ease-in-out infinite;
+}
+
+@keyframes matrix-rain {
+  0% { text-shadow: 0 0 10px #00F0FF, 0 0 20px #00F0FF, 0 0 30px #8B5CF6; color: #00F0FF; }
+  33% { text-shadow: 0 0 10px #8B5CF6, 0 0 20px #8B5CF6, 0 0 30px #FF006E; color: #8B5CF6; }
+  66% { text-shadow: 0 0 10px #FF006E, 0 0 20px #FF006E, 0 0 30px #39FF14; color: #FF006E; }
+  100% { text-shadow: 0 0 10px #39FF14, 0 0 20px #39FF14, 0 0 30px #00F0FF; color: #39FF14; }
+}
+
+/* ============================================
+   WISHLIST RGB PULSE ANIMATION
+   ============================================ */
+
+/* RGB Pulse for Wishlist Button - Animated glow border effect */
+@keyframes rgb-pulse-wishlist {
+  0%, 100% { 
+    box-shadow: 
+      0 0 5px #FF006E,
+      0 0 10px #FF006E,
+      0 0 20px #FF006E,
+      inset 0 0 5px rgba(255, 0, 110, 0.2);
+    border-color: #FF006E;
+  }
+  25% { 
+    box-shadow: 
+      0 0 5px #8B5CF6,
+      0 0 10px #8B5CF6,
+      0 0 20px #8B5CF6,
+      inset 0 0 5px rgba(139, 92, 246, 0.2);
+    border-color: #8B5CF6;
+  }
+  50% { 
+    box-shadow: 
+      0 0 5px #00F0FF,
+      0 0 10px #00F0FF,
+      0 0 20px #00F0FF,
+      inset 0 0 5px rgba(0, 240, 255, 0.2);
+    border-color: #00F0FF;
+  }
+  75% { 
+    box-shadow: 
+      0 0 5px #39FF14,
+      0 0 10px #39FF14,
+      0 0 20px #39FF14,
+      inset 0 0 5px rgba(57, 255, 20, 0.2);
+    border-color: #39FF14;
+  }
+}
+
+/* Animation class used by WishlistButton component */
+.animate-rgb-pulse {
+  animation: rgb-pulse-wishlist 3s ease-in-out infinite;
+}

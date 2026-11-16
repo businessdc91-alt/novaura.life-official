@@ -1,0 +1,10 @@
+# Files to ignore when pushing to Shopify
+README.md
+.git/
+.gitignore
+*.md
+.DS_Store
+.vscode/
+.idea/
+node_modules/
+*.log

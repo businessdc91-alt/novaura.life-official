@@ -1,0 +1,3 @@
+# Netlify/Vercel style redirects - works with Polsia too
+/api/*  https://api.novauraverse.com/api/:splat  200
+/*      /index.html                                 200

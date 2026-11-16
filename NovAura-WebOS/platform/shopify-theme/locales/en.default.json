@@ -1,0 +1,35 @@
+{
+  "general": {
+    "password_page": {
+      "login_form_heading": "Enter store using password:",
+      "login_password_button": "Enter using password",
+      "login_form_password_label": "Password",
+      "login_form_password_placeholder": "Your password"
+    },
+    "404": {
+      "title": "Page not found",
+      "subtext": "The page you requested does not exist."
+    },
+    "accessibility": {
+      "skip_to_text": "Skip to content",
+      "refresh_page": "Refreshing page...",
+      "link_messages": {
+        "new_window": "Opens in a new window."
+      }
+    }
+  },
+  "sections": {
+    "cart": {
+      "title": "Your cart",
+      "cart_error": "There was an error updating your cart",
+      "cart_quantity_error_html": "You can only add [quantity] of this item to your cart."
+    }
+  },
+  "products": {
+    "product": {
+      "add_to_cart": "Add to cart",
+      "sold_out": "Sold out",
+      "unavailable": "Unavailable"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+name: Deploy to Polsia
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Type check
+        run: npx tsc --noEmit
+      
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL || 'https://api.novauraverse.com' }}
+          VITE_WS_URL: ${{ secrets.VITE_WS_URL || 'wss://ws.novauraverse.com' }}
+      
+      - name: Deploy to Polsia
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: polsia/action-deploy@v1
+        with:
+          api-token: ${{ secrets.POLSIA_TOKEN }}
+          project-id: ${{ secrets.POLSIA_PROJECT_ID }}
+          directory: ./dist
+      
+      - name: Deployment Notification
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          echo "✅ Deployed to Polsia successfully!"
+          echo "🌐 URL: https://novauraverse.com"
