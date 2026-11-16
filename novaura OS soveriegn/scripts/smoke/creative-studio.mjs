@@ -56,6 +56,67 @@ try {
   await b.key('e', 'KeyE', 69);
   await sleep(200);
   check('E selects the eraser', await b.evaluate(`document.querySelector('[data-tool="eraser"]')?.getAttribute('aria-pressed') === 'true'`));
+  await b.key('b', 'KeyB', 66);
+
+  // ── Layers and History panels ──
+  const centre = sel => b.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; e.scrollIntoView({ block: 'nearest' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, left: r.left, width: r.width }; })()`);
+  const clickOn = async (sel, clicks = 1) => {
+    const at = await centre(sel);
+    if (!at) throw new Error(`nothing matches ${sel}`);
+    for (let n = 1; n <= clicks; n++) {
+      await b.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', buttons: 1, clickCount: n });
+      await b.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: n });
+    }
+    await sleep(250);
+  };
+  const layerCount = () => b.evaluate(`document.querySelectorAll('[data-layer-id]').length`);
+  const layerNames = () => b.evaluate(`[...document.querySelectorAll('[data-layer-name]')].map(e => e.textContent)`);
+  const stepCount = () => b.evaluate(`document.querySelectorAll('[data-step-index]:not([data-step-index="-1"])').length`);
+  const lastStep = () => b.evaluate(`[...document.querySelectorAll('[data-step-index]')].pop()?.textContent || ''`);
+  const selected = '[data-layer-id][aria-selected="true"]';
+
+  check('the Layers panel lists the Background layer', (await layerNames()).join() === 'Background');
+  await clickOn('[data-action="new-layer"]');
+  check('New layer adds a layer on top', (await layerNames()).join() === 'Layer 1,Background');
+
+  await clickOn(`${selected} [data-layer-name]`, 2);
+  await b.send('Input.insertText', { text: 'Sky' });
+  await b.key('Enter', 'Enter', 13);
+  await sleep(250);
+  check('double-click renames a layer', (await layerNames())[0] === 'Sky', (await layerNames()).join());
+
+  const stepsBefore = await stepCount();
+  const slider = await centre('[data-opacity-slider]');
+  await b.drag([slider.left + slider.width - 2, slider.y], [slider.left + slider.width * 0.4, slider.y], 12);
+  await sleep(300);
+  const opacityShown = await b.evaluate(`document.querySelector('[data-opacity-value]')?.textContent`);
+  check('dragging the opacity slider makes one history step', (await stepCount()) === stepsBefore + 1, `${stepsBefore} → ${await stepCount()}, opacity ${opacityShown}`);
+  check('the opacity follows the drag', /^(3[5-9]|4[0-5])%$/.test(opacityShown || ''), opacityShown);
+
+  await b.evaluate(`(() => { const s = document.querySelector('[data-blend-select]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'multiply'); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(250);
+  check('choosing a blend mode is a labelled step', /Paint · Blend mode/.test(await lastStep()), await lastStep());
+
+  await clickOn(`${selected} [data-action="toggle-visible"]`);
+  check('the eye hides the layer', await b.evaluate(`document.querySelector('${selected}').dataset.visible === 'false'`));
+  await clickOn(`${selected} [data-action="toggle-visible"]`);
+  await clickOn(`${selected} [data-action="toggle-lock"]`);
+  check('the padlock locks the layer', await b.evaluate(`document.querySelector('${selected}').dataset.locked === 'true'`));
+  await clickOn(`${selected} [data-action="toggle-lock"]`);
+
+  await clickOn('[data-action="layer-down"]');
+  check('Move down reorders the stack', (await layerNames()).join() === 'Background,Sky', (await layerNames()).join());
+  await clickOn('[data-action="layer-up"]');
+  await clickOn('[data-action="merge-down"]');
+  await sleep(300);
+  check('Merge down leaves one layer', (await layerCount()) === 1, (await layerNames()).join());
+
+  const newLayerStep = await b.evaluate(`[...document.querySelectorAll('[data-step-index]')].find(e => /New layer/.test(e.textContent))?.dataset.stepIndex`);
+  await clickOn(`[data-step-index="${newLayerStep}"]`);
+  check('clicking an earlier history step goes back to it', (await layerCount()) === 2, (await layerNames()).join());
+  await clickOn('[data-step-index="-1"]');
+  check('clicking "New document" goes back to the start', (await layerCount()) === 1);
+  await b.screenshot(join(OUT, 'c3_layers.png'));
 
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));

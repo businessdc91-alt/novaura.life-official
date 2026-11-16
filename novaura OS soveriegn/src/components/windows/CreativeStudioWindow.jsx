@@ -13,6 +13,8 @@ import { TOOLS, toolForKey, toolContext } from '../../creative/tools/index.js';
 import { useStudio } from './creative/useStudio.js';
 import CanvasView from './creative/CanvasView.jsx';
 import PaintPanel from './creative/PaintPanel.jsx';
+import LayersPanel from './creative/LayersPanel.jsx';
+import HistoryPanel from './creative/HistoryPanel.jsx';
 import LegacyPhotoTab from './creative/LegacyPhotoTab.jsx';
 import LegacyMemeTab from './creative/LegacyMemeTab.jsx';
 
@@ -111,6 +113,10 @@ export default function CreativeStudioWindow() {
           <>
             <PaintPanel store={store} />
             <CanvasView store={store} rootRef={rootRef} />
+            <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
+              <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
+              <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>
+            </aside>
           </>
         )}
         {tab === 'photo' && <div className="flex-1 overflow-y-auto p-5"><LegacyPhotoTab /></div>}
