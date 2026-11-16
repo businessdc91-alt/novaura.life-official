@@ -96,3 +96,79 @@ test('interop: Python opens our archive, and we open Python’s deflated archive
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── ZIP64 and Blob archives ──
+const { buildZipBlob, listZipEntries, readZipEntry } = await import('../../src/services/zipService.js');
+
+test('buildZipBlob → listZipEntries/readZipEntry round-trips blobs and bytes', async () => {
+  const blob = await buildZipBlob([
+    { path: 'document.json', bytes: new TextEncoder().encode('{"a":1}') },
+    { path: 'layers/one.png', blob: new Blob([binary]) },
+  ]);
+  assert.ok(blob instanceof Blob);
+  const entries = await listZipEntries(blob);
+  assert.deepEqual(entries.map(e => e.path), ['document.json', 'layers/one.png']);
+  assert.equal(text(await readZipEntry(blob, entries[0])), '{"a":1}');
+  assert.deepEqual([...await readZipEntry(blob, entries[1])], [...binary]);
+  const all = await readZip(new Uint8Array(await blob.arrayBuffer()));
+  assert.deepEqual(all.map(e => e.path), ['document.json', 'layers/one.png']);
+});
+
+test("zip64 'always' archives read back with readZip and listZipEntries", async () => {
+  const blob = await buildZipBlob([{ path: 'big/a.bin', bytes: binary }, { path: 'b.txt', bytes: new TextEncoder().encode(big) }], { zip64: 'always' });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  let hasEnd64 = false;
+  for (let i = 0; i + 4 <= bytes.length; i++) if (view.getUint32(i, true) === 0x06064b50) { hasEnd64 = true; break; }
+  assert.ok(hasEnd64, 'a ZIP64 end record is written');
+  const entries = await readZip(bytes);
+  assert.deepEqual(entries.map(e => e.path), ['big/a.bin', 'b.txt']);
+  assert.deepEqual([...entries[0].bytes], [...binary]);
+  const listed = await listZipEntries(blob);
+  assert.equal(listed[1].size, big.length);
+  assert.equal(text(await readZipEntry(blob, listed[1])), big);
+});
+
+test('interop: Python zipfile reads our zip64 archive', async (t) => {
+  const py = python();
+  if (!py) { t.skip('python not available'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'nova-zip64-'));
+  try {
+    const ours = join(dir, 'ours64.zip');
+    writeFileSync(ours, new Uint8Array(await (await buildZipBlob([{ path: 'x/one.bin', bytes: binary }, { path: 'two.txt', bytes: new TextEncoder().encode('hello') }], { zip64: 'always' })).arrayBuffer()));
+    const listed = execFileSync(py, ['-I', '-c', [
+      'import sys, zipfile',
+      'z = zipfile.ZipFile(sys.argv[1])',
+      'assert z.testzip() is None',
+      'print(",".join(i.filename + ":" + str(i.file_size) for i in z.infolist()))',
+      'print(z.read("two.txt").decode())',
+    ].join('\n'), ours]).toString().trim().split(/\r?\n/);
+    assert.deepEqual(listed, [`x/one.bin:${binary.length},two.txt:5`, 'hello']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("interop: we read Python's force_zip64 archive", async (t) => {
+  const py = python();
+  if (!py) { t.skip('python not available'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'nova-zip64-'));
+  try {
+    const theirs = join(dir, 'theirs64.zip');
+    execFileSync(py, ['-I', '-c', [
+      'import sys, zipfile',
+      'with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:',
+      '    with z.open("deep/a.txt", "w", force_zip64=True) as f:',
+      '        f.write(b"y" * 7000)',
+      '    z.writestr("b.txt", "plain")',
+    ].join('\n'), theirs]);
+    const entries = await readZip(readFileSync(theirs));
+    assert.deepEqual(entries.map(e => e.path), ['deep/a.txt', 'b.txt']);
+    assert.equal(text(entries[0].bytes), 'y'.repeat(7000));
+    const blob = new Blob([readFileSync(theirs)]);
+    const listed = await listZipEntries(blob);
+    assert.equal(text(await readZipEntry(blob, listed[0])), 'y'.repeat(7000));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -1,7 +1,10 @@
 // zipService.js — ZIP archives with no dependencies. `buildZip` writes stored
 // (uncompressed) entries synchronously; `compressZip` deflates through the
-// browser's CompressionStream; `readZip` extracts stored and deflated entries;
-// `listZipEntries` / `readZipEntry` read a Blob one entry at a time.
+// browser's CompressionStream; `buildZipBlob` writes stored entries as a Blob
+// made of parts, so archives larger than memory can be built; `readZip` extracts
+// stored and deflated entries; `listZipEntries` / `readZipEntry` read a Blob one
+// entry at a time. ZIP64 (entries or archives over 4 GB) is read everywhere and
+// written by buildZipBlob when a size or offset needs it.
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -13,11 +16,28 @@ const CRC_TABLE = (() => {
   return t;
 })();
 
-export function crc32(bytes) {
-  let c = 0xffffffff;
+function crcUpdate(c, bytes) {
   for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return c;
+}
+
+export function crc32(bytes) {
+  return (crcUpdate(0xffffffff, bytes) ^ 0xffffffff) >>> 0;
+}
+
+/** CRC-32 of a Blob, read in chunks so it never has to fit in memory at once. */
+export async function crc32Blob(blob) {
+  let c = 0xffffffff;
+  const reader = blob.stream().getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    c = crcUpdate(c, value);
+  }
   return (c ^ 0xffffffff) >>> 0;
 }
+
+const MAX32 = 0xffffffff;
 
 /** Archive-safe relative path: forward slashes, no leading slash, no `.` parts; '' if it contains `..`. */
 export function safeEntryPath(path) {
@@ -117,6 +137,105 @@ export async function compressZip(files, date = new Date()) {
   return assemble(entries, date);
 }
 
+/**
+ * files: [{ path, blob } | { path, bytes }] → a stored ZIP as a Blob built from parts
+ * (the data Blobs are referenced, not copied). zip64: 'auto' writes ZIP64 records when
+ * a size or offset reaches 4 GB or there are 65535+ entries; 'always' writes them anyway.
+ */
+export async function buildZipBlob(files, { date = new Date(), zip64 = 'auto' } = {}) {
+  const enc = new TextEncoder();
+  const { time, day } = dosStamp(date);
+  const always = zip64 === 'always';
+  const parts = [];
+  const centrals = [];
+  let offset = 0;
+  for (const f of files) {
+    const clean = safeEntryPath(f.path);
+    if (!clean) continue;
+    const name = enc.encode(clean);
+    const data = f.blob instanceof Blob ? f.blob : entryBytes(f);
+    const size = data instanceof Blob ? data.size : data.length;
+    const crc = data instanceof Blob ? await crc32Blob(data) : crc32(data);
+    const big = always || size >= MAX32 || offset >= MAX32;
+
+    const localExtra = big ? 20 : 0;
+    const local = new Uint8Array(30 + name.length + localExtra);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, big ? 45 : 20, true); lv.setUint16(6, 0x0800, true); lv.setUint16(8, 0, true);
+    lv.setUint16(10, time, true); lv.setUint16(12, day, true); lv.setUint32(14, crc, true);
+    lv.setUint32(18, big ? MAX32 : size, true); lv.setUint32(22, big ? MAX32 : size, true);
+    lv.setUint16(26, name.length, true); lv.setUint16(28, localExtra, true);
+    local.set(name, 30);
+    if (big) {
+      const x = 30 + name.length;
+      lv.setUint16(x, 0x0001, true); lv.setUint16(x + 2, 16, true);
+      lv.setBigUint64(x + 4, BigInt(size), true); lv.setBigUint64(x + 12, BigInt(size), true);
+    }
+
+    const centralExtra = big ? 28 : 0;
+    const central = new Uint8Array(46 + name.length + centralExtra);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, big ? 45 : 20, true); cv.setUint16(6, big ? 45 : 20, true);
+    cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true);
+    cv.setUint16(12, time, true); cv.setUint16(14, day, true); cv.setUint32(16, crc, true);
+    cv.setUint32(20, big ? MAX32 : size, true); cv.setUint32(24, big ? MAX32 : size, true);
+    cv.setUint16(28, name.length, true); cv.setUint16(30, centralExtra, true);
+    cv.setUint32(42, big ? MAX32 : offset, true);
+    central.set(name, 46);
+    if (big) {
+      const x = 46 + name.length;
+      cv.setUint16(x, 0x0001, true); cv.setUint16(x + 2, 24, true);
+      cv.setBigUint64(x + 4, BigInt(size), true); cv.setBigUint64(x + 12, BigInt(size), true); cv.setBigUint64(x + 20, BigInt(offset), true);
+    }
+    parts.push(local, data);
+    centrals.push(central);
+    offset += local.length + size;
+  }
+  const centralSize = centrals.reduce((n, c) => n + c.length, 0);
+  const count = centrals.length;
+  const needs64 = always || count >= 0xffff || offset >= MAX32 || centralSize >= MAX32;
+  const tail = [];
+  if (needs64) {
+    const end64 = new Uint8Array(56);
+    const e6 = new DataView(end64.buffer);
+    e6.setUint32(0, 0x06064b50, true); e6.setBigUint64(4, 44n, true); e6.setUint16(12, 45, true); e6.setUint16(14, 45, true);
+    e6.setUint32(16, 0, true); e6.setUint32(20, 0, true);
+    e6.setBigUint64(24, BigInt(count), true); e6.setBigUint64(32, BigInt(count), true);
+    e6.setBigUint64(40, BigInt(centralSize), true); e6.setBigUint64(48, BigInt(offset), true);
+    const locator = new Uint8Array(20);
+    const lo = new DataView(locator.buffer);
+    lo.setUint32(0, 0x07064b50, true); lo.setUint32(4, 0, true); lo.setBigUint64(8, BigInt(offset + centralSize), true); lo.setUint32(16, 1, true);
+    tail.push(end64, locator);
+  }
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, needs64 ? 0xffff : count, true); ev.setUint16(10, needs64 ? 0xffff : count, true);
+  ev.setUint32(12, needs64 ? MAX32 : centralSize, true); ev.setUint32(16, needs64 ? MAX32 : offset, true);
+  return new Blob([...parts, ...centrals, ...tail, end], { type: 'application/zip' });
+}
+
+// The central directory's { count, size, start }, from the end record or, for ZIP64, the
+// ZIP64 end record its locator points at. readAt(offset, length) → bytes of the archive.
+async function directoryInfo(tailView, eocd, readAt) {
+  let count = tailView.getUint16(eocd + 10, true);
+  let size = tailView.getUint32(eocd + 12, true);
+  let start = tailView.getUint32(eocd + 16, true);
+  const locatorAt = eocd - 20;
+  if (locatorAt >= 0 && tailView.getUint32(locatorAt, true) === 0x07064b50) {
+    const end64At = Number(tailView.getBigUint64(locatorAt + 8, true));
+    const record = await readAt(end64At, 56);
+    const rv = new DataView(record.buffer, record.byteOffset, record.byteLength);
+    if (record.length < 56 || rv.getUint32(0, true) !== 0x06064b50) throw new Error('The ZIP64 directory is damaged.');
+    count = Number(rv.getBigUint64(32, true));
+    size = Number(rv.getBigUint64(40, true));
+    start = Number(rv.getBigUint64(48, true));
+  } else if (start === MAX32 || count === 0xffff) {
+    throw new Error('The ZIP64 directory is missing; the archive is damaged.');
+  }
+  return { count, size, start };
+}
+
 function findEnd(view, length) {
   for (let i = length - 22; i >= Math.max(0, length - 22 - 0xffff); i--) {
     if (view.getUint32(i, true) === 0x06054b50) return i;
@@ -133,6 +252,7 @@ function parseDirectory(bytes, start, count) {
   for (let i = 0; i < count; i++) {
     if (p + 46 > bytes.length || view.getUint32(p, true) !== 0x02014b50) throw new Error('The ZIP directory is damaged.');
     const nameLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
     const rawName = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
     const entry = {
       path: safeEntryPath(rawName),
@@ -144,7 +264,19 @@ function parseDirectory(bytes, start, count) {
       size: view.getUint32(p + 24, true),
       localAt: view.getUint32(p + 42, true),
     };
-    p += 46 + nameLen + view.getUint16(p + 30, true) + view.getUint16(p + 32, true);
+    // ZIP64: values set to 0xFFFFFFFF are in the 0x0001 extra field, in this order.
+    for (let x = p + 46 + nameLen; x + 4 <= p + 46 + nameLen + extraLen;) {
+      const id = view.getUint16(x, true);
+      const len = view.getUint16(x + 2, true);
+      if (id === 0x0001) {
+        let at = x + 4;
+        for (const key of ['size', 'compSize', 'localAt']) {
+          if (entry[key] === MAX32 && at + 8 <= x + 4 + len) { entry[key] = Number(view.getBigUint64(at, true)); at += 8; }
+        }
+      }
+      x += 4 + len;
+    }
+    p += 46 + nameLen + extraLen + view.getUint16(p + 32, true);
     if (entry.path) out.push(entry);
   }
   return out;
@@ -163,16 +295,14 @@ async function unpack(packed, entry) {
 }
 
 /**
- * ZIP bytes → [{ path, bytes, dir }]. Supports stored and deflated entries (not ZIP64
- * or encryption). Entries whose path would climb out of the archive (`..`) are skipped.
+ * ZIP bytes → [{ path, bytes, dir }]. Supports stored and deflated entries and ZIP64 (not
+ * encryption). Entries whose path would climb out of the archive (`..`) are skipped.
  */
 export async function readZip(input) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocd = findEnd(view, bytes.length);
-  const count = view.getUint16(eocd + 10, true);
-  const start = view.getUint32(eocd + 16, true);
-  if (start === 0xffffffff || count === 0xffff) throw new Error('ZIP64 archives are not supported.');
+  const { count, start } = await directoryInfo(view, eocd, async (at, len) => bytes.subarray(at, at + len));
   const out = [];
   for (const e of parseDirectory(bytes, start, count)) {
     if (e.dir) { out.push({ path: e.path, bytes: new Uint8Array(0), dir: true }); continue; }
@@ -193,10 +323,7 @@ export async function listZipEntries(blob) {
   const tail = new Uint8Array(await blob.slice(blob.size - tailLen).arrayBuffer());
   const tv = new DataView(tail.buffer);
   const eocd = findEnd(tv, tail.length);
-  const count = tv.getUint16(eocd + 10, true);
-  const size = tv.getUint32(eocd + 12, true);
-  const start = tv.getUint32(eocd + 16, true);
-  if (start === 0xffffffff || count === 0xffff) throw new Error('ZIP64 archives are not supported.');
+  const { count, size, start } = await directoryInfo(tv, eocd, async (at, len) => new Uint8Array(await blob.slice(at, at + len).arrayBuffer()));
   if (start + size > blob.size) throw new Error('The ZIP directory is damaged.');
   return parseDirectory(new Uint8Array(await blob.slice(start, start + size).arrayBuffer()), 0, count);
 }
