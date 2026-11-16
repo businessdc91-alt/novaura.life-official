@@ -17,6 +17,7 @@ test('defaults', () => {
   assert.deepEqual(st.fill, { tolerance: 32, contiguous: true, sampleAll: false });
   assert.deepEqual(st.gradient, { type: 'linear', mode: 'toSecondary' });
   assert.deepEqual(st.eyedropper, { sample: 'composite' });
+  assert.deepEqual(st.shape, { kind: 'rect', stroke: false, strokeWidth: 4 });
   assert.equal(st.maskView, null);
   assert.equal(st.notice, null);
   assert.deepEqual(st.sessions, []);

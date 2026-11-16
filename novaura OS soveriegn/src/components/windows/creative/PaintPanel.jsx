@@ -1,8 +1,9 @@
 // PaintPanel.jsx — The Paint tab's tools, colours and brush settings.
 
 import React from 'react';
-import { Brush, Pencil, Eraser, PaintBucket, Pipette, Move, Undo2, Redo2, ArrowLeftRight } from 'lucide-react';
+import { Brush, Pencil, Eraser, PaintBucket, Pipette, Move, Undo2, Redo2, ArrowLeftRight, Shapes } from 'lucide-react';
 import { useStudio } from './useStudio.js';
+import ShapeProperties from './ShapeProperties.jsx';
 
 const TOOL_BUTTONS = [
   { id: 'brush', label: 'Brush', key: 'B', icon: Brush },
@@ -11,6 +12,7 @@ const TOOL_BUTTONS = [
   { id: 'fill', label: 'Fill', key: 'G', icon: PaintBucket },
   { id: 'eyedropper', label: 'Eyedropper', key: 'I', icon: Pipette },
   { id: 'move', label: 'Move', key: 'V', icon: Move },
+  { id: 'shape', label: 'Shapes', key: 'U', icon: Shapes },
 ];
 
 const SWATCHES = ['#000000', '#ffffff', '#06b6d4', '#ec4899', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'];
@@ -151,6 +153,8 @@ export default function PaintPanel({ store }) {
           </select>
         </Section>
       )}
+
+      <ShapeProperties store={store} />
 
       <Section title="History">
         <HistoryButtons store={store} />

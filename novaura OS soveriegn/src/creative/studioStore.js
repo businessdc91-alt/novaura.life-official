@@ -10,7 +10,7 @@ import { createDocument } from './document.js';
 import { createHistory } from './history.js';
 import { createCompositor } from './compositor.js';
 
-const NESTED = ['colours', 'brush', 'fill', 'gradient', 'eyedropper'];
+const NESTED = ['colours', 'brush', 'fill', 'gradient', 'eyedropper', 'shape'];
 
 export function createStudioStore({ historyBytes = Infinity } = {}) {
   const listeners = new Set();
@@ -24,6 +24,7 @@ export function createStudioStore({ historyBytes = Infinity } = {}) {
     fill: { tolerance: 32, contiguous: true, sampleAll: false },
     gradient: { type: 'linear', mode: 'toSecondary' },
     eyedropper: { sample: 'composite' },
+    shape: { kind: 'rect', stroke: false, strokeWidth: 4 },
     maskView: null,
   };
 

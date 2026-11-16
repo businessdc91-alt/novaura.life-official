@@ -26,7 +26,7 @@ export function createPointerController({ store, getView, getRect, requestRender
     };
   }
 
-  const context = () => toolContext(store, { requestRender, notify });
+  const context = () => toolContext(store, { requestRender, notify, view: getView() });
 
   function release() {
     const t = tool;

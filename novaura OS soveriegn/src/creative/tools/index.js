@@ -24,12 +24,12 @@ export function toolForKey(event) {
   return id && TOOLS[id] ? id : null;
 }
 
-/** What a tool gets: the store, the active session, its compositor, the tab, and callbacks. */
-export function toolContext(store, { requestRender = () => {}, notify } = {}) {
+/** What a tool gets: the store, the active session, its compositor, the tab, the view, and callbacks. */
+export function toolContext(store, { requestRender = () => {}, notify, view = { zoom: 1, panX: 0, panY: 0 } } = {}) {
   const state = store.getState();
   const session = store.active();
   return {
-    store, state, session,
+    store, state, session, view,
     compositor: session?.compositor ?? null,
     tab: state.tab,
     requestRender,

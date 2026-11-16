@@ -15,6 +15,8 @@ import CanvasView from './creative/CanvasView.jsx';
 import PaintPanel from './creative/PaintPanel.jsx';
 import LayersPanel from './creative/LayersPanel.jsx';
 import HistoryPanel from './creative/HistoryPanel.jsx';
+import { makeOverlay } from './creative/canvasOverlay.js';
+import '../../creative/tools/shape.js';
 import LegacyPhotoTab from './creative/LegacyPhotoTab.jsx';
 import LegacyMemeTab from './creative/LegacyMemeTab.jsx';
 
@@ -61,6 +63,7 @@ export default function CreativeStudioWindow() {
     return s;
   });
   const rootRef = useRef(null);
+  const [overlay] = useState(() => makeOverlay(store));
   const tab = useStudio(store, s => s.tab);
   const notice = useStudio(store, s => s.notice);
   const [dismissedId, setDismissedId] = useState(null);
@@ -112,7 +115,7 @@ export default function CreativeStudioWindow() {
         {tab === 'paint' && (
           <>
             <PaintPanel store={store} />
-            <CanvasView store={store} rootRef={rootRef} />
+            <CanvasView store={store} rootRef={rootRef} overlay={overlay} />
             <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
               <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
               <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>

@@ -118,6 +118,16 @@ try {
   check('clicking "New document" goes back to the start', (await layerCount()) === 1);
   await b.screenshot(join(OUT, 'c3_layers.png'));
 
+  // ── Shapes ──
+  await b.key('u', 'KeyU', 85);
+  await sleep(200);
+  await clickOn('[data-shape-kind="star"]');
+  await b.drag([cx - 150, cy - 120], [cx + 30, cy + 60], 12);
+  await sleep(300);
+  check('the shape tool draws a star layer', (await layerNames())[0] === 'Star', (await layerNames()).join());
+  check('the selected shape shows its properties', await b.evaluate(`!!document.querySelector('[aria-label="Selected shape"]')`));
+  await b.screenshot(join(OUT, 'c4_shape.png'));
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {
