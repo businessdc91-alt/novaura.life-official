@@ -1,12 +1,72 @@
 // PhotoPanel.jsx — The Photo tab: adjustment layers you can change or remove later.
 
-import React, { useRef } from 'react';
-import { Move, Pipette, SlidersHorizontal } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Move, Pipette, SlidersHorizontal, Wand2 } from 'lucide-react';
 import { useStudio } from './useStudio.js';
 import CurvesEditor from './CurvesEditor.jsx';
 import { getLayer } from '../../../creative/document.js';
 import { addLayer, setLayerProps } from '../../../creative/edits.js';
 import { ADJUSTMENTS, defaultParams } from '../../../creative/adjustments.js';
+import { FILTERS, defaultFilterParams } from '../../../creative/filters/kernels.js';
+import { applyFilter } from '../../../creative/applyFilter.js';
+
+const FILTER_PARAM_LABELS = { amount: 'Amount', radius: 'Radius', threshold: 'Threshold', angle: 'Angle', distance: 'Distance', cell: 'Cell size', height: 'Height' };
+
+function FilterSection({ store, session }) {
+  const [open, setOpen] = useState(null);
+  const [params, setParams] = useState({});
+  const choose = (id) => { setOpen(id); setParams(defaultFilterParams(id)); };
+
+  const run = async () => {
+    const id = open;
+    const label = FILTERS[id].label;
+    const controller = new AbortController();
+    const busy = progress => store.update({ busy: { label, progress, cancel: () => controller.abort() } });
+    busy(0);
+    const p = id === 'addNoise' ? { ...params, seed: Math.floor(Math.random() * 2 ** 31) } : params;
+    const r = await applyFilter(session, id, p, { onProgress: busy, signal: controller.signal });
+    store.update({ busy: null });
+    if (!r.ok && !r.cancelled) store.notify(r.reason);
+  };
+
+  return (
+    <Section title="Filters">
+      <div className="grid grid-cols-2 gap-1">
+        {Object.entries(FILTERS).map(([id, def]) => (
+          <button key={id} type="button" data-filter={id} aria-pressed={open === id} onClick={() => choose(id)}
+            className={`flex items-center gap-1 px-1.5 py-1.5 rounded-md text-[10.5px] text-left ${open === id ? 'bg-purple-700 text-white' : 'bg-slate-950 hover:bg-slate-800 text-slate-300'}`}>
+            <Wand2 className="w-3 h-3 shrink-0" /><span className="truncate">{def.label}</span>
+          </button>
+        ))}
+      </div>
+      {open && (
+        <div className="space-y-2 rounded-md border border-slate-700 p-2">
+          {Object.entries(FILTERS[open].params).filter(([, spec]) => spec.kind !== 'seed').map(([key, spec]) => (
+            spec.kind === 'bool' ? (
+              <label key={key} className="flex items-center gap-2 text-[11px] text-slate-300">
+                <input type="checkbox" checked={!!params[key]} onChange={e => setParams({ ...params, [key]: e.target.checked })} className="accent-purple-500" />
+                Same noise on every colour (mono)
+              </label>
+            ) : (
+              <label key={key} className="block">
+                <span className="flex justify-between text-[11px] text-slate-400 mb-1">
+                  <span>{FILTER_PARAM_LABELS[key] || key}</span><span className="tabular-nums text-slate-300">{params[key]}</span>
+                </span>
+                <input type="range" min={spec.min} max={spec.max} step={spec.step} value={params[key]}
+                  onChange={e => setParams({ ...params, [key]: Number(e.target.value) })} className="w-full accent-purple-500" />
+              </label>
+            )
+          ))}
+          <button type="button" data-action="apply-filter" onClick={run}
+            className="w-full py-1.5 rounded-md bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-semibold">
+            Apply {FILTERS[open].label}
+          </button>
+          <p className="text-[10px] text-slate-500">Changes the selected pixel layer (or its mask). Undo brings it back.</p>
+        </div>
+      )}
+    </Section>
+  );
+}
 
 const PARAM_LABELS = {
   brightness: 'Brightness', contrast: 'Contrast', hue: 'Hue', saturation: 'Saturation', lightness: 'Lightness',
@@ -96,6 +156,8 @@ export default function PhotoPanel({ store }) {
       </Section>
 
       {layer?.kind === 'adjust' && <AdjustmentSettings store={store} session={session} layer={layer} />}
+
+      {session && <FilterSection store={store} session={session} />}
     </aside>
   );
 }

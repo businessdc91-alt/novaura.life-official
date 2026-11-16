@@ -171,6 +171,17 @@ try {
   await sleep(300);
   check('undo removes the adjustments again', (await pixelAt(cx + 200, cy + 100)).join() === beforeAdjust.join());
 
+  // ── Photo: a filter on the workers ──
+  const bgRow = await b.evaluate(`[...document.querySelectorAll('[data-layer-id]')].find(r => r.querySelector('[data-layer-name]')?.textContent === 'Background')?.dataset.layerId`);
+  await clickOn(`[data-layer-id="${bgRow}"] [data-layer-name]`);
+  await clickOn('[data-filter="addNoise"]');
+  await clickOn('[data-action="apply-filter"]');
+  check('a filter finishes on the workers', await b.waitFor(`!document.querySelector('[data-busy]') && /Photo · Add Noise/.test([...document.querySelectorAll('[data-step-index]')].pop()?.textContent || '')`, 20000), await lastStep());
+  check('and changes the picture', (await pixelAt(cx + 200, cy + 100)).join() !== beforeAdjust.join());
+  await b.key('z', 'KeyZ', 90, 2);
+  await sleep(300);
+  check('undo takes the filter back', (await pixelAt(cx + 200, cy + 100)).join() === beforeAdjust.join());
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {

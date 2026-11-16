@@ -37,6 +37,11 @@ function runHistory(store, action) {
 /** Studio keyboard shortcuts; returns true when the key was used. */
 function handleKey(store, e) {
   if (!shouldHandleShortcut(e)) return false;
+  const busy = store.getState().busy;
+  if (busy) {
+    if (e.key === 'Escape') { busy.cancel?.(); return true; }
+    return false; // nothing else while a filter runs
+  }
   const history = historyActionFor(e);
   if (history) { runHistory(store, history); return true; }
   if (e.ctrlKey || e.metaKey || e.altKey) return false;
@@ -67,6 +72,7 @@ export default function CreativeStudioWindow() {
   const [overlay] = useState(() => makeOverlay(store));
   const tab = useStudio(store, s => s.tab);
   const notice = useStudio(store, s => s.notice);
+  const busy = useStudio(store, s => s.busy);
   const [dismissedId, setDismissedId] = useState(null);
   const shownNotice = notice && notice.id !== dismissedId ? notice.text : null;
 
@@ -147,6 +153,19 @@ export default function CreativeStudioWindow() {
         )}
         {tab === 'meme' && <div className="flex-1 overflow-y-auto p-5"><LegacyMemeTab /></div>}
       </div>
+
+      {busy && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/50" data-busy="">
+          <div role="status" className="w-72 rounded-xl border border-slate-700 bg-slate-900 p-4 space-y-3 shadow-2xl">
+            <p className="text-sm font-semibold text-white">Applying {busy.label}…</p>
+            <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+              <div className="h-full bg-purple-500 transition-[width]" style={{ width: `${Math.round((busy.progress || 0) * 100)}%` }} />
+            </div>
+            <button type="button" data-action="cancel-busy" onClick={() => busy.cancel?.()}
+              className="w-full py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-xs">Cancel (Esc)</button>
+          </div>
+        </div>
+      )}
 
       {shownNotice && (
         <div role="status" className="absolute left-1/2 -translate-x-1/2 bottom-6 px-4 py-2 rounded-lg bg-slate-800/95 border border-slate-600 text-xs text-slate-100 shadow-xl">

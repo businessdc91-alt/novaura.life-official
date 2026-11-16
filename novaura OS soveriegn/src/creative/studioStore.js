@@ -30,6 +30,7 @@ export function createStudioStore({ historyBytes = Infinity } = {}) {
     eyedropper: { sample: 'composite' },
     shape: { kind: 'rect', stroke: false, strokeWidth: 4 },
     maskView: null,
+    busy: null, // { label, progress, cancel } while a long job (a filter) runs
   };
 
   function set(patch) {
