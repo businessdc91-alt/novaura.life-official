@@ -6,6 +6,7 @@ import { getLayer } from '../../../creative/document.js';
 import { renderShape } from '../../../creative/shapes.js';
 import { handlesFor } from '../../../creative/transformHandles.js';
 import { shapePreview } from '../../../creative/tools/shape.js';
+import { gradientPreview } from '../../../creative/tools/gradient.js';
 
 const ACCENT = '#22d3ee';
 
@@ -17,6 +18,18 @@ export function makeOverlay(store) {
       ctx.save();
       ctx.globalAlpha = 0.75;
       renderShape(ctx, preview);
+      ctx.restore();
+    }
+    const line = gradientPreview();
+    if (line) {
+      ctx.save();
+      ctx.lineWidth = 1.5 / z;
+      ctx.strokeStyle = ACCENT;
+      ctx.setLineDash([6 / z, 4 / z]);
+      ctx.beginPath();
+      ctx.moveTo(line.start.x, line.start.y);
+      ctx.lineTo(line.end.x, line.end.y);
+      ctx.stroke();
       ctx.restore();
     }
     if (store.getState().tool !== 'shape') return;

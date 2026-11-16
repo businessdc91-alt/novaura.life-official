@@ -1,7 +1,7 @@
 // PaintPanel.jsx — The Paint tab's tools, colours and brush settings.
 
 import React from 'react';
-import { Brush, Pencil, Eraser, PaintBucket, Pipette, Move, Undo2, Redo2, ArrowLeftRight, Shapes } from 'lucide-react';
+import { Brush, Pencil, Eraser, PaintBucket, Pipette, Move, Undo2, Redo2, ArrowLeftRight, Shapes, Blend } from 'lucide-react';
 import { useStudio } from './useStudio.js';
 import ShapeProperties from './ShapeProperties.jsx';
 
@@ -10,6 +10,7 @@ const TOOL_BUTTONS = [
   { id: 'pencil', label: 'Pencil', key: 'N', icon: Pencil },
   { id: 'eraser', label: 'Eraser', key: 'E', icon: Eraser },
   { id: 'fill', label: 'Fill', key: 'G', icon: PaintBucket },
+  { id: 'gradient', label: 'Gradient', key: 'Shift+G', icon: Blend },
   { id: 'eyedropper', label: 'Eyedropper', key: 'I', icon: Pipette },
   { id: 'move', label: 'Move', key: 'V', icon: Move },
   { id: 'shape', label: 'Shapes', key: 'U', icon: Shapes },
@@ -68,6 +69,7 @@ export default function PaintPanel({ store }) {
   const brush = useStudio(store, s => s.brush);
   const fill = useStudio(store, s => s.fill);
   const eyedropper = useStudio(store, s => s.eyedropper);
+  const gradient = useStudio(store, s => s.gradient);
   const painting = tool === 'brush' || tool === 'pencil' || tool === 'eraser';
 
   return (
@@ -141,6 +143,22 @@ export default function PaintPanel({ store }) {
             <input type="checkbox" checked={fill.sampleAll} onChange={e => store.update({ fill: { sampleAll: e.target.checked } })} className="accent-cyan-500" />
             Match the whole picture
           </label>
+        </Section>
+      )}
+
+      {tool === 'gradient' && (
+        <Section title="Gradient">
+          <select value={gradient.type} aria-label="Gradient shape" onChange={e => store.update({ gradient: { type: e.target.value } })}
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs">
+            <option value="linear">Linear</option>
+            <option value="radial">Radial</option>
+          </select>
+          <select value={gradient.mode} aria-label="Gradient colours" onChange={e => store.update({ gradient: { mode: e.target.value } })}
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs">
+            <option value="toSecondary">Main colour to second colour</option>
+            <option value="toTransparent">Main colour to transparent</option>
+          </select>
+          <p className="text-[10px] text-slate-500">Drag across the picture from where the gradient starts to where it ends.</p>
         </Section>
       )}
 

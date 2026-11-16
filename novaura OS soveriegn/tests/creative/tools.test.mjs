@@ -145,3 +145,19 @@ test('toolForKey maps B/N/E/G/I/V', () => {
   assert.equal(key('b', { ctrlKey: true }), null);
   assert.equal(key('x'), null);
 });
+
+test('gradient stops: to the second colour, or fading the main colour to transparent', async () => {
+  const { gradientStops } = await import('../../src/creative/tools/gradient.js');
+  assert.deepEqual(gradientStops('#ff0000', '#0000ff', 'toSecondary'), [
+    { offset: 0, colour: 'rgba(255, 0, 0, 1)' }, { offset: 1, colour: 'rgba(0, 0, 255, 1)' },
+  ]);
+  assert.deepEqual(gradientStops('#ff0000', '#0000ff', 'toTransparent'), [
+    { offset: 0, colour: 'rgba(255, 0, 0, 1)' }, { offset: 1, colour: 'rgba(255, 0, 0, 0)' },
+  ]);
+});
+
+test('Shift+G selects the gradient once it is registered', async () => {
+  await import('../../src/creative/tools/gradient.js');
+  assert.equal(toolForKey({ key: 'G', shiftKey: true, ctrlKey: false, metaKey: false, altKey: false }), 'gradient');
+  assert.equal(toolForKey({ key: 'g', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }), 'fill');
+});
