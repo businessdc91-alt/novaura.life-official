@@ -97,7 +97,7 @@ fn valid_session(id: &str) -> bool {
 }
 
 /// Accept only plain relative paths: no `..`, no backslashes, no absolute paths.
-fn clean_path(path: &str) -> Option<String> {
+pub(crate) fn clean_path(path: &str) -> Option<String> {
     let trimmed = path.trim_start_matches('/');
     if trimmed.is_empty() || trimmed.len() > 300 || trimmed.contains('\\') || trimmed.contains('\0') {
         return None;
@@ -176,7 +176,7 @@ pub fn cybeni_preview_clear(session: String) -> Result<(), String> {
     Ok(())
 }
 
-fn percent_decode(input: &str) -> String {
+pub(crate) fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

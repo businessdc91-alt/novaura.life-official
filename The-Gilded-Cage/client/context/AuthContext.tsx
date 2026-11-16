@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getApiUrl } from "@/lib/query-client";
+
+// Builds without a server address (the copy bundled in Novaura Sovereign OS)
+// play offline: the player gets a local profile and saves stay on the device.
+const OFFLINE = !process.env.EXPO_PUBLIC_DOMAIN;
+const LOCAL_USER_KEY = "@gilded_cage/local_user";
+const localUser = (username?: string): AuthUser => ({ id: "local", username: (username || "").trim().slice(0, 24) || "Traveller" });
 
 interface AuthUser {
   id: string;
@@ -24,9 +31,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkSession();
   }, []);
 
-  const apiBase = () => new URL("/api/auth", getApiUrl()).toString().replace("/auth", "");
-
   const checkSession = async () => {
+    if (OFFLINE) {
+      try {
+        const saved = await AsyncStorage.getItem(LOCAL_USER_KEY);
+        setUser(saved ? localUser(JSON.parse(saved).username) : localUser());
+      } catch {
+        setUser(localUser());
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
     try {
       const url = new URL("/api/auth/me", getApiUrl()).toString();
       const res = await fetch(url, { credentials: "include" });
@@ -43,7 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const signInLocally = async (username: string) => {
+    const u = localUser(username.startsWith("guest_") ? "" : username);
+    await AsyncStorage.setItem(LOCAL_USER_KEY, JSON.stringify(u)).catch(() => {});
+    setUser(u);
+  };
+
   const login = async (username: string, password: string) => {
+    if (OFFLINE) return signInLocally(username);
     const url = new URL("/api/auth/login", getApiUrl()).toString();
     const res = await fetch(url, {
       method: "POST",
@@ -59,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (username: string, password: string) => {
+    if (OFFLINE) return signInLocally(username);
     const url = new URL("/api/auth/register", getApiUrl()).toString();
     const res = await fetch(url, {
       method: "POST",
@@ -74,6 +98,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    if (OFFLINE) {
+      await AsyncStorage.removeItem(LOCAL_USER_KEY).catch(() => {});
+      setUser(null);
+      return;
+    }
     const url = new URL("/api/auth/logout", getApiUrl()).toString();
     await fetch(url, { method: "POST", credentials: "include" });
     setUser(null);

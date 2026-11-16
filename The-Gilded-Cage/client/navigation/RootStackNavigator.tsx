@@ -28,6 +28,7 @@ import CombatScreen from "@/screens/CombatScreen";
 import HeroStatusScreen from "@/screens/HeroStatusScreen";
 import TownQuestsScreen from "@/screens/TownQuestsScreen";
 import MemoryJournalScreen from "@/screens/MemoryJournalScreen";
+import AwakeningsScreen from "@/screens/AwakeningsScreen";
 import { useScreenOptions } from "@/hooks/useScreenOptions";
 import { GameColors } from "@/constants/theme";
 import { ImmersiveScene } from "@/data/immersiveScenes";
@@ -58,6 +59,7 @@ export type RootStackParamList = {
   HeroStatus: undefined;
   TownQuests: undefined;
   MemoryJournal: undefined;
+  Awakenings: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -264,6 +266,11 @@ export default function RootStackNavigator() {
             color: GameColors.parchment,
           },
         }}
+      />
+      <Stack.Screen
+        name="Awakenings"
+        component={AwakeningsScreen}
+        options={{ headerShown: false }}
       />
     </Stack.Navigator>
   );

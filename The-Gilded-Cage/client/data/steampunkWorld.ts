@@ -410,6 +410,7 @@ export const townBuildings: TownBuilding[] = [
       interactables: [
         { id: "notice-board", name: "Quest Board", description: "A bulletin board covered in job postings", action: "examine", result: { type: "event", value: "show-quests" } },
         { id: "piano", name: "Steam Piano", description: "A self-playing piano, keys moving on their own", action: "use", result: { type: "memory", value: "This melody... you've heard it before. Hummed in darkness by gentle voices. The women at the tavern... they used to sing this." } },
+        { id: "echo-lattice-table", name: "Echo Lattice Table", description: "A brass lattice table where patrons duel AI minds in Cognitive Awakenings: Echoes of a Soul, for Ironhaven gold.", action: "use", result: { type: "event", value: "open-awakenings" } },
       ],
       events: [
         { id: "tavern-flashback", trigger: "enter", condition: "first-visit", narrative: ["Stepping into the tavern, a wave of deja vu washes over you.", "The smell of ale, the warmth of the fire, the chatter of patrons...", "For a moment, you're somewhere else. A different tavern. Golden light. Fearful eyes behind forced smiles.", "The moment passes. But the feeling of wrongness remains."] },

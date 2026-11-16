@@ -161,6 +161,12 @@ export default function BuildingInteriorScreen({
 
     if (obj.result.type === "memory") {
       setDiscoveredMemory(obj.result.value as string);
+    } else if (obj.result.type === "event") {
+      if (obj.result.value === "open-awakenings") {
+        navigation.navigate("Awakenings");
+      } else if (obj.result.value === "show-quests") {
+        navigation.navigate("TownQuests");
+      }
     }
   };
 
