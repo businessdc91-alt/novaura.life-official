@@ -209,6 +209,21 @@ try {
   await sleep(300);
   check('undo restores the original size', (await pixelAt(cx + 200, cy + 100)).join() === beforeAdjust.join());
 
+  // ── Meme ──
+  await clickOn('[data-tab="meme"]');
+  await clickOn('[data-meme-template="doge"]');
+  await sleep(500);
+  check('picking a template adds a locked template layer', await b.evaluate(`[...document.querySelectorAll('[data-layer-id]')].some(r => /^Template: /.test(r.querySelector('[data-layer-name]')?.textContent || '') && r.dataset.locked === 'true')`));
+  await clickOn('[data-meme-top]');
+  await b.send('Input.insertText', { text: 'when it runs offline' });
+  await clickOn('[data-meme-bottom]');
+  await b.send('Input.insertText', { text: 'on your own machine' });
+  await sleep(400);
+  const memeNames = await layerNames();
+  check('captions are text layers', memeNames.includes('Top text') && memeNames.includes('Bottom text'), memeNames.join());
+  check('meme steps are labelled Meme', /^Meme · (Bottom text|Edit text)$/.test((await lastStep()).trim()), await lastStep());
+  await b.screenshot(join(OUT, 'c9_meme.png'));
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {

@@ -20,7 +20,7 @@ import '../../creative/tools/shape.js';
 import '../../creative/tools/gradient.js';
 import '../../creative/tools/text.js';
 import PhotoPanel from './creative/PhotoPanel.jsx';
-import LegacyMemeTab from './creative/LegacyMemeTab.jsx';
+import MemePanel from './creative/MemePanel.jsx';
 
 const TABS = [
   { id: 'paint', label: 'Paint', icon: Palette, on: 'bg-cyan-600' },
@@ -142,17 +142,14 @@ export default function CreativeStudioWindow() {
       </header>
 
       <div className="flex-1 min-h-0 flex">
-        {tab !== 'meme' && (
-          <>
-            {tab === 'paint' ? <PaintPanel store={store} /> : <PhotoPanel store={store} />}
-            <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
-            <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
-              <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
-              <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>
-            </aside>
-          </>
-        )}
-        {tab === 'meme' && <div className="flex-1 overflow-y-auto p-5"><LegacyMemeTab /></div>}
+        {tab === 'paint' && <PaintPanel store={store} />}
+        {tab === 'photo' && <PhotoPanel store={store} />}
+        {tab === 'meme' && <MemePanel store={store} />}
+        <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
+        <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
+          <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
+          <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>
+        </aside>
       </div>
 
       {busy && (
