@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "test": "node --experimental-test-module-mocks --test \"tests/**/*.test.mjs\"",
+    "test:browser": "node scripts/browser-test.mjs",
     "preview": "vite preview",
     "tauri:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode check",
     "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode dev",
