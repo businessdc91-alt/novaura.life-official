@@ -142,9 +142,11 @@ export function surfaceFromPixels(pixels) {
 }
 
 // PNG decoding for array surfaces lives in io/png.js (added with the project file format).
+// Array surfaces only exist in Node tests, so the bundler is told not to resolve this.
+const PNG_MODULE = './io/png.js';
 async function loadPng() {
   try {
-    return await import('./io/png.js');
+    return await import(/* @vite-ignore */ PNG_MODULE);
   } catch {
     throw new Error('PNG decoding needs src/creative/io/png.js');
   }

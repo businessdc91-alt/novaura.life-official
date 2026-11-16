@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Smoke-test harness: mounts only the Creative Studio window, with the app's styles,
+     so it can be driven without the desktop's node activation and sign-in. Served by
+     the Vite dev server; not part of the production build (vite builds index.html only). -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Creative Studio harness</title>
+    <style>html, body, #root { height: 100%; margin: 0; background: #020617; }</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import '/src/index.css';
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import CreativeStudioWindow from '/src/components/windows/CreativeStudioWindow.jsx';
+      createRoot(document.getElementById('root')).render(React.createElement(CreativeStudioWindow));
+    </script>
+  </body>
+</html>

@@ -85,7 +85,7 @@ export const fill = {
       const { flatten } = await import('../compositor.js');
       sample = flatten(doc).read(o.x, o.y, surface.width, surface.height);
     }
-    const rect = floodFill(pixels, p.x - o.x, p.y - o.y, hexToRgba(state.colours.primary), state.fill);
+    const rect = floodFill(pixels, p.x - o.x, p.y - o.y, hexToRgba(state.colours.primary), { ...state.fill, sample });
     if (!rect) { stroke.cancel(); return; }
     stroke.touch({ x: rect.x + o.x, y: rect.y + o.y, w: rect.w, h: rect.h });
     surface.write(rect.x, rect.y, region(pixels, rect));

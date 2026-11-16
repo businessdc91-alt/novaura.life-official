@@ -84,6 +84,21 @@ test('the fill bucket fills the clicked area as one step', () => {
   assert.equal(session.history.steps[0].label, 'Fill');
 });
 
+test('fill with "Match the whole picture" stops at edges on other layers', async () => {
+  const { store, session, ctx } = setup('white', { fill: { sampleAll: true, tolerance: 0, contiguous: true } });
+  const { addLayer } = await import('../../../src/creative/edits.js');
+  const wall = addLayer(session, 'pixel', { name: 'Wall' }, { tab: 'paint' }).layer;
+  const wallSurface = surfaceOf(session.doc, wall);
+  wallSurface.ctx.fillStyle = '#000000';
+  wallSurface.ctx.fillRect(20, 0, 2, 40);
+  const paint = addLayer(session, 'pixel', { name: 'Paint' }, { tab: 'paint' }).layer;
+  store.update({ colours: { primary: '#ff0000' } });
+  await TOOLS.fill.down(ctx(), pt(3, 3));
+  const s = surfaceOf(session.doc, paint);
+  assert.deepEqual([...s.read(3, 3, 1, 1).data], [255, 0, 0, 255]);
+  assert.equal(s.read(30, 3, 1, 1).data[3], 0, 'the fill stopped at the wall on the other layer');
+});
+
 test('the eyedropper picks the composite colour', () => {
   const { store, ctx } = setup('#336699');
   TOOLS.eyedropper.down(ctx(), pt(4, 4));

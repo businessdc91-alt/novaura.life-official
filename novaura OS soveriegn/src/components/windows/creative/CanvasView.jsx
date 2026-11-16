@@ -1,0 +1,222 @@
+// CanvasView.jsx — The Creative Studio canvas: the active document on a checkerboard,
+// zoom (Ctrl+scroll, Fit, 100%), pan (Space+drag, middle button, scroll), and the
+// pointer driving the current tool. The canvas backing store follows devicePixelRatio
+// so the picture stays sharp on scaled Windows displays.
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useStudio } from './useStudio.js';
+import { fitView, zoomAt, actualSize } from '../../../creative/view.js';
+import { createPointerController } from '../../../creative/pointerController.js';
+import { TOOLS } from '../../../creative/tools/index.js';
+import { shouldHandleShortcut } from '../../../creative/shortcuts.js';
+
+let checkerTile = null;
+function checker(ctx) {
+  if (!checkerTile) {
+    checkerTile = new OffscreenCanvas(16, 16);
+    const c = checkerTile.getContext('2d');
+    c.fillStyle = '#d4d4d8';
+    c.fillRect(0, 0, 16, 16);
+    c.fillStyle = '#f4f4f5';
+    c.fillRect(0, 0, 8, 8);
+    c.fillRect(8, 8, 8, 8);
+  }
+  return ctx.createPattern(checkerTile, 'repeat');
+}
+
+export default function CanvasView({ store, rootRef, overlay = null }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const viewRef = useRef({ zoom: 1, panX: 0, panY: 0 });
+  const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
+  const frame = useRef(0);
+  const panRef = useRef(null);
+  const fittedFor = useRef(null);
+  const [zoom, setZoom] = useState(1);
+  const [spaceDown, setSpaceDown] = useState(false);
+  const activeId = useStudio(store, s => s.activeId);
+  const tool = useStudio(store, s => s.tool);
+
+  const draw = useCallback(() => {
+    frame.current = 0;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { w, h, dpr } = sizeRef.current;
+    const v = viewRef.current;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0b0f19';
+    ctx.fillRect(0, 0, w, h);
+    const session = store.active();
+    if (!session) return;
+    const { width, height } = session.doc;
+    const sw = width * v.zoom;
+    const sh = height * v.zoom;
+    ctx.fillStyle = checker(ctx);
+    ctx.fillRect(v.panX, v.panY, sw, sh);
+    ctx.save();
+    ctx.setTransform(dpr * v.zoom, 0, 0, dpr * v.zoom, dpr * v.panX, dpr * v.panY);
+    ctx.imageSmoothingEnabled = v.zoom < 2;
+    const visible = {
+      x: Math.floor(-v.panX / v.zoom) - 1, y: Math.floor(-v.panY / v.zoom) - 1,
+      w: Math.ceil(w / v.zoom) + 3, h: Math.ceil(h / v.zoom) + 3,
+    };
+    session.compositor.render(ctx, visible);
+    overlay?.(ctx, session, v);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(v.panX) - 0.5, Math.round(v.panY) - 0.5, Math.round(sw) + 1, Math.round(sh) + 1);
+  }, [store, overlay]);
+
+  const requestRender = useCallback(() => {
+    if (!frame.current) frame.current = requestAnimationFrame(draw);
+  }, [draw]);
+
+  const setView = useCallback((next) => {
+    viewRef.current = next;
+    setZoom(next.zoom);
+    requestRender();
+  }, [requestRender]);
+
+  const fit = useCallback(() => {
+    const session = store.active();
+    const { w, h } = sizeRef.current;
+    if (!session || !w || !h) return;
+    setView(fitView(session.doc.width, session.doc.height, w, h));
+    fittedFor.current = session.id;
+  }, [store, setView]);
+
+  const oneToOne = useCallback(() => {
+    const session = store.active();
+    const { w, h } = sizeRef.current;
+    if (session) setView(actualSize(session.doc.width, session.doc.height, w, h));
+  }, [store, setView]);
+
+  // Keep the backing store matched to the element size and devicePixelRatio.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const canvas = canvasRef.current;
+    const resize = () => {
+      const rect = wrap.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      sizeRef.current = { w: rect.width, h: rect.height, dpr };
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      if (fittedFor.current !== store.active()?.id) fit();
+      requestRender();
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(wrap);
+    resize();
+    return () => observer.disconnect();
+  }, [store, fit, requestRender]);
+
+  // A different document becomes active: fit it.
+  useEffect(() => { if (activeId && fittedFor.current !== activeId) fit(); }, [activeId, fit]);
+
+  // Any change in the store (history, settings) redraws.
+  useEffect(() => store.subscribe(() => requestRender()), [store, requestRender]);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+
+  // The pointer controller is made on first use, inside an event handler.
+  const controllerRef = useRef(null);
+  const renderRef = useRef(requestRender);
+  useEffect(() => { renderRef.current = requestRender; }, [requestRender]);
+  const pointer = () => {
+    if (!controllerRef.current) {
+      controllerRef.current = createPointerController({
+        store,
+        getView: () => viewRef.current,
+        getRect: () => canvasRef.current.getBoundingClientRect(),
+        requestRender: () => renderRef.current(),
+      });
+    }
+    return controllerRef.current;
+  };
+
+  // Ctrl+scroll zooms at the pointer; plain scroll pans (Shift for sideways).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const v = viewRef.current;
+      if (e.ctrlKey || e.metaKey) {
+        setView(zoomAt(v, Math.exp(-e.deltaY * 0.0015), { x: e.clientX - rect.left, y: e.clientY - rect.top }));
+      } else {
+        const dx = e.shiftKey ? e.deltaY : e.deltaX;
+        const dy = e.shiftKey ? 0 : e.deltaY;
+        setView({ ...v, panX: v.panX - dx, panY: v.panY - dy });
+      }
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [setView]);
+
+  // Holding Space pans, while focus is inside the studio and not in a text box.
+  useEffect(() => {
+    const inStudio = () => rootRef?.current?.contains(document.activeElement);
+    const down = (e) => {
+      if (e.code !== 'Space' || !inStudio() || !shouldHandleShortcut(e)) return;
+      e.preventDefault();
+      setSpaceDown(true);
+    };
+    const up = (e) => { if (e.code === 'Space') setSpaceDown(false); };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, [rootRef]);
+
+  const onPointerDown = (e) => {
+    rootRef?.current?.focus({ preventScroll: true });
+    canvasRef.current.setPointerCapture?.(e.pointerId);
+    if (e.button === 1 || spaceDown) {
+      const v = viewRef.current;
+      panRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, panX: v.panX, panY: v.panY };
+      e.preventDefault();
+      return;
+    }
+    pointer().down(e.nativeEvent);
+  };
+  const onPointerMove = (e) => {
+    const pan = panRef.current;
+    if (pan && pan.pointerId === e.pointerId) {
+      setView({ ...viewRef.current, panX: pan.panX + e.clientX - pan.x, panY: pan.panY + e.clientY - pan.y });
+      return;
+    }
+    pointer().move(e.nativeEvent);
+  };
+  const endPan = (e) => {
+    if (panRef.current?.pointerId === e.pointerId) { panRef.current = null; return true; }
+    return false;
+  };
+  const onPointerUp = (e) => { if (!endPan(e)) pointer().up(e.nativeEvent); };
+  const onPointerCancel = (e) => { if (!endPan(e)) pointer().cancel(e.nativeEvent); };
+
+  const cursor = spaceDown ? 'grab' : (TOOLS[tool]?.cursor || 'default');
+
+  return (
+    <div ref={wrapRef} className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#0b0f19]">
+      <canvas
+        ref={canvasRef}
+        data-creative-canvas=""
+        className="block"
+        style={{ cursor, touchAction: 'none' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onLostPointerCapture={onPointerCancel}
+        onContextMenu={e => e.preventDefault()}
+      />
+      <div className="absolute right-3 bottom-3 flex items-center gap-1 rounded-lg bg-slate-900/90 border border-slate-700/70 px-1.5 py-1 text-[11px] text-slate-300 shadow-lg">
+        <span className="px-1.5 tabular-nums" aria-label="Zoom">{Math.round(zoom * 100)}%</span>
+        <button type="button" onClick={fit} className="px-2 py-0.5 rounded-md hover:bg-slate-700/70" title="Fit the picture in the window">Fit</button>
+        <button type="button" onClick={oneToOne} className="px-2 py-0.5 rounded-md hover:bg-slate-700/70" title="Actual pixels">100%</button>
+      </div>
+    </div>
+  );
+}
