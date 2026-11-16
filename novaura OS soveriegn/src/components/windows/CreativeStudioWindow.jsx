@@ -28,6 +28,8 @@ import StatusBar from './creative/StatusBar.jsx';
 import { loadBudgets } from '../../creative/memory.js';
 import FileMenu from './creative/FileMenu.jsx';
 import { openFileBlob, saveProject, downloadProject, openVaultFile } from '../../creative/io/projectFiles.js';
+import { startRecovery, listRecovery, takeRecovery, clearRecovery } from '../../creative/io/recovery.js';
+import RecoveryPrompt from './creative/RecoveryPrompt.jsx';
 
 const TABS = [
   { id: 'paint', label: 'Paint', icon: Palette, on: 'bg-cyan-600' },
@@ -154,6 +156,40 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
     window.addEventListener('novaura:app_context', onContext);
     return () => window.removeEventListener('novaura:app_context', onContext);
   }, [openFromFiles]);
+  // ── Crash recovery: copies of unsaved work, written on a timer and when the studio closes ──
+  const [recovered, setRecovered] = useState(null);
+  useEffect(() => {
+    let live = true;
+    listRecovery().then((items) => { if (live && items.length) setRecovered(items); }).catch(() => {});
+    const stop = startRecovery(store);
+    return () => {
+      live = false;
+      store.dispose().finally(stop); // write copies of unsaved documents, then stop
+    };
+  }, [store]);
+  const restoreRecovered = async () => {
+    const items = recovered || [];
+    setRecovered(null);
+    let last = null;
+    for (const r of items) {
+      try {
+        const session = store.openDocument(await takeRecovery(r.id));
+        session.savedVersion = -1; // restored work is still unsaved
+        last = session;
+        await clearRecovery(r.id);
+      } catch (err) {
+        store.notify(err.message);
+      }
+    }
+    if (last) replacePristine(last);
+    store.bump();
+  };
+  const discardRecovered = async () => {
+    const items = recovered || [];
+    setRecovered(null);
+    for (const r of items) await clearRecovery(r.id).catch(() => {});
+  };
+
   const actions = useRef({});
   useEffect(() => { actions.current = { save: () => save() }; }, [save]);
   const shownNotice = notice && notice.id !== dismissedId ? notice.text : null;
@@ -254,6 +290,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
           onCreate={(opts) => { store.newDocument(opts); setNewDocOpen(false); }}
         />
       )}
+      {recovered && <RecoveryPrompt items={recovered} onRestore={restoreRecovered} onDiscard={discardRecovered} />}
       {closing && (
         <ConfirmCloseDialog
           name={closing.doc.name}

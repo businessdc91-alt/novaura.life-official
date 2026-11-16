@@ -16,7 +16,10 @@
       import React from 'react';
       import { createRoot } from 'react-dom/client';
       import CreativeStudioWindow from '/src/components/windows/CreativeStudioWindow.jsx';
-      createRoot(document.getElementById('root')).render(React.createElement(CreativeStudioWindow));
+      const root = createRoot(document.getElementById('root'));
+      root.render(React.createElement(CreativeStudioWindow));
+      // Lets the smoke test close the studio the way the desktop closes a window.
+      window.__unmountStudio = () => root.unmount();
     </script>
   </body>
 </html>

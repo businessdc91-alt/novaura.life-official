@@ -20,6 +20,7 @@ const NESTED = ['colours', 'brush', 'fill', 'gradient', 'eyedropper', 'shape'];
 export function createStudioStore({ historyBytes = Infinity } = {}) {
   const listeners = new Set();
   const stopHistory = new Map(); // session id → unsubscribe
+  const disposers = new Set();
   let budget = historyBytes;
   let noticeCount = 0;
   let state = {
@@ -93,6 +94,17 @@ export function createStudioStore({ historyBytes = Infinity } = {}) {
     setHistoryBudget(bytes) {
       budget = bytes;
       for (const s of state.sessions) s.history.setBudget(bytes);
+    },
+
+    /** Run fn when the studio closes (dispose); returns a function that removes it. */
+    onDispose(fn) {
+      disposers.add(fn);
+      return () => disposers.delete(fn);
+    },
+
+    /** The studio is closing: let everything that registered finish (e.g. recovery copies). */
+    async dispose() {
+      await Promise.all([...disposers].map(fn => Promise.resolve().then(fn).catch(() => {})));
     },
   };
   return store;

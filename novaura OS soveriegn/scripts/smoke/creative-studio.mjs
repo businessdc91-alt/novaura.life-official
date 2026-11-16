@@ -274,6 +274,22 @@ try {
   check('the studio settings open', await b.evaluate(`!!document.querySelector('[data-studio-settings]')`));
   await clickOn('[data-action="studio-settings"]');
 
+  // ── Crash recovery: close the studio with unsaved work, then open it again ──
+  check('there is unsaved work to protect', await b.evaluate(`[...document.querySelectorAll('[data-doc-tab]')].some(t => t.textContent.includes('●'))`));
+  await b.evaluate('window.__unmountStudio()');
+  await sleep(1500);
+  const errorsBeforeReload = b.errors.length;
+  await b.navigate(`${URL.replace(/\/?$/, '/')}scripts/smoke/creative-studio.html`);
+  check('reopening the studio offers to restore the unsaved work', await b.waitFor(`!!document.querySelector('[data-recovery-prompt]')`, 20000));
+  await clickOn('[data-action="restore-recovery"]');
+  await sleep(800);
+  const restoredNames = await layerNames();
+  check('Restore brings the document back', restoredNames.join() === 'Star,Background', restoredNames.join());
+  check('still marked unsaved', await b.evaluate(`document.querySelector('[data-doc-tab][aria-selected="true"]')?.textContent.includes('●')`));
+  check('and the empty starting document is not left behind', (await tabCount()) === 1);
+  await b.screenshot(join(OUT, 'c11_recovered.png'));
+  check('no page errors after reopening', b.errors.length === errorsBeforeReload, b.errors.slice(errorsBeforeReload, errorsBeforeReload + 3).join(' | '));
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {
