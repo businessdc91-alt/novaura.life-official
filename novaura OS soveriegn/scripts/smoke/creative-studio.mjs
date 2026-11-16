@@ -350,6 +350,40 @@ try {
   await drop([notesPath]);
   check('a file that is not an image is refused by name', /"notes\.txt" isn't something Creative Studio can open/.test(await b.evaluate(`document.querySelector('[role=status]')?.textContent || ''`)));
 
+  // ── Paint speed on a 4000×3000 document (a baseline, not a pass/fail on fast machines) ──
+  await clickOn('[data-action="new-document"]');
+  await b.evaluate(`(() => {
+    const set = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
+    const [w, h] = document.querySelectorAll('[data-new-document-dialog] input[type=number]');
+    set(w, '4000'); set(h, '3000');
+  })()`);
+  await clickOn('[data-action="create-document"]');
+  await sleep(800);
+  check('a 4000 × 3000 document opens', /^4000 × 3000 px$/.test(await b.evaluate(`document.querySelector('[data-status-size]')?.textContent`)));
+  await b.key('b', 'KeyB', 66);
+  const big = await centre('[data-creative-canvas]');
+  await b.evaluate(`(() => {
+    window.__frames = []; window.__recording = true; let last = performance.now();
+    const tick = (t) => { window.__frames.push(t - last); last = t; if (window.__recording) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  })()`);
+  const strokeTimes = [];
+  for (let i = 0; i < 60; i++) {
+    const y = big.y - 150 + (i % 30) * 10;
+    const t0 = Date.now();
+    await b.drag([big.x - 200, y], [big.x + 200, y + 20], 10);
+    strokeTimes.push(Date.now() - t0);
+  }
+  await sleep(300);
+  const frames = (await b.evaluate(`(() => { window.__recording = false; return window.__frames.slice(2); })()`)).sort((a, c) => a - c);
+  const pct = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(arr.length * p))];
+  const frameMedian = pct(frames, 0.5);
+  const frameP95 = pct(frames, 0.95);
+  strokeTimes.sort((a, c) => a - c);
+  console.log(`paint baseline (4000×3000, 60 strokes): frame median ${frameMedian.toFixed(1)} ms, p95 ${frameP95.toFixed(1)} ms; stroke median ${pct(strokeTimes, 0.5)} ms, p95 ${pct(strokeTimes, 0.95)} ms`);
+  check('painting on 4000 × 3000 stays interactive', frameMedian < 100, `frame median ${frameMedian.toFixed(1)} ms`);
+  check('the 60 strokes are 60 steps', /Paint · Brush stroke/.test(await lastStep()) && (await stepCount()) === 60, String(await stepCount()));
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {
