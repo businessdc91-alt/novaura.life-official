@@ -21,6 +21,9 @@ import '../../creative/tools/gradient.js';
 import '../../creative/tools/text.js';
 import PhotoPanel from './creative/PhotoPanel.jsx';
 import MemePanel from './creative/MemePanel.jsx';
+import DocumentTabs from './creative/DocumentTabs.jsx';
+import NewDocumentDialog from './creative/NewDocumentDialog.jsx';
+import ConfirmCloseDialog from './creative/ConfirmCloseDialog.jsx';
 
 const TABS = [
   { id: 'paint', label: 'Paint', icon: Palette, on: 'bg-cyan-600' },
@@ -74,7 +77,20 @@ export default function CreativeStudioWindow() {
   const tab = useStudio(store, s => s.tab);
   const notice = useStudio(store, s => s.notice);
   const busy = useStudio(store, s => s.busy);
+  const hasDocument = useStudio(store, s => s.activeId) !== null;
+  const [newDocOpen, setNewDocOpen] = useState(false);
+  const [closing, setClosing] = useState(null);
   const [dismissedId, setDismissedId] = useState(null);
+
+  const requestClose = (session) => {
+    if (session.dirty) setClosing(session);
+    else store.closeDocument(session.id);
+  };
+  // Saving arrives with the project file format; until then a document can be kept or discarded.
+  const saveAndClose = () => {
+    store.notify('Saving projects arrives with the project file format.');
+    setClosing(null);
+  };
   const shownNotice = notice && notice.id !== dismissedId ? notice.text : null;
 
   useEffect(() => {
@@ -141,16 +157,43 @@ export default function CreativeStudioWindow() {
         </div>
       </header>
 
+      <DocumentTabs store={store} onNew={() => setNewDocOpen(true)} onClose={requestClose} />
+
       <div className="flex-1 min-h-0 flex">
         {tab === 'paint' && <PaintPanel store={store} />}
         {tab === 'photo' && <PhotoPanel store={store} />}
         {tab === 'meme' && <MemePanel store={store} />}
-        <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
+        {hasDocument ? (
+          <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
+        ) : (
+          <div className="flex-1 flex items-center justify-center bg-[#0b0f19]">
+            <div className="text-center space-y-3">
+              <p className="text-sm text-slate-400">No document open.</p>
+              <button type="button" data-action="new-document-empty" onClick={() => setNewDocOpen(true)}
+                className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold">New document</button>
+            </div>
+          </div>
+        )}
         <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
           <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
           <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>
         </aside>
       </div>
+
+      {newDocOpen && (
+        <NewDocumentDialog
+          onCancel={() => setNewDocOpen(false)}
+          onCreate={(opts) => { store.newDocument(opts); setNewDocOpen(false); }}
+        />
+      )}
+      {closing && (
+        <ConfirmCloseDialog
+          name={closing.doc.name}
+          onCancel={() => setClosing(null)}
+          onDiscard={() => { store.closeDocument(closing.id); setClosing(null); }}
+          onSave={saveAndClose}
+        />
+      )}
 
       {busy && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/50" data-busy="">

@@ -413,3 +413,16 @@ export function upscaleDocument(s, factor, meta) {
   push(s, { bytes: PROP_BYTES + bytesOf(oldBuffers), apply, revert }, meta, `${factor}× Upscale`);
   return { ok: true };
 }
+
+// ── Between documents ─────────────────────────────────────────────────────────
+
+/** Copy a layer (mask included) into another open document, above its active layer. One step there. */
+export function copyLayerToDocument(from, layerId, to, meta) {
+  const layer = getLayer(from.doc, layerId);
+  if (!layer) return GONE;
+  const copy = cloneLayer(from.doc, layer, to.doc);
+  const buffers = takeBuffers(to.doc, copy);
+  const index = layerIndex(to.doc, to.doc.activeLayerId) + 1 || to.doc.layers.length;
+  push(to, insertStep(to, copy, index, buffers), meta, `Copy layer from ${from.doc.name}`);
+  return { ok: true, layer: copy };
+}

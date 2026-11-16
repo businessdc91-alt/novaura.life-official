@@ -224,6 +224,34 @@ try {
   check('meme steps are labelled Meme', /^Meme · (Bottom text|Edit text)$/.test((await lastStep()).trim()), await lastStep());
   await b.screenshot(join(OUT, 'c9_meme.png'));
 
+  // ── Several documents ──
+  const tabCount = () => b.evaluate(`document.querySelectorAll('[data-doc-tab]').length`);
+  check('the open document has a tab, marked unsaved', await b.evaluate(`document.querySelector('[data-doc-tab][aria-selected="true"]')?.textContent.includes('●')`));
+  await clickOn('[data-action="new-document"]');
+  check('New document opens the dialog', await b.evaluate(`!!document.querySelector('[data-new-document-dialog]')`));
+  await clickOn('[data-preset="Square 1080"]');
+  await clickOn('[data-action="create-document"]');
+  await sleep(300);
+  check('a second document opens in its own tab', (await tabCount()) === 2);
+  check('it starts with just its background', (await layerNames()).join() === 'Background', (await layerNames()).join());
+  await clickOn('[data-doc-tab]');
+  await sleep(200);
+  check('switching back shows the first document\'s layers', (await layerNames()).includes('Top text'));
+  const starId = await b.evaluate(`[...document.querySelectorAll('[data-layer-id]')].find(r => r.querySelector('[data-layer-name]')?.textContent === 'Star')?.dataset.layerId`);
+  await clickOn(`[data-layer-id="${starId}"] [data-layer-name]`);
+  const otherId = await b.evaluate(`document.querySelector('[data-copy-layer-to] option[value]:not([value=""])')?.value`);
+  await b.evaluate(`(() => { const s = document.querySelector('[data-copy-layer-to]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, ${JSON.stringify(otherId)}); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await sleep(200);
+  await clickOn('[data-doc-tab]:last-of-type');
+  await sleep(200);
+  check('Copy layer to… puts it in the other document', (await layerNames()).join() === 'Star,Background', (await layerNames()).join());
+  await clickOn('[data-doc-tab]');
+  await clickOn('[data-doc-tab][aria-selected="true"] [data-action="close-document"]');
+  check('closing a document with unsaved changes asks first', await b.evaluate(`!!document.querySelector('[data-confirm-close]')`));
+  await clickOn('[data-action="cancel-close"]');
+  check('Cancel keeps it open', (await tabCount()) === 2);
+  await b.screenshot(join(OUT, 'c10_documents.png'));
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {

@@ -212,3 +212,30 @@ test('beginStroke refuses a locked layer with its reason', () => {
   assert.deepEqual(beginStroke(s, { layerId: base.id }, PAINT), { ok: false, reason: '"Background" is locked.' });
   assert.equal(getLayer(s.doc, base.id).locked, true);
 });
+
+test('copyLayerToDocument adds to the target only; undo in the target removes it; the source history is unchanged', async () => {
+  const { copyLayerToDocument, addMask } = await import('../../src/creative/edits.js');
+  const a = session();
+  const b = session();
+  const { layer } = addLayer(a, 'pixel', { name: 'Sky' }, PAINT);
+  surfaceOf(a.doc, layer).write(0, 0, solid(2, 2, RED));
+  addMask(a, layer.id, true, PAINT);
+  const sourceSteps = a.history.steps.length;
+  const r = copyLayerToDocument(a, layer.id, b, PAINT);
+  assert.equal(r.ok, true);
+  assert.deepEqual(names(b.doc), ['Background', 'Sky']);
+  assert.deepEqual(names(a.doc), ['Background', 'Sky']);
+  assert.equal(a.history.steps.length, sourceSteps);
+  assert.equal(b.history.steps.length, 1);
+  assert.equal(b.history.steps[0].label, 'Copy layer from Untitled');
+  assert.deepEqual(px(surfaceOf(b.doc, r.layer), 1, 1), RED);
+  assert.equal(b.doc.activeLayerId, r.layer.id);
+
+  // The copied mask has its own pixels.
+  surfaceOf(b.doc, r.layer, 'mask').write(0, 0, solid(1, 1, [0, 0, 0, 255]));
+  assert.deepEqual(px(surfaceOf(a.doc, layer, 'mask'), 0, 0), [255, 255, 255, 255]);
+
+  b.history.undo();
+  assert.deepEqual(names(b.doc), ['Background']);
+  assert.equal(b.doc.buffers.has(r.layer.bufferId), false);
+});

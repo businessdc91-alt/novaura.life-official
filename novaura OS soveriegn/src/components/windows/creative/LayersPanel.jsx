@@ -17,7 +17,7 @@ import { surfaceOf } from '../../../creative/document.js';
 import { rasterizeLayer } from '../../../creative/compositor.js';
 import {
   addLayer, deleteLayer, duplicateLayer, mergeDown, moveLayerTo, setLayerProps, setActiveLayer,
-  addMask, deleteMask, invertMask, applyMask, setMaskEnabled,
+  addMask, deleteMask, invertMask, applyMask, setMaskEnabled, copyLayerToDocument,
 } from '../../../creative/edits.js';
 
 const THUMB_W = 44;
@@ -166,6 +166,24 @@ export default function LayersPanel({ store }) {
           <Layers className="w-3 h-3" /> Layers
         </h3>
       </div>
+
+      {active && store.getState().sessions.length > 1 && (
+        <div className="px-3 pb-2">
+          <select
+            data-copy-layer-to="" aria-label="Copy layer to another document" value=""
+            onChange={(e) => {
+              const target = store.getState().sessions.find(s => s.id === e.target.value);
+              if (!target) return;
+              const r = report(copyLayerToDocument(session, active.id, target, { tab }));
+              if (r?.ok) store.notify(`Copied "${active.name}" to ${target.doc.name}.`);
+            }}
+            className="w-full bg-slate-950 border border-slate-700 rounded-md px-2 py-1 text-[11px] text-slate-300"
+          >
+            <option value="">Copy layer to…</option>
+            {store.getState().sessions.filter(s => s.id !== session.id).map(s => <option key={s.id} value={s.id}>{s.doc.name}</option>)}
+          </select>
+        </div>
+      )}
 
       {active && (
         <div className="px-3 pb-2 space-y-2">
