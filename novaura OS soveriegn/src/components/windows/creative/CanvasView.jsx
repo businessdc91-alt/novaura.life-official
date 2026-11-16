@@ -24,7 +24,7 @@ function checker(ctx) {
   return ctx.createPattern(checkerTile, 'repeat');
 }
 
-export default function CanvasView({ store, rootRef, overlay = null, isActive = null }) {
+export default function CanvasView({ store, rootRef, overlay = null, isActive = null, onZoom = null }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const viewRef = useRef({ zoom: 1, panX: 0, panY: 0 });
@@ -76,8 +76,9 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
   const setView = useCallback((next) => {
     viewRef.current = next;
     setZoom(next.zoom);
+    onZoom?.(next.zoom);
     requestRender();
-  }, [requestRender]);
+  }, [requestRender, onZoom]);
 
   const fit = useCallback(() => {
     const session = store.active();

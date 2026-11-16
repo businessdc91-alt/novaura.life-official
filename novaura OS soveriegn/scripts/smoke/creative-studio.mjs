@@ -252,6 +252,14 @@ try {
   check('Cancel keeps it open', (await tabCount()) === 2);
   await b.screenshot(join(OUT, 'c10_documents.png'));
 
+  // ── Status bar and memory ──
+  check('the status bar shows the document size', /^\d+ × \d+ px$/.test(await b.evaluate(`document.querySelector('[data-status-size]')?.textContent`)));
+  const memory = await b.evaluate(`document.querySelector('[data-memory]')?.textContent || ''`);
+  check('the status bar shows memory against a budget sized to the PC', /^Memory: [\d.]+ (KB|MB|GB) of \d+(\.\d)? GB$/.test(memory), memory);
+  await clickOn('[data-action="studio-settings"]');
+  check('the studio settings open', await b.evaluate(`!!document.querySelector('[data-studio-settings]')`));
+  await clickOn('[data-action="studio-settings"]');
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {

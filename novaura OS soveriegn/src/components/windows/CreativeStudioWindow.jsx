@@ -24,6 +24,8 @@ import MemePanel from './creative/MemePanel.jsx';
 import DocumentTabs from './creative/DocumentTabs.jsx';
 import NewDocumentDialog from './creative/NewDocumentDialog.jsx';
 import ConfirmCloseDialog from './creative/ConfirmCloseDialog.jsx';
+import StatusBar from './creative/StatusBar.jsx';
+import { loadBudgets } from '../../creative/memory.js';
 
 const TABS = [
   { id: 'paint', label: 'Paint', icon: Palette, on: 'bg-cyan-600' },
@@ -80,6 +82,19 @@ export default function CreativeStudioWindow() {
   const hasDocument = useStudio(store, s => s.activeId) !== null;
   const [newDocOpen, setNewDocOpen] = useState(false);
   const [closing, setClosing] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [budgets, setBudgets] = useState(null);
+
+  // Memory budgets sized to this PC (and any saved overrides).
+  const applyBudgets = useCallback((next) => {
+    setBudgets(next);
+    store.setHistoryBudget(next.historyBytes);
+  }, [store]);
+  useEffect(() => {
+    let live = true;
+    loadBudgets().then(b => { if (live) applyBudgets(b); }).catch(() => {});
+    return () => { live = false; };
+  }, [applyBudgets]);
   const [dismissedId, setDismissedId] = useState(null);
 
   const requestClose = (session) => {
@@ -164,7 +179,7 @@ export default function CreativeStudioWindow() {
         {tab === 'photo' && <PhotoPanel store={store} />}
         {tab === 'meme' && <MemePanel store={store} />}
         {hasDocument ? (
-          <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
+          <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} onZoom={setZoom} />
         ) : (
           <div className="flex-1 flex items-center justify-center bg-[#0b0f19]">
             <div className="text-center space-y-3">
@@ -179,6 +194,8 @@ export default function CreativeStudioWindow() {
           <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>
         </aside>
       </div>
+
+      <StatusBar store={store} zoom={zoom} budgets={budgets} onBudgets={applyBudgets} />
 
       {newDocOpen && (
         <NewDocumentDialog
