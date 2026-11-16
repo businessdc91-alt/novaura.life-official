@@ -7,7 +7,7 @@
 // activation and sign-in, which a test browser doesn't have), paints, undoes and
 // redoes with the keyboard, and fails on any page error.
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launchBrowser, sleep } from '../lib/cdp.mjs';
 
@@ -290,12 +290,35 @@ try {
   await b.screenshot(join(OUT, 'c11_recovered.png'));
   check('no page errors after reopening', b.errors.length === errorsBeforeReload, b.errors.slice(errorsBeforeReload, errorsBeforeReload + 3).join(' | '));
 
+  // ── Opening a PSD through File > Open ──
+  const { writePsd } = await import('ag-psd');
+  const swatch = (w, h, rgba) => ({ width: w, height: h, data: Uint8ClampedArray.from({ length: w * h * 4 }, (_, i) => rgba[i % 4]) });
+  const psdPath = join(OUT, 'fixture-poster.psd');
+  writeFileSync(psdPath, new Uint8Array(writePsd({
+    width: 300, height: 200, imageData: swatch(300, 200, [255, 255, 255, 255]),
+    children: [
+      { name: 'Paper', left: 0, top: 0, imageData: swatch(300, 200, [240, 230, 210, 255]) },
+      { name: 'Ink', blendMode: 'multiply', children: [{ name: 'Logo', left: 40, top: 30, opacity: 0.8, imageData: swatch(120, 80, [30, 60, 160, 255]) }] },
+      { name: 'Brighten', adjustment: { type: 'brightness/contrast', brightness: 20, contrast: 10 } },
+    ],
+  }, { generateThumbnail: false, noBackground: true })));
+  await clickOn('[data-menu="file"]');
+  const input = await b.send('Runtime.evaluate', { expression: `document.querySelector('input[type=file][accept*=".psd"]')` });
+  await b.send('DOM.setFileInputFiles', { files: [psdPath], objectId: input.result.result.objectId });
+  check('File > Open opens a PSD in its own tab', await b.waitFor(`[...document.querySelectorAll('[data-doc-tab]')].some(t => t.textContent.includes('fixture-poster'))`, 20000));
+  await sleep(400);
+  check('with its layers', (await layerNames()).join() === 'Brighten,Logo,Paper', (await layerNames()).join());
+  check('and a report of what changed', /Group "Ink": blend mode "multiply"/.test(await b.evaluate(`document.querySelector('[data-open-report]')?.textContent || ''`)));
+  await b.screenshot(join(OUT, 'c12_psd_open.png'));
+  await clickOn('[data-action="close-open-report"]');
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {
   check('smoke run', false, err.message);
 } finally {
   console.log(results.join('\n'));
+  if (results.some(r => r.startsWith('FAIL')) && b.errors.length) console.log(`page errors:\n${b.errors.slice(-8).join('\n')}`);
   await b.close();
   process.exit(results.some(r => r.startsWith('FAIL')) ? 1 : 0);
 }

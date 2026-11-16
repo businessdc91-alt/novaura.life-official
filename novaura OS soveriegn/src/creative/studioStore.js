@@ -34,6 +34,7 @@ export function createStudioStore({ historyBytes = Infinity } = {}) {
     maskView: null,
     busy: null, // { label, progress, cancel } while a long job (a filter) runs
     textFocus: null, // a text layer id whose text box should take focus
+    openReport: null, // { name, lines } after opening a PSD that needed changes
   };
 
   function set(patch) {

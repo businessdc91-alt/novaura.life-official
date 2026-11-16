@@ -30,6 +30,7 @@ import FileMenu from './creative/FileMenu.jsx';
 import { openFileBlob, saveProject, downloadProject, openVaultFile } from '../../creative/io/projectFiles.js';
 import { startRecovery, listRecovery, takeRecovery, clearRecovery } from '../../creative/io/recovery.js';
 import RecoveryPrompt from './creative/RecoveryPrompt.jsx';
+import OpenReport from './creative/OpenReport.jsx';
 
 const TABS = [
   { id: 'paint', label: 'Paint', icon: Palette, on: 'bg-cyan-600' },
@@ -85,6 +86,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
   const tab = useStudio(store, s => s.tab);
   const notice = useStudio(store, s => s.notice);
   const busy = useStudio(store, s => s.busy);
+  const openReport = useStudio(store, s => s.openReport);
   const hasDocument = useStudio(store, s => s.activeId) !== null;
   const [newDocOpen, setNewDocOpen] = useState(false);
   const [closing, setClosing] = useState(null);
@@ -291,6 +293,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
         />
       )}
       {recovered && <RecoveryPrompt items={recovered} onRestore={restoreRecovered} onDiscard={discardRecovered} />}
+      <OpenReport report={openReport} onClose={() => store.update({ openReport: null })} />
       {closing && (
         <ConfirmCloseDialog
           name={closing.doc.name}
