@@ -11,6 +11,7 @@ import {
 import { compoundStep } from './history.js';
 import { applyPatch, beginPixelEdit } from './pixelRecorder.js';
 import { createMask, invertPixels } from './masks.js';
+import { createSurface, MAX_SIDE } from './surface.js';
 
 const PROP_BYTES = 64;
 const refuse = reason => ({ ok: false, reason });
@@ -349,4 +350,66 @@ export function applyMask(s, id, meta) {
   const removal = maskRemoval(s, layer);
   commitPatch(s, id, 'layer', patch, { ...meta, label: meta.label || 'Apply mask' }, [removal]);
   return { ok: true, layer };
+}
+
+// ── Resampling the whole document ─────────────────────────────────────────────
+
+const SCALED = {
+  shape: ['x', 'y', 'w', 'h', 'x1', 'y1', 'x2', 'y2', 'radius', 'strokeWidth'],
+  text: ['x', 'y', 'fontSize', 'strokeWidth', 'wrapWidth'],
+};
+
+function resampled(surface, w, h) {
+  const out = createSurface(w, h);
+  out.ctx.imageSmoothingEnabled = true;
+  out.ctx.imageSmoothingQuality = 'high';
+  out.ctx.drawImage(surface.canvas, 0, 0, w, h);
+  return out;
+}
+
+/**
+ * Scale the whole document by `factor`: pixel layers and masks are resampled at high
+ * quality; shapes, text and blur radii scale exactly. One step.
+ */
+export function upscaleDocument(s, factor, meta) {
+  const { doc } = s;
+  const W = Math.round(doc.width * factor);
+  const H = Math.round(doc.height * factor);
+  if (W > MAX_SIDE || H > MAX_SIDE) return refuse(`${factor}× would make the image larger than 16384 px.`);
+  const size = n => Math.max(1, Math.round(n * factor));
+  const oldBuffers = new Map();
+  const newBuffers = new Map();
+  const changes = doc.layers.map((layer) => {
+    const patch = {};
+    if (layer.kind === 'pixel') {
+      Object.assign(patch, { x: Math.round(layer.x * factor), y: Math.round(layer.y * factor), width: size(layer.width), height: size(layer.height) });
+      const old = doc.buffers.get(layer.bufferId);
+      oldBuffers.set(layer.bufferId, old);
+      newBuffers.set(layer.bufferId, resampled(old, patch.width, patch.height));
+    }
+    for (const key of SCALED[layer.kind] || []) if (typeof layer[key] === 'number') patch[key] = layer[key] * factor;
+    if (layer.kind === 'adjust' && layer.adjust === 'blur') patch.params = { ...layer.params, radius: layer.params.radius * factor };
+    if (layer.mask) {
+      const m = layer.mask;
+      const old = doc.buffers.get(m.bufferId);
+      patch.mask = { ...m, x: Math.round(m.x * factor), y: Math.round(m.y * factor), width: size(m.width), height: size(m.height) };
+      oldBuffers.set(m.bufferId, old);
+      newBuffers.set(m.bufferId, resampled(old, patch.mask.width, patch.mask.height));
+    }
+    const previous = Object.fromEntries(Object.keys(patch).map(k => [k, layer[k]]));
+    return { layer, patch, previous };
+  });
+  const before = { width: doc.width, height: doc.height };
+  const set = (dims, buffers, which) => {
+    doc.width = dims.width;
+    doc.height = dims.height;
+    for (const [id, surface] of buffers) doc.buffers.set(id, surface);
+    for (const c of changes) assignLayer(doc, c.layer.id, c[which]);
+    touchLayer(doc, null);
+  };
+  const apply = () => set({ width: W, height: H }, newBuffers, 'patch');
+  const revert = () => set(before, oldBuffers, 'previous');
+  apply();
+  push(s, { bytes: PROP_BYTES + bytesOf(oldBuffers), apply, revert }, meta, `${factor}× Upscale`);
+  return { ok: true };
 }

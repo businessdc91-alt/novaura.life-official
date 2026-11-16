@@ -182,6 +182,17 @@ try {
   await sleep(300);
   check('undo takes the filter back', (await pixelAt(cx + 200, cy + 100)).join() === beforeAdjust.join());
 
+  // ── Photo: Remove BG and 2× Upscale ──
+  await clickOn('[data-action="remove-bg"]');
+  check('Remove BG is a Photo step', /Photo · Remove background/.test(await lastStep()), await lastStep());
+  check('and the plain background is gone (the checkerboard shows)', (await pixelAt(cx + 200, cy + 100)).join() !== beforeAdjust.join());
+  await b.key('z', 'KeyZ', 90, 2);
+  await clickOn('[data-action="upscale"]');
+  check('2× Upscale is a Photo step', /Photo · 2× Upscale/.test(await lastStep()), await lastStep());
+  await b.key('z', 'KeyZ', 90, 2);
+  await sleep(300);
+  check('undo restores the original size', (await pixelAt(cx + 200, cy + 100)).join() === beforeAdjust.join());
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {

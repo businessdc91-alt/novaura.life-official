@@ -9,6 +9,64 @@ import { addLayer, setLayerProps } from '../../../creative/edits.js';
 import { ADJUSTMENTS, defaultParams } from '../../../creative/adjustments.js';
 import { FILTERS, defaultFilterParams } from '../../../creative/filters/kernels.js';
 import { applyFilter } from '../../../creative/applyFilter.js';
+import { upscaleDocument } from '../../../creative/edits.js';
+import { openImageFile, documentFromImage, placeImage, scaledNotice } from '../../../creative/io/raster.js';
+import { removeBackgroundOnLayer } from '../../../creative/removeBackground.js';
+
+const IMAGE_TYPES = 'image/png,image/jpeg,image/webp,image/gif,image/bmp,image/svg+xml,.svg';
+
+function ImageSection({ store, session }) {
+  const openRef = useRef(null);
+  const placeRef = useRef(null);
+  const [tolerance, setTolerance] = useState(40);
+
+  const pick = async (file, mode) => {
+    if (!file) return;
+    try {
+      const opened = await openImageFile(file, file.name);
+      if (mode === 'open') {
+        store.openDocument(documentFromImage(opened, file.name));
+      } else {
+        const r = placeImage(session, opened, file.name, { tab: 'photo' });
+        if (!r.ok) store.notify(r.reason);
+      }
+      const note = scaledNotice(opened);
+      if (note) store.notify(note);
+    } catch (err) {
+      store.notify(err.message);
+    }
+  };
+
+  const button = 'flex-1 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold';
+  return (
+    <Section title="Image">
+      <div className="flex gap-1.5">
+        <button type="button" data-action="open-image" className={button} onClick={() => openRef.current?.click()}>Open…</button>
+        <button type="button" data-action="place-image" className={button} onClick={() => placeRef.current?.click()}>Place…</button>
+      </div>
+      <input ref={openRef} type="file" accept={IMAGE_TYPES} hidden onChange={(e) => { pick(e.target.files?.[0], 'open'); e.target.value = ''; }} />
+      <input ref={placeRef} type="file" accept={IMAGE_TYPES} hidden onChange={(e) => { pick(e.target.files?.[0], 'place'); e.target.value = ''; }} />
+      <label className="block">
+        <span className="flex justify-between text-[11px] text-slate-400 mb-1">
+          <span>Background tolerance</span><span className="tabular-nums text-slate-300">{tolerance}</span>
+        </span>
+        <input type="range" min={0} max={200} value={tolerance} onChange={e => setTolerance(Number(e.target.value))} className="w-full accent-purple-500" />
+      </label>
+      <div className="flex gap-1.5">
+        <button type="button" data-action="remove-bg" className={button} onClick={() => {
+          const r = removeBackgroundOnLayer(session, tolerance);
+          if (!r.ok) store.notify(r.reason);
+          else if (!r.cleared) store.notify('No plain background was found around the edges of this layer.');
+        }}>Remove BG</button>
+        <button type="button" data-action="upscale" className={button} onClick={() => {
+          const r = upscaleDocument(session, 2, { tab: 'photo' });
+          if (!r.ok) store.notify(r.reason);
+        }}>2× Upscale</button>
+      </div>
+      <p className="text-[10px] text-slate-500">Open starts a new document; Place adds the image as a layer.</p>
+    </Section>
+  );
+}
 
 const FILTER_PARAM_LABELS = { amount: 'Amount', radius: 'Radius', threshold: 'Threshold', angle: 'Angle', distance: 'Distance', cell: 'Cell size', height: 'Height' };
 
@@ -141,6 +199,8 @@ export default function PhotoPanel({ store }) {
           ))}
         </div>
       </Section>
+
+      {session && <ImageSection store={store} session={session} />}
 
       <Section title="Add an adjustment layer">
         <div className="grid grid-cols-2 gap-1">
