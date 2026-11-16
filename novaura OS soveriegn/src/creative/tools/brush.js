@@ -10,6 +10,7 @@ import { createSurface } from '../surface.js';
 import { getLayer } from '../document.js';
 import { beginStroke } from '../stroke.js';
 import { hexToRgba, rgbaCss } from '../colour.js';
+import { maskColour, invalidateMaskAlpha } from '../masks.js';
 
 /** Dab centres from `from` to `to`, `spacing` apart, continuing `carry` px into the segment. */
 export function dabPositions(from, to, spacing, carry) {
@@ -61,11 +62,21 @@ function pencilDab(diameter, colour) {
   return canvas;
 }
 
+// The area a dab covers, in the same coordinates as its centre.
+function dabRect(mode, x, y, size) {
+  if (mode === 'pencil') {
+    const d = Math.max(1, Math.round(size));
+    return { x: Math.round(x - d / 2), y: Math.round(y - d / 2), w: d, h: d };
+  }
+  const r = size / 2;
+  return { x: Math.floor(x - r) - 1, y: Math.floor(y - r) - 1, w: Math.ceil(size) + 3, h: Math.ceil(size) + 3 };
+}
+
 function drawDab(ctx, mode, x, y, size, colour, hardness) {
   if (mode === 'pencil') {
     const d = Math.max(1, Math.round(size));
     ctx.drawImage(pencilDab(d, colour), Math.round(x - d / 2), Math.round(y - d / 2));
-    return { x: Math.round(x - d / 2), y: Math.round(y - d / 2), w: d, h: d };
+    return;
   }
   const r = size / 2;
   if (hardness >= 0.99) {
@@ -80,7 +91,6 @@ function drawDab(ctx, mode, x, y, size, colour, hardness) {
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
-  return { x: Math.floor(x - r) - 1, y: Math.floor(y - r) - 1, w: Math.ceil(size) + 3, h: Math.ceil(size) + 3 };
 }
 
 const unite = (a, b) => {
@@ -106,12 +116,27 @@ function makePaintTool(id) {
   function dab(ctx, point) {
     const { settings, buf, doc, stroke } = active;
     const size = dabSize(settings.size, point.pressure ?? 1, settings.pressure);
-    const spacing = id === 'pencil' ? 1 : Math.max(1, settings.size * 0.15);
-    active.spacing = spacing;
-    const rect = drawDab(buf.ctx, id === 'pencil' ? 'pencil' : 'brush', point.x, point.y, size, active.colour, settings.hardness);
-    const inside = clipTo(rect, doc);
-    if (!inside) return;
-    stroke.ensureCovers(inside);
+    const mode = id === 'pencil' ? 'pencil' : 'brush';
+    active.spacing = id === 'pencil' ? 1 : Math.max(1, settings.size * 0.15);
+    const inside = clipTo(dabRect(mode, point.x, point.y, size), doc);
+    if (active.direct) {
+      // On a mask, dabs go straight into the mask's greys, so the change shows as it is painted.
+      if (!inside) return;
+      stroke.ensureCovers(inside);
+      stroke.touch(inside);
+      const o = stroke.origin;
+      const target = stroke.surface.ctx;
+      target.save();
+      target.translate(-o.x, -o.y);
+      target.globalAlpha = settings.opacity;
+      drawDab(target, mode, point.x, point.y, size, active.colour, settings.hardness);
+      target.restore();
+      invalidateMaskAlpha(doc, active.layer, inside);
+    } else {
+      drawDab(buf.ctx, mode, point.x, point.y, size, active.colour, settings.hardness);
+      if (!inside) return;
+      stroke.ensureCovers(inside);
+    }
     active.bounds = unite(active.bounds, inside);
     ctx.compositor?.invalidate(inside);
     ctx.requestRender(inside);
@@ -127,7 +152,7 @@ function makePaintTool(id) {
   function finish(ctx) {
     if (!active) return;
     const { stroke, buf, bounds, settings } = active;
-    if (bounds) {
+    if (bounds && !active.direct) {
       stroke.touch(bounds);
       const o = stroke.origin;
       const target = stroke.surface.ctx;
@@ -158,17 +183,20 @@ function makePaintTool(id) {
       const begun = beginStroke(s, { layerId: layer.id, part }, { tab: ctx.tab, label: LABELS[id] });
       if (!begun.ok) { ctx.notify(begun.reason); return; }
       const state = ctx.store.getState();
-      const buf = strokeBuffer(doc.width, doc.height);
+      const direct = part === 'mask';
+      let colour = id === 'eraser' ? '#000000' : state.colours.primary;
+      if (direct && id !== 'eraser') colour = maskColour(colour); // on a mask: the colour's grey; the eraser paints black
       active = {
-        doc, stroke: begun.stroke, buf, bounds: null, last: p, carry: 0,
-        spacing: 1, settings: { ...state.brush, opacity: state.brush.opacity },
-        colour: id === 'eraser' ? '#000000' : state.colours.primary,
+        doc, layer, direct, stroke: begun.stroke, buf: direct ? null : strokeBuffer(doc.width, doc.height),
+        bounds: null, last: p, carry: 0, spacing: 1, settings: { ...state.brush }, colour,
       };
       ctx.compositor?.setFocusLayer(layer.id);
-      ctx.compositor?.setLiveStroke({
-        layerId: layer.id, part, surface: buf, origin: { x: 0, y: 0 },
-        opacity: active.settings.opacity, erase: id === 'eraser',
-      });
+      if (!direct) {
+        ctx.compositor?.setLiveStroke({
+          layerId: layer.id, part, surface: active.buf, origin: { x: 0, y: 0 },
+          opacity: active.settings.opacity, erase: id === 'eraser',
+        });
+      }
       const first = dabPositions(p, p, 1, 0);
       dab(ctx, first.points[0]);
       active.carry = active.spacing;

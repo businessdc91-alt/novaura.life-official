@@ -5,7 +5,7 @@
 // ./creative/. Keyboard shortcuts act only while focus is inside this window and not
 // in a text box.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Palette, Image as ImageIcon, Smile } from 'lucide-react';
 import { createStudioStore } from '../../creative/studioStore.js';
 import { shouldHandleShortcut, historyActionFor, studioActionFor, nextBrushSize } from '../../creative/shortcuts.js';
@@ -80,6 +80,28 @@ export default function CreativeStudioWindow() {
     if (handleKey(store, e)) e.preventDefault();
   };
 
+  // When a clicked button disables itself (Add mask, Delete layer), the browser drops focus
+  // to the page body. While the studio was the last thing clicked, its keys still work.
+  const lastClickInside = useRef(false);
+  const studioActive = useCallback(() => {
+    const focused = document.activeElement;
+    return rootRef.current?.contains(focused) || ((!focused || focused === document.body) && lastClickInside.current);
+  }, []);
+  useEffect(() => {
+    const onPointerDown = (e) => { lastClickInside.current = !!rootRef.current?.contains(e.target); };
+    const onBodyKey = (e) => {
+      const focused = document.activeElement;
+      if (focused && focused !== document.body) return; // focused inside the studio (handled there) or elsewhere
+      if (lastClickInside.current && handleKey(store, e)) e.preventDefault();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onBodyKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onBodyKey);
+    };
+  }, [store]);
+
   return (
     <div
       ref={rootRef}
@@ -116,7 +138,7 @@ export default function CreativeStudioWindow() {
         {tab === 'paint' && (
           <>
             <PaintPanel store={store} />
-            <CanvasView store={store} rootRef={rootRef} overlay={overlay} />
+            <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
             <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
               <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
               <div className="flex-[2] min-h-0 flex flex-col border-t border-slate-800"><HistoryPanel store={store} /></div>

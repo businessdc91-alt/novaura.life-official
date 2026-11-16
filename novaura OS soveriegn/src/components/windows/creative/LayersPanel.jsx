@@ -2,15 +2,22 @@
 // rename), visibility and lock, opacity and blend mode for the selected layer, and
 // buttons to add, duplicate, delete, merge and reorder. Rows can be dragged to reorder.
 // Every change is one history step; refusals (a locked layer) show their reason.
+//
+// Masks: click the mask thumbnail to paint the mask, Shift-click to turn it off or on,
+// Alt-click to view it alone. Add mask reveals all; Alt+Add mask hides all.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Merge, ChevronUp, ChevronDown, Layers } from 'lucide-react';
+import {
+  Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Merge, ChevronUp, ChevronDown, Layers,
+  SquareDashed, FlipHorizontal2, Stamp, X,
+} from 'lucide-react';
 import { useStudio } from './useStudio.js';
 import { BLEND_MODES, blendLabel } from '../../../creative/blendModes.js';
 import { surfaceOf } from '../../../creative/document.js';
 import { rasterizeLayer } from '../../../creative/compositor.js';
 import {
   addLayer, deleteLayer, duplicateLayer, mergeDown, moveLayerTo, setLayerProps, setActiveLayer,
+  addMask, deleteMask, invertMask, applyMask, setMaskEnabled,
 } from '../../../creative/edits.js';
 
 const THUMB_W = 44;
@@ -43,6 +50,36 @@ function Thumbnail({ doc, layer }) {
     ctx.restore();
   }, [doc, layer, layer.rev]);
   return <canvas ref={ref} width={THUMB_W} height={THUMB_H} className="rounded-sm border border-slate-700 shrink-0" aria-hidden="true" />;
+}
+
+function MaskThumbnail({ doc, layer, targeted, onClick }) {
+  const ref = useRef(null);
+  const mask = layer.mask;
+  useEffect(() => {
+    const canvas = ref.current;
+    const grey = surfaceOf(doc, layer, 'mask');
+    if (!canvas || !grey?.canvas) return;
+    const ctx = canvas.getContext('2d');
+    const scale = Math.min(THUMB_W / doc.width, THUMB_H / doc.height);
+    const ox = (THUMB_W - doc.width * scale) / 2;
+    const oy = (THUMB_H - doc.height * scale) / 2;
+    const d = mask.defaultValue;
+    ctx.clearRect(0, 0, THUMB_W, THUMB_H);
+    ctx.fillStyle = `rgb(${d}, ${d}, ${d})`;
+    ctx.fillRect(ox, oy, doc.width * scale, doc.height * scale);
+    ctx.drawImage(grey.canvas, ox + mask.x * scale, oy + mask.y * scale, grey.width * scale, grey.height * scale);
+  }, [doc, layer, mask, layer.rev]);
+  return (
+    <button
+      type="button" data-action="mask-thumb" aria-pressed={targeted}
+      title="Mask: click to paint it, Shift-click to turn it off or on, Alt-click to view it alone"
+      onClick={onClick}
+      className={`relative shrink-0 rounded-sm ${targeted ? 'ring-2 ring-amber-400' : ''}`}
+    >
+      <canvas ref={ref} width={THUMB_W} height={THUMB_H} className="block rounded-sm border border-slate-700" aria-hidden="true" />
+      {mask.enabled === false && <X className="absolute inset-0 m-auto w-5 h-5 text-red-500" aria-label="Mask turned off" />}
+    </button>
+  );
 }
 
 function LayerName({ layer, onRename }) {
@@ -101,7 +138,15 @@ export default function LayersPanel({ store }) {
   const active = doc.layers.find(l => l.id === doc.activeLayerId) || null;
   const activeIndex = active ? doc.layers.indexOf(active) : -1;
   const report = (result) => { if (result && !result.ok) store.notify(result.reason); return result; };
-  const select = (id) => { setActiveLayer(session, id); store.bump(); };
+  const select = (id, target = 'layer') => { setActiveLayer(session, id, target); store.bump(); };
+  const maskView = store.getState().maskView;
+
+  const onMaskThumb = (e, layer) => {
+    e.stopPropagation();
+    if (e.shiftKey) { report(setMaskEnabled(session, layer.id, layer.mask.enabled === false, meta({}))); return; }
+    if (e.altKey) { store.update({ maskView: maskView === layer.id ? null : layer.id }); return; }
+    select(layer.id, 'mask');
+  };
 
   const onOpacity = (e) => {
     const value = Number(e.target.value) / 100;
@@ -146,6 +191,31 @@ export default function LayersPanel({ store }) {
         </div>
       )}
 
+      {active?.mask && (
+        <div className="mx-3 mb-2 flex items-center gap-1 rounded-md border border-amber-700/40 bg-amber-950/20 px-1.5 py-1 text-[10px] text-amber-200" aria-label="Mask">
+          <span className="flex-1 truncate">{doc.activeTarget === 'mask' ? 'Painting the mask' : 'Mask'}</span>
+          <IconButton action="toggle-mask" label={active.mask.enabled === false ? 'Turn mask on' : 'Turn mask off'}
+            onClick={() => report(setMaskEnabled(session, active.id, active.mask.enabled === false, meta({})))}>
+            {active.mask.enabled === false ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </IconButton>
+          <IconButton action="view-mask" label={maskView === active.id ? 'Stop viewing the mask' : 'View the mask alone'}
+            onClick={() => store.update({ maskView: maskView === active.id ? null : active.id })}>
+            <SquareDashed className={`w-3.5 h-3.5 ${maskView === active.id ? 'text-amber-300' : ''}`} />
+          </IconButton>
+          <IconButton action="invert-mask" label="Invert mask" onClick={() => report(invertMask(session, active.id, meta({})))}>
+            <FlipHorizontal2 className="w-3.5 h-3.5" />
+          </IconButton>
+          {active.kind === 'pixel' && (
+            <IconButton action="apply-mask" label="Apply mask to the layer" onClick={() => report(applyMask(session, active.id, meta({})))}>
+              <Stamp className="w-3.5 h-3.5" />
+            </IconButton>
+          )}
+          <IconButton action="delete-mask" label="Delete mask" onClick={() => report(deleteMask(session, active.id, meta({})))}>
+            <Trash2 className="w-3.5 h-3.5" />
+          </IconButton>
+        </div>
+      )}
+
       <ul className="flex-1 min-h-0 overflow-y-auto px-2 space-y-0.5" role="listbox" aria-label="Layer stack">
         {rows.map((layer) => {
           const index = doc.layers.indexOf(layer);
@@ -174,7 +244,15 @@ export default function LayersPanel({ store }) {
               >
                 {layer.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
               </button>
-              <Thumbnail doc={doc} layer={layer} />
+              <span
+                className={`shrink-0 rounded-sm ${isActive && doc.activeTarget === 'layer' && layer.mask ? 'ring-2 ring-cyan-400' : ''}`}
+                onClick={(e) => { e.stopPropagation(); select(layer.id, 'layer'); }}
+              >
+                <Thumbnail doc={doc} layer={layer} />
+              </span>
+              {layer.mask && (
+                <MaskThumbnail doc={doc} layer={layer} targeted={isActive && doc.activeTarget === 'mask'} onClick={e => onMaskThumb(e, layer)} />
+              )}
               <LayerName layer={layer} onRename={name => report(setLayerProps(session, layer.id, { name }, meta({})))} />
               <button
                 type="button" data-action="toggle-lock" aria-pressed={layer.locked}
@@ -207,6 +285,10 @@ export default function LayersPanel({ store }) {
         <IconButton action="layer-down" label="Move layer down" disabled={!active || activeIndex < 1}
           onClick={() => report(moveLayerTo(session, active.id, activeIndex - 1, meta({})))}>
           <ChevronDown className="w-3.5 h-3.5" />
+        </IconButton>
+        <IconButton action="add-mask" label="Add mask (Alt: hide all)" disabled={!active || !!active?.mask}
+          onClick={e => report(addMask(session, active.id, !e.altKey, meta({})))}>
+          <SquareDashed className="w-3.5 h-3.5" />
         </IconButton>
         <IconButton action="delete-layer" label="Delete layer" disabled={!active || doc.layers.length < 2}
           onClick={() => report(deleteLayer(session, active.id, meta({})))}>

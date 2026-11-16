@@ -24,7 +24,7 @@ function checker(ctx) {
   return ctx.createPattern(checkerTile, 'repeat');
 }
 
-export default function CanvasView({ store, rootRef, overlay = null }) {
+export default function CanvasView({ store, rootRef, overlay = null, isActive = null }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const viewRef = useRef({ zoom: 1, panX: 0, panY: 0 });
@@ -156,9 +156,9 @@ export default function CanvasView({ store, rootRef, overlay = null }) {
     return () => canvas.removeEventListener('wheel', onWheel);
   }, [setView]);
 
-  // Holding Space pans, while focus is inside the studio and not in a text box.
+  // Holding Space pans, while the studio is active and focus is not in a text box.
   useEffect(() => {
-    const inStudio = () => rootRef?.current?.contains(document.activeElement);
+    const inStudio = () => (isActive ? isActive() : rootRef?.current?.contains(document.activeElement));
     const down = (e) => {
       if (e.code !== 'Space' || !inStudio() || !shouldHandleShortcut(e)) return;
       e.preventDefault();
@@ -168,7 +168,7 @@ export default function CanvasView({ store, rootRef, overlay = null }) {
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
-  }, [rootRef]);
+  }, [rootRef, isActive]);
 
   const onPointerDown = (e) => {
     rootRef?.current?.focus({ preventScroll: true });

@@ -5,6 +5,7 @@
 import { getLayer } from '../document.js';
 import { beginStroke } from '../stroke.js';
 import { rgbaCss } from '../colour.js';
+import { maskColour } from '../masks.js';
 import { registerTool } from './index.js';
 
 let drag = null;
@@ -33,7 +34,10 @@ function apply(ctx, start, end) {
   stroke.touch(area);
   const o = stroke.origin;
   const target = stroke.surface.ctx;
-  const { colours, gradient } = ctx.store.getState();
+  const { colours: picked, gradient } = ctx.store.getState();
+  const colours = part === 'mask' // a mask takes greys
+    ? { primary: maskColour(picked.primary), secondary: maskColour(picked.secondary) }
+    : picked;
   const g = gradient.type === 'radial'
     ? target.createRadialGradient(start.x - o.x, start.y - o.y, 0, start.x - o.x, start.y - o.y, Math.hypot(end.x - start.x, end.y - start.y))
     : target.createLinearGradient(start.x - o.x, start.y - o.y, end.x - o.x, end.y - o.y);

@@ -9,7 +9,8 @@ import {
   createLayer, cloneLayer, takeBuffers, putBuffers, touchLayer, surfaceOf,
 } from './document.js';
 import { compoundStep } from './history.js';
-import { applyPatch } from './pixelRecorder.js';
+import { applyPatch, beginPixelEdit } from './pixelRecorder.js';
+import { createMask, invertPixels } from './masks.js';
 
 const PROP_BYTES = 64;
 const refuse = reason => ({ ok: false, reason });
@@ -229,4 +230,123 @@ export function commitPatch(s, layerId, part, patch, meta, extraSteps = []) {
   const steps = [...extraSteps, ...(patch ? [patchStep(s, layer, part, patch)] : [])];
   const step = steps.length === 1 ? steps[0] : compoundStep(steps, { label: meta.label, tab: meta.tab });
   return push(s, step, meta, 'Paint');
+}
+
+// ── Masks ─────────────────────────────────────────────────────────────────────
+
+function maskable(doc, id) {
+  const layer = getLayer(doc, id);
+  if (!layer) return { error: GONE };
+  const allowed = canEdit(layer, 'mask');
+  if (!allowed.ok) return { error: allowed };
+  return { layer };
+}
+
+/** Add a mask: reveal all (white) or hide all (black). The mask becomes what tools paint. */
+export function addMask(s, id, reveal, meta) {
+  const { doc } = s;
+  const { layer, error } = maskable(doc, id);
+  if (error) return error;
+  if (layer.mask) return refuse('This layer already has a mask.');
+  const mask = createMask(doc, reveal);
+  const buffers = new Map([[mask.bufferId, doc.buffers.get(mask.bufferId)]]);
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  const apply = () => {
+    putBuffers(doc, buffers);
+    assignLayer(doc, id, { mask });
+    restoreActive(doc, id, 'mask');
+  };
+  const revert = () => {
+    assignLayer(doc, id, { mask: null });
+    for (const key of buffers.keys()) doc.buffers.delete(key);
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES, apply, revert }, meta, reveal ? 'Add mask' : 'Add mask (hide all)');
+  return { ok: true, layer };
+}
+
+// Remove a layer's mask now, as a step that is not yet pushed.
+function maskRemoval(s, layer) {
+  const { doc } = s;
+  const mask = layer.mask;
+  const buffers = new Map([[mask.bufferId, doc.buffers.get(mask.bufferId)]]);
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  const apply = () => {
+    assignLayer(doc, layer.id, { mask: null });
+    for (const key of buffers.keys()) doc.buffers.delete(key);
+    if (doc.activeLayerId === layer.id && doc.activeTarget === 'mask') doc.activeTarget = 'layer';
+  };
+  const revert = () => {
+    putBuffers(doc, buffers);
+    assignLayer(doc, layer.id, { mask });
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  return { bytes: PROP_BYTES + bytesOf(buffers), apply, revert };
+}
+
+export function deleteMask(s, id, meta) {
+  const { layer, error } = maskable(s.doc, id);
+  if (error) return error;
+  if (!layer.mask) return refuse('This layer has no mask.');
+  push(s, maskRemoval(s, layer), meta, 'Delete mask');
+  return { ok: true, layer };
+}
+
+/** Turn a mask off (ignored when drawing) or back on. */
+export function setMaskEnabled(s, id, enabled, meta) {
+  const layer = getLayer(s.doc, id);
+  if (!layer) return GONE;
+  if (!layer.mask) return refuse('This layer has no mask.');
+  return setLayerProps(s, id, { mask: { ...layer.mask, enabled } }, { ...meta, label: meta.label || (enabled ? 'Turn mask on' : 'Turn mask off') });
+}
+
+/** Swap the mask's black and white (its default outside the mask too). */
+export function invertMask(s, id, meta) {
+  const { doc } = s;
+  const { layer, error } = maskable(doc, id);
+  if (error) return error;
+  if (!layer.mask) return refuse('This layer has no mask.');
+  const surface = surfaceOf(doc, layer, 'mask');
+  const recorder = beginPixelEdit(surface);
+  recorder.touch(0, 0, surface.width, surface.height);
+  surface.write(0, 0, invertPixels(surface.read(0, 0, surface.width, surface.height)));
+  const patch = recorder.finish();
+  const previous = layer.mask;
+  const next = { ...previous, defaultValue: 255 - previous.defaultValue };
+  assignLayer(doc, id, { mask: next });
+  const defaultStep = {
+    bytes: PROP_BYTES,
+    apply: () => { assignLayer(doc, id, { mask: next }); },
+    revert: () => { assignLayer(doc, id, { mask: previous }); },
+  };
+  commitPatch(s, id, 'mask', patch, { ...meta, label: meta.label || 'Invert mask' }, [defaultStep]);
+  return { ok: true, layer };
+}
+
+/** Bake the mask into a pixel layer's transparency and remove it. */
+export function applyMask(s, id, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, id);
+  if (!layer) return GONE;
+  if (!layer.mask) return refuse('This layer has no mask.');
+  if (layer.kind !== 'pixel') return refuse('Only pixel layers can have their mask applied.');
+  const allowed = canEdit(layer, 'edit');
+  if (!allowed.ok) return allowed;
+  const surface = surfaceOf(doc, layer);
+  const mask = layer.mask;
+  const grey = surfaceOf(doc, layer, 'mask').read(layer.x - mask.x, layer.y - mask.y, surface.width, surface.height);
+  const recorder = beginPixelEdit(surface);
+  recorder.touch(0, 0, surface.width, surface.height);
+  const pixels = surface.read(0, 0, surface.width, surface.height);
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    const v = grey.data[i + 3] ? grey.data[i] : mask.defaultValue; // outside the mask: its default
+    pixels.data[i + 3] = Math.round((pixels.data[i + 3] * v) / 255);
+  }
+  surface.write(0, 0, pixels);
+  const patch = recorder.finish();
+  const removal = maskRemoval(s, layer);
+  commitPatch(s, id, 'layer', patch, { ...meta, label: meta.label || 'Apply mask' }, [removal]);
+  return { ok: true, layer };
 }

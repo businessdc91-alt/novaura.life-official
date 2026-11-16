@@ -30,12 +30,13 @@ try {
   const box = await b.evaluate(`(() => { const r = document.querySelector('[data-creative-canvas]').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
-  const pixel = () => b.evaluate(`(() => {
+  const pixelAt = (x, y) => b.evaluate(`(() => {
     const c = document.querySelector('[data-creative-canvas]');
     const r = c.getBoundingClientRect();
     const dpr = c.width / r.width;
-    return [...c.getContext('2d').getImageData(Math.round((${cx} - r.left) * dpr), Math.round((${cy} - r.top) * dpr), 1, 1).data];
+    return [...c.getContext('2d').getImageData(Math.round((${x} - r.left) * dpr), Math.round((${y} - r.top) * dpr), 1, 1).data];
   })()`);
+  const pixel = () => pixelAt(cx, cy);
 
   const before = await pixel();
   check('the new document is white', before.slice(0, 3).every(v => v > 240), String(before));
@@ -127,6 +128,29 @@ try {
   check('the shape tool draws a star layer', (await layerNames())[0] === 'Star', (await layerNames()).join());
   check('the selected shape shows its properties', await b.evaluate(`!!document.querySelector('[aria-label="Selected shape"]')`));
   await b.screenshot(join(OUT, 'c4_shape.png'));
+
+  // ── Masks ──
+  await clickOn('[data-action="add-mask"]');
+  check('Add mask gives the layer a mask, ready to paint', await b.evaluate(`document.querySelector('${selected} [data-action="mask-thumb"]')?.getAttribute('aria-pressed') === 'true'`));
+  // The star was drawn from (cx-150, cy-120) to (cx+30, cy+60); its middle is (cx-60, cy-30).
+  const starPixel = await pixelAt(cx - 60, cy - 30);
+  check('the star is painted at its middle', starPixel.join() !== before.join(), String(starPixel));
+  // The Add mask button turns itself off, so focus falls out of the studio: keys must still work.
+  await b.key('e', 'KeyE', 69);
+  await sleep(200);
+  check('tool keys still work after a button disables itself', await b.evaluate(`document.querySelector('[data-tool="eraser"]')?.getAttribute('aria-pressed') === 'true'`));
+  await b.drag([cx - 100, cy - 30], [cx - 20, cy - 30], 16);
+  await sleep(400);
+  const masked = await pixelAt(cx - 60, cy - 30);
+  check('erasing on the mask hides that part of the layer', masked.join() === before.join(), `${starPixel} → ${masked}`);
+  await clickOn('[data-action="view-mask"]');
+  await b.screenshot(join(OUT, 'c5_mask_alone.png'));
+  await clickOn('[data-action="view-mask"]');
+  await clickOn('[data-action="delete-mask"]');
+  check('Delete mask removes it', await b.evaluate(`!document.querySelector('${selected} [data-action="mask-thumb"]')`));
+  const unmasked = await pixelAt(cx - 60, cy - 30);
+  await b.screenshot(join(OUT, 'c6_mask_deleted.png'));
+  check('and the layer shows again', unmasked.join() === starPixel.join(), String(unmasked));
 
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
