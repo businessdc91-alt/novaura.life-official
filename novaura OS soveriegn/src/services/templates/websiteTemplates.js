@@ -3,6 +3,7 @@
  * Complete, fully-functional, multi-page designs with tabbed navigation, editable areas,
  * drag-and-drop image dropzones, and living dynamic backgrounds (Canvas & CSS).
  */
+import { ARCADE_PLATFORM_TEMPLATE, STOREFRONT_TEMPLATE } from './arcadeTemplate.js';
 
 export const LIVING_BACKGROUNDS = {
   aurora: {
@@ -143,6 +144,10 @@ export const LIVING_BACKGROUNDS = {
  * 8 Multi-Page Fully Functional Website Templates
  */
 export const MULTIPAGE_TEMPLATES = [
+  // 0. Flagship 15-Game Arcade & Living 3D Biosphere Platform
+  ARCADE_PLATFORM_TEMPLATE,
+  // 0b. Sovereign Creator Storefront & E-Commerce Shop
+  STOREFRONT_TEMPLATE,
   // 1. Tech & AI Blog
   {
     id: 'blog',

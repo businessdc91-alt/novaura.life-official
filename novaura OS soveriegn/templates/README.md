@@ -28,4 +28,4 @@ The builder refuses a project whose own LICENSE is copyleft (GPL and similar) un
 
 - **The license is a plain-English draft.** Have a lawyer review it, add a governing-law clause, and confirm the royalty terms. The royalty is set in each config (`royalty.percent`, `royalty.thresholdUsd`, default 10% from the first dollar).
 - **Rebuild with `--receipts-to`** so acceptances reach your node.
-- **Rotate the keys the scans found** in the original sources. The Command v5 source sold on itch.io still contains them.
+- **Rotate the keys the scans found** in the original sources if those folders were ever shared. The templates have them removed; the Command v5 originals on J: (never published) still contain them.

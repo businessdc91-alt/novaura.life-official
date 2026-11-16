@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 // Binds @monaco-editor/react to the locally bundled Monaco (offline, no CDN).
 import '../../config/monacoConfig.js';
 import {
@@ -13,7 +13,7 @@ import { publishHostedSite, getLocalIdentity } from '../../services/sovereignMes
 import { generateAuthEmbedSnippet } from '../../services/novaAuthClient.js';
 
 import { MULTIPAGE_TEMPLATES, LIVING_BACKGROUNDS } from '../../services/templates/websiteTemplates.js';
-import { tagEditable, applyBuilderEdit, EDIT_BRIDGE_SCRIPT } from '../../services/templates/builderEditBridge.js';
+import { tagEditable, applyBuilderEdit, extractTemplateFields, EDIT_BRIDGE_SCRIPT } from '../../services/templates/builderEditBridge.js';
 import { loadSiteIntoFrame, clearSitePreview, newSiteSession } from '../../services/sitePreview.js';
 
 export default function WebsiteBuilderWindow() {
@@ -29,6 +29,7 @@ export default function WebsiteBuilderWindow() {
   const [prompt, setPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
+  const [showQuickFill, setShowQuickFill] = useState(false);
 
   // 1-Click Decentralized Mesh Deployment State
   const [showDeployModal, setShowDeployModal] = useState(false);
@@ -96,6 +97,46 @@ ${preview ? EDIT_BRIDGE_SCRIPT : ''}
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  // Parsing the page is not free (photos are inlined), so only redo it when the page changes.
+  const editableFields = useMemo(() => extractTemplateFields(html), [html]);
+
+  const handleQuickFillPatch = (key, newInnerHtml) => {
+    const next = applyBuilderEdit(htmlRef.current, key, newInnerHtml);
+    if (next === htmlRef.current) return;
+    keepPreview.current = true;
+    htmlRef.current = next;
+    setHtml(next);
+    iframeRef.current?.contentWindow?.postMessage(
+      { novauraDrawerPatch: 1, key, html: newInnerHtml },
+      '*'
+    );
+  };
+
+  // Typed text goes in as text, never as markup.
+  const handleQuickFillText = (key, text) => {
+    const escaped = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    handleQuickFillPatch(key, escaped);
+  };
+
+  // Same treatment as a photo dropped in the preview (builderEditBridge.js): scaled to
+  // 2560 px and stored as WebP, so a page with several photos stays inside one mesh packet.
+  const handleQuickImageUpload = (key, file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 2560 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * s));
+      c.height = Math.max(1, Math.round(img.naturalHeight * s));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      handleQuickFillPatch(key, `<img src="${c.toDataURL('image/webp', 0.9)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;" />`);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); setSaveNotice('That image could not be read.'); };
+    img.src = url;
+  };
 
   const handleApplyTemplate = (tpl) => {
     setActiveTemplateId(tpl.id);
@@ -328,15 +369,27 @@ Respond with JSON only:
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
                 <span>
-                  <b>Full Multi-Page Design Active:</b> Click navigation links inside the preview to switch pages • Double click text to edit • Drag & drop images into photo placeholders!
+                  <b>1-Click Multi-Page Editor:</b> Single-click any text or photo slot on the page to edit, or open <b>Quick Fill & Images</b> to fill in the blanks!
                 </span>
               </div>
-              <button
-                onClick={() => setActiveTab('templates')}
-                className="text-[10px] uppercase font-bold text-cyan-400 hover:text-cyan-200 underline cursor-pointer"
-              >
-                Browse All Templates →
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowQuickFill(!showQuickFill)}
+                  className={`px-2.5 py-0.5 rounded-md text-[10px] uppercase font-bold border transition-all cursor-pointer ${
+                    showQuickFill
+                      ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                      : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/25'
+                  }`}
+                >
+                  ⚡ {showQuickFill ? 'Hide Quick-Fill Drawer' : `Quick Fill & Images (${editableFields.textFields.length + editableFields.imageSlots.length})`}
+                </button>
+                <button
+                  onClick={() => setActiveTab('templates')}
+                  className="text-[10px] uppercase font-bold text-cyan-400 hover:text-cyan-200 underline cursor-pointer"
+                >
+                  Browse All Templates →
+                </button>
+              </div>
             </div>
 
             {/* AI Prompt Header */}
@@ -360,21 +413,88 @@ Respond with JSON only:
               </button>
             </div>
 
-            {/* Viewport Frame */}
-            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden bg-slate-950/60">
-              <div
-                className={`h-full bg-black rounded-xl shadow-2xl overflow-hidden transition-all duration-300 border border-slate-800 ${
-                  device === 'desktop' ? 'w-full' : device === 'tablet' ? 'w-[768px]' : 'w-[375px]'
-                }`}
-              >
-                <iframe
-                  ref={iframeRef}
-                  title="Website Preview"
-                  // No allow-same-origin: the page's scripts must not reach the OS (keys, IndexedDB, native calls).
-                  // loadSiteIntoFrame serves it from the isolated preview origin so its scripts can run.
-                  sandbox="allow-scripts allow-forms allow-modals allow-popups"
-                  className="w-full h-full border-none"
-                />
+            {/* Viewport Frame + Optional Quick-Fill & Image Uploader Drawer */}
+            <div className="flex-1 flex overflow-hidden bg-slate-950/60">
+              {showQuickFill && (
+                <aside className="w-80 border-r border-slate-800 bg-slate-900/95 flex flex-col overflow-hidden shrink-0">
+                  <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-cyan-400">⚡ Quick Fill-in-the-Blanks</h4>
+                      <p className="text-[10px] text-slate-400">Type below or upload images with 1 click</p>
+                    </div>
+                    <button
+                      onClick={() => setShowQuickFill(false)}
+                      className="text-slate-400 hover:text-white p-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-3 space-y-4">
+                    {/* 1-Click Image Upload Slots */}
+                    {editableFields.imageSlots.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-purple-400">
+                          📷 Photo & Banner Slots ({editableFields.imageSlots.length})
+                        </div>
+                        {editableFields.imageSlots.map((slot) => (
+                          <div key={slot.key} className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-300 font-medium truncate">{slot.label}</span>
+                              {slot.hasImage && <span className="text-[10px] text-emerald-400 font-bold">✓ Image Set</span>}
+                            </div>
+                            <label className="flex items-center justify-center gap-1.5 w-full py-1.5 px-2.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-[11px] font-semibold cursor-pointer transition-colors">
+                              <span>📤 Choose Image File</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => { handleQuickImageUpload(slot.key, e.target.files?.[0]); e.target.value = ''; }}
+                              />
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Fill-in-the-Blank Text Fields */}
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">
+                        ✏️ Editable Text Blanks ({editableFields.textFields.length})
+                      </div>
+                      {editableFields.textFields.map((field) => (
+                        <div key={field.key} className="space-y-1">
+                          <label className="text-[10px] text-slate-400 font-mono">
+                            {field.label} ({field.key})
+                          </label>
+                          <input
+                            type="text"
+                            value={field.value}
+                            onChange={(e) => handleQuickFillText(field.key, e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-md px-2.5 py-1.5 text-xs text-slate-100 outline-none"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </aside>
+              )}
+
+              <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+                <div
+                  className={`h-full bg-black rounded-xl shadow-2xl overflow-hidden transition-all duration-300 border border-slate-800 ${
+                    device === 'desktop' ? 'w-full' : device === 'tablet' ? 'w-[768px]' : 'w-[375px]'
+                  }`}
+                >
+                  <iframe
+                    ref={iframeRef}
+                    title="Website Preview"
+                    // No allow-same-origin: the page's scripts must not reach the OS (keys, IndexedDB, native calls).
+                    // loadSiteIntoFrame serves it from the isolated preview origin so its scripts can run.
+                    sandbox="allow-scripts allow-forms allow-modals allow-popups"
+                    className="w-full h-full border-none"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -438,7 +558,9 @@ Respond with JSON only:
               {/* Category Filter Pills */}
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {[
-                  { id: 'all', label: 'All Templates (7)' },
+                  { id: 'all', label: `All Templates (${MULTIPAGE_TEMPLATES.length})` },
+                  { id: 'Games & Metaverse', label: '🕹️ Game Arcade' },
+                  { id: 'E-Commerce & Storefront', label: '🛍️ Creator Storefront' },
                   { id: 'Media & Publishing', label: 'Tech Blog' },
                   { id: 'Community & Social', label: 'Forum' },
                   { id: 'Real-Time Messaging', label: 'Chatroom' },
