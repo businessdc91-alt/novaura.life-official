@@ -252,6 +252,20 @@ try {
   check('Cancel keeps it open', (await tabCount()) === 2);
   await b.screenshot(join(OUT, 'c10_documents.png'));
 
+  // ── Saving and reopening a project ──
+  const namesBefore = await layerNames();
+  await b.key('s', 'KeyS', 83, 2);
+  check('Ctrl+S saves the project to Files', await b.waitFor(`/Saved to Files: \\/Creative Studio\\/Untitled\\.novaart/.test(document.querySelector('[role=status]')?.textContent || '')`, 15000));
+  check('and the unsaved dot goes away', await b.evaluate(`!document.querySelector('[data-doc-tab][aria-selected="true"]')?.textContent.includes('●')`));
+  await clickOn('[data-doc-tab][aria-selected="true"] [data-action="close-document"]');
+  check('a saved document closes without asking', (await tabCount()) === 1 && await b.evaluate(`!document.querySelector('[data-confirm-close]')`));
+  const fileId = await b.evaluate(`(async () => (await (await import('/src/services/fileStorageService.js')).getFileByPath('/Creative Studio/Untitled.novaart'))?.id)()`);
+  await b.evaluate(`window.dispatchEvent(new CustomEvent('novaura:app_context', { detail: { appId: 'creative_studio', props: { fileId: ${JSON.stringify(fileId)}, openId: 'smoke-1' } } }))`);
+  check('Edit in Creative Studio reopens it from Files', await b.waitFor(`document.querySelectorAll('[data-doc-tab]').length === 2`, 15000));
+  await sleep(300);
+  check('with the same layers', (await layerNames()).join() === namesBefore.join(), `${namesBefore} → ${await layerNames()}`);
+  check('and not marked unsaved', await b.evaluate(`!document.querySelector('[data-doc-tab][aria-selected="true"]')?.textContent.includes('●')`));
+
   // ── Status bar and memory ──
   check('the status bar shows the document size', /^\d+ × \d+ px$/.test(await b.evaluate(`document.querySelector('[data-status-size]')?.textContent`)));
   const memory = await b.evaluate(`document.querySelector('[data-memory]')?.textContent || ''`);

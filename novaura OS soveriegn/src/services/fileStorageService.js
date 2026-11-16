@@ -25,6 +25,7 @@ const MIME_BY_EXT = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
   mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', mp4: 'video/mp4', webm: 'video/webm',
   pdf: 'application/pdf', zip: 'application/zip',
+  psd: 'image/vnd.adobe.photoshop', novaart: 'application/x-novaart',
 };
 
 function normPath(p) {

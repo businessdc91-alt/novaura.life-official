@@ -8,6 +8,7 @@ const AUDIO = /\.(mp3|wav|ogg|oga|opus|flac|m4a|aac|weba)$/i;
 const VIDEO = /\.(mp4|webm|mov|m4v|ogv|mkv)$/i;
 const WRITING = /\.(md|markdown|txt|html?)$/i;
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg|bmp)$/i;
+const DESIGN = /\.(psd|novaart)$/i; // layered files the Creative Studio opens
 const PROJECT_FILE = /^\/projects\/cybeni\/([^/]+)\//;
 
 let openSeq = 0;
@@ -24,6 +25,7 @@ export const fileKind = (doc) => {
   const mime = doc?.mimeType || '';
   if (AUDIO.test(name) || mime.startsWith('audio/')) return 'audio';
   if (VIDEO.test(name) || mime.startsWith('video/')) return 'video';
+  if (DESIGN.test(name)) return 'design';
   if (IMAGE.test(name) || mime.startsWith('image/')) return 'image';
   if (WRITING.test(name)) return 'writing';
   if (/\.zip$/i.test(name)) return 'zip';
@@ -31,13 +33,16 @@ export const fileKind = (doc) => {
 };
 
 /**
- * Ways to open a vault file, best first: [{ id, label, run }].
- * `inFiles` leaves out "Show in Files" when already there.
+ * Ways to open a vault file, best first: [{ id, label, run, secondary? }].
+ * `inFiles` leaves out "Show in Files" when already there. A `secondary` option is
+ * offered in the menu but never used for a double-click.
  */
 export function openWithOptions(doc, { inFiles = false } = {}) {
   if (!doc || doc.type !== 'file') return [];
   const kind = fileKind(doc);
   const opts = [];
+  const editInStudio = { id: 'creative_studio', label: 'Edit in Creative Studio', run: () => handOff('creative_studio', { fileId: doc.id }) };
+  if (kind === 'design') opts.push(editInStudio);
   if (kind === 'audio' || kind === 'video') {
     opts.push({ id: 'media_deck', label: kind === 'audio' ? 'Play in Media Deck' : 'Watch in Media Deck', run: () => handOff('media_deck', { fileId: doc.id }) });
   }
@@ -48,12 +53,13 @@ export function openWithOptions(doc, { inFiles = false } = {}) {
   if (project) opts.push({ id: 'cybeni', label: 'Open project in Cybeni', run: () => openCybeniProject(project[1]) });
   if (kind === 'zip') opts.push({ id: 'extract', label: 'Extract here', run: () => extractZip(doc.id) });
   if (!inFiles) opts.push({ id: 'files', label: kind === 'image' ? 'View in Files' : 'Show in Files', run: () => openInFiles(doc.parentPath || parentOf(doc.path), doc.path) });
+  if (kind === 'image') opts.push({ ...editInStudio, secondary: true });
   opts.push({ id: 'download', label: 'Download a copy', run: () => downloadFile(doc) });
   return opts;
 }
 
 /** The double-click action, or null when the caller should just show the file. */
 export function defaultOpen(doc, { inFiles = false } = {}) {
-  const best = openWithOptions(doc, { inFiles })[0];
+  const best = openWithOptions(doc, { inFiles }).filter(o => !o.secondary)[0];
   return best && best.id !== 'download' && best.id !== 'extract' ? best : null;
 }

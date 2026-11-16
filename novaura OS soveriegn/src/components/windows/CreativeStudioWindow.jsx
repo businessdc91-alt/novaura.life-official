@@ -26,6 +26,8 @@ import NewDocumentDialog from './creative/NewDocumentDialog.jsx';
 import ConfirmCloseDialog from './creative/ConfirmCloseDialog.jsx';
 import StatusBar from './creative/StatusBar.jsx';
 import { loadBudgets } from '../../creative/memory.js';
+import FileMenu from './creative/FileMenu.jsx';
+import { openFileBlob, saveProject, downloadProject, openVaultFile } from '../../creative/io/projectFiles.js';
 
 const TABS = [
   { id: 'paint', label: 'Paint', icon: Palette, on: 'bg-cyan-600' },
@@ -40,8 +42,10 @@ function runHistory(store, action) {
   session.compositor.invalidate();
 }
 
-/** Studio keyboard shortcuts; returns true when the key was used. */
-function handleKey(store, e) {
+/** Studio keyboard shortcuts; returns true when the key was used. actions: { save }. */
+function handleKey(store, e, actions = {}) {
+  // Ctrl+S saves even while typing, so the browser's own "save page" never appears.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && String(e.key).toLowerCase() === 's') { actions.save?.(); return true; }
   if (!shouldHandleShortcut(e)) return false;
   const busy = store.getState().busy;
   if (busy) {
@@ -68,7 +72,7 @@ function handleKey(store, e) {
   return false;
 }
 
-export default function CreativeStudioWindow() {
+export default function CreativeStudioWindow({ props: windowProps = null } = {}) {
   const [store] = useState(() => {
     const s = createStudioStore();
     s.newDocument({ name: 'Untitled', width: 1920, height: 1080, background: 'white' });
@@ -101,11 +105,57 @@ export default function CreativeStudioWindow() {
     if (session.dirty) setClosing(session);
     else store.closeDocument(session.id);
   };
-  // Saving arrives with the project file format; until then a document can be kept or discarded.
-  const saveAndClose = () => {
-    store.notify('Saving projects arrives with the project file format.');
+
+  // ── Files ──
+  const save = useCallback(async (session = store.active()) => {
+    if (!session) return false;
+    try {
+      const path = await saveProject(store, session);
+      store.notify(`Saved to Files: ${path}`);
+      return true;
+    } catch (err) {
+      store.notify(`Couldn't save: ${err.message}`);
+      return false;
+    }
+  }, [store]);
+  const saveAndClose = async () => {
+    const session = closing;
     setClosing(null);
+    if (await save(session)) store.closeDocument(session.id);
   };
+  const download = useCallback(async () => {
+    const session = store.active();
+    if (!session) return;
+    try { await downloadProject(session); } catch (err) { store.notify(`Couldn't download: ${err.message}`); }
+  }, [store]);
+  // An untouched starting document is replaced when something is opened, rather than left behind.
+  const replacePristine = useCallback((opened) => {
+    for (const s of store.getState().sessions) {
+      if (s !== opened && s.doc.name === 'Untitled' && !s.dirty && !s.savedPath && !s.history.steps.length) store.closeDocument(s.id);
+    }
+    if (opened) store.setActive(opened.id);
+  }, [store]);
+  const openFile = useCallback(async (file) => {
+    try { replacePristine(await openFileBlob(store, file, file.name)); } catch (err) { store.notify(err.message); }
+  }, [store, replacePristine]);
+  const lastOpenId = useRef(null);
+  const openFromFiles = useCallback(async (fileId, openId) => {
+    if (openId && lastOpenId.current === openId) return; // the same handoff, arriving as props and as an event
+    lastOpenId.current = openId || null;
+    try { replacePristine(await openVaultFile(store, fileId)); } catch (err) { store.notify(err.message); }
+  }, [store, replacePristine]);
+  useEffect(() => {
+    if (windowProps?.fileId) openFromFiles(windowProps.fileId, windowProps.openId);
+  }, [windowProps?.fileId, windowProps?.openId, openFromFiles]);
+  useEffect(() => {
+    const onContext = (e) => {
+      if (e.detail?.appId === 'creative_studio' && e.detail.props?.fileId) openFromFiles(e.detail.props.fileId, e.detail.props.openId);
+    };
+    window.addEventListener('novaura:app_context', onContext);
+    return () => window.removeEventListener('novaura:app_context', onContext);
+  }, [openFromFiles]);
+  const actions = useRef({});
+  useEffect(() => { actions.current = { save: () => save() }; }, [save]);
   const shownNotice = notice && notice.id !== dismissedId ? notice.text : null;
 
   useEffect(() => {
@@ -115,7 +165,7 @@ export default function CreativeStudioWindow() {
   }, [notice]);
 
   const onKeyDown = (e) => {
-    if (handleKey(store, e)) e.preventDefault();
+    if (handleKey(store, e, actions.current)) e.preventDefault();
   };
 
   // When a clicked button disables itself (Add mask, Delete layer), the browser drops focus
@@ -130,7 +180,7 @@ export default function CreativeStudioWindow() {
     const onBodyKey = (e) => {
       const focused = document.activeElement;
       if (focused && focused !== document.body) return; // focused inside the studio (handled there) or elsewhere
-      if (lastClickInside.current && handleKey(store, e)) e.preventDefault();
+      if (lastClickInside.current && handleKey(store, e, actions.current)) e.preventDefault();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('keydown', onBodyKey);
@@ -157,6 +207,7 @@ export default function CreativeStudioWindow() {
             <h2 className="text-sm font-bold text-white leading-tight">Creative Studio</h2>
             <p className="text-[11px] text-slate-400 truncate">Layered painting, photo editing and memes</p>
           </div>
+          <FileMenu store={store} onNew={() => setNewDocOpen(true)} onOpen={openFile} onSave={() => save()} onDownload={download} />
         </div>
         <div role="tablist" aria-label="Workspace" className="flex items-center bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/60 text-xs">
           {TABS.map(({ id, label, icon: Icon, on }) => (
