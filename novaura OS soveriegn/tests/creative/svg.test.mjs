@@ -98,3 +98,22 @@ test('layer names and text are XML-escaped', async () => {
   assert.match(svg, /inkscape:label="a&lt;b&amp;&quot;c&quot;"/);
   assert.ok(!svg.includes('a<b&"c"'));
 });
+
+// A shared .novaart is untrusted: whatever its document.json says, Export SVG must not
+// write markup or attributes the project put there (an .svg opened in a browser runs scripts).
+test('values from a project file cannot add markup or attributes to the SVG', async () => {
+  const evil = '1" onload="alert(1)"><script>alert(1)</script><g a="';
+  const doc = createDocument({ name: 'Shared', width: 200, height: 100 });
+  doc.width = evil;
+  doc.height = evil;
+  const add = (kind, fields) => { const l = createLayer(doc, kind, fields); insertLayer(doc, l, doc.layers.length); return l; };
+  add('text', { ...TEXT_DEFAULTS, name: 'Words', text: 'hi', x: 5, y: 50, fontSize: 20, fontWeight: evil });
+  add('adjust', { name: 'Hue', adjust: 'hueSaturation', params: { ...defaultParams('hueSaturation'), hue: evil } });
+  add('adjust', { name: 'Soft', adjust: 'blur', params: { ...defaultParams('blur'), radius: evil } });
+  const odd = add('adjust', { name: 'Odd id', adjust: 'invert', params: defaultParams('invert') });
+  odd.id = evil;
+  const svg = await writeSvg(doc, options);
+  assert.doesNotMatch(svg, /<script/i);
+  assert.doesNotMatch(svg, /\sonload\s*=\s*["']/i, 'no live onload attribute (escaped text inside a value is inert)');
+  assert.match(svg, /width="0" height="0"/, 'a size that is not a number is written as 0');
+});

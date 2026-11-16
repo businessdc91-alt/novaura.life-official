@@ -230,6 +230,11 @@ function sepiaMatrix(a) {
  * (vignette), in which case the export bakes it into an image. Hue/Saturation, Vibrance
  * and Black & White use SVG's colour matrices, which are close to, not exactly, the canvas maths.
  */
+// Settings can come from a shared project file, so everything written into the SVG is a
+// finite number or an escaped string, never the raw value.
+const finite = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const attr = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 export function svgFilter(type, p, id) {
   let body;
   switch (type) {
@@ -240,7 +245,7 @@ export function svgFilter(type, p, id) {
       const slope = l > 0 ? 1 - l : 1 + l;
       const intercept = l > 0 ? l : 0;
       const light = `<feComponentTransfer><feFuncR type="linear" slope="${slope}" intercept="${intercept}"/><feFuncG type="linear" slope="${slope}" intercept="${intercept}"/><feFuncB type="linear" slope="${slope}" intercept="${intercept}"/></feComponentTransfer>`;
-      body = `<feColorMatrix type="hueRotate" values="${p.hue}"/><feColorMatrix type="saturate" values="${Math.max(0, 1 + p.saturation / 100)}"/>${light}`;
+      body = `<feColorMatrix type="hueRotate" values="${finite(p.hue)}"/><feColorMatrix type="saturate" values="${finite(Math.max(0, 1 + p.saturation / 100))}"/>${light}`;
       break;
     }
     case 'vibrance': body = `<feColorMatrix type="saturate" values="${Math.max(0, 1 + (p.vibrance + p.saturation) / 200)}"/>`; break;
@@ -251,10 +256,10 @@ export function svgFilter(type, p, id) {
       break;
     }
     case 'sepia': body = `<feColorMatrix type="matrix" values="${sepiaMatrix(p.amount / 100)}"/>`; break;
-    case 'blur': body = `<feGaussianBlur stdDeviation="${p.radius}"/>`; break;
+    case 'blur': body = `<feGaussianBlur stdDeviation="${finite(p.radius)}"/>`; break;
     default: return null;
   }
-  return `<filter id="${id}" color-interpolation-filters="sRGB">${body}</filter>`;
+  return `<filter id="${attr(id)}" color-interpolation-filters="sRGB">${body}</filter>`;
 }
 
 /** Settings that leave the picture unchanged (so the compositor can skip the layer). */

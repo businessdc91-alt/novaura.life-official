@@ -11,7 +11,9 @@ import { layoutText, canvasMeasure, resolveFont, fontAvailable } from '../text.j
 import { svgFilter } from '../adjustments.js';
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const num = n => String(Math.round(n * 1000) / 1000 + 0);
+// Every number goes through num(): a project file is untrusted, and a non-number written
+// into an attribute could add markup. Anything that isn't a finite number is written as 0.
+const num = n => (Number.isFinite(Number(n)) ? String(Math.round(Number(n) * 1000) / 1000 + 0) : '0');
 const blendCss = id => (id === 'source-over' || !id ? 'normal' : id === 'lighter' ? 'plus-lighter' : id);
 
 async function blobDataUrl(blob) {
@@ -47,7 +49,7 @@ function textSvg(layer, measure) {
     : '';
   const rotate = layer.rotation ? ` transform="rotate(${num(layer.rotation)} ${num(layer.x + lay.width / 2)} ${num(layer.y + lay.height / 2)})"` : '';
   const tspans = lay.lines.map(l => `<tspan x="${num(ax)}" y="${num(layer.y + l.y + lead)}">${esc(l.text)}</tspan>`).join('');
-  return `<text font-family="${esc(family)}, Inter, sans-serif" font-size="${num(layer.fontSize)}" font-weight="${layer.fontWeight || 400}"${layer.italic ? ' font-style="italic"' : ''} fill="${esc(layer.colour || '#000000')}" text-anchor="${anchor}" dominant-baseline="text-before-edge"${stroke}${rotate} xml:space="preserve">${tspans}</text>`;
+  return `<text font-family="${esc(family)}, Inter, sans-serif" font-size="${num(layer.fontSize)}" font-weight="${num(layer.fontWeight || 400)}"${layer.italic ? ' font-style="italic"' : ''} fill="${esc(layer.colour || '#000000')}" text-anchor="${anchor}" dominant-baseline="text-before-edge"${stroke}${rotate} xml:space="preserve">${tspans}</text>`;
 }
 
 /** The document as an SVG string. Options can replace PNG encoding, text measuring and baking (for tests). */
@@ -65,8 +67,8 @@ export async function writeSvg(doc, { pngDataUrl = defaultPngDataUrl, measure = 
     if (layer.mask && layer.mask.enabled !== false) {
       const m = layer.mask;
       const v = m.defaultValue;
-      defs.push(`<mask id="m-${esc(layer.id)}" maskUnits="userSpaceOnUse" x="0" y="0" width="${doc.width}" height="${doc.height}">`
-        + `<rect x="0" y="0" width="${doc.width}" height="${doc.height}" fill="rgb(${v}, ${v}, ${v})"/>`
+      defs.push(`<mask id="m-${esc(layer.id)}" maskUnits="userSpaceOnUse" x="0" y="0" width="${num(doc.width)}" height="${num(doc.height)}">`
+        + `<rect x="0" y="0" width="${num(doc.width)}" height="${num(doc.height)}" fill="rgb(${num(v)}, ${num(v)}, ${num(v)})"/>`
         + `${image(await pngDataUrl(doc.buffers.get(m.bufferId)), m.x, m.y, m.width, m.height)}</mask>`);
       attrs += ` mask="url(#m-${esc(layer.id)})"`;
     }
@@ -92,6 +94,8 @@ export async function writeSvg(doc, { pngDataUrl = defaultPngDataUrl, measure = 
     body.push(`<g${attrs}>${content}</g>`);
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${doc.width}" height="${doc.height}" viewBox="0 0 ${doc.width} ${doc.height}">`
+  const W = num(doc.width);
+  const H = num(doc.height);
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`
     + `<title>${esc(doc.name)}</title><defs>${defs.join('')}</defs>${body.join('')}</svg>`;
 }
