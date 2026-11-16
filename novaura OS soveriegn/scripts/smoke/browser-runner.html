@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- Runs one *.browser.mjs test file through the Vite dev server, for tests whose code
+     imports packages a plain static server can't load (ag-psd uses require internally).
+     Used by: node scripts/browser-test.mjs --vite=http://localhost:5199/ <file>. Not built. -->
+<html lang="en">
+  <head><meta charset="utf-8" /><title>browser test (vite)</title></head>
+  <body>
+    <script type="module">
+      import { run, reportLoadError } from '/tests/creative/browser/harness.js';
+      const file = new URLSearchParams(location.search).get('file') || '';
+      try { await import(/* @vite-ignore */ `/${file.replace(/\\/g, '/')}`); } catch (err) { reportLoadError(err); }
+      await run();
+    </script>
+  </body>
+</html>

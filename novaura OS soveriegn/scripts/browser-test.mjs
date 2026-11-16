@@ -2,6 +2,8 @@
 //
 //   node scripts/browser-test.mjs tests/creative/browser/surface.browser.mjs [...more]
 //   node scripts/browser-test.mjs --selftest tests/creative/browser/smoke.browser.mjs
+//   node scripts/browser-test.mjs --vite=http://localhost:5199/ tests/creative/browser/psdExport.browser.mjs
+//     (through a running Vite dev server, for code that imports packages, like ag-psd)
 //
 // Serves the project folder over http://127.0.0.1, loads each file in a runner page
 // (tests/creative/browser/harness.js), and prints "ok  <name>" or "FAIL <name> (<why>)".
@@ -26,6 +28,7 @@ const TYPES = {
 
 const args = process.argv.slice(2);
 const selftest = args.includes('--selftest');
+const vite = args.find(a => a.startsWith('--vite='))?.slice('--vite='.length).replace(/\/?$/, '/');
 const files = args.filter(a => !a.startsWith('--'));
 if (!files.length) {
   console.error('usage: node scripts/browser-test.mjs [--selftest] <file.browser.mjs>...');
@@ -138,7 +141,8 @@ try {
     console.log(`# ${file}`);
     pageErrors = [];
     const query = `file=${encodeURIComponent(file)}${selftest ? '&selftest=1' : ''}`;
-    await send('Page.navigate', { url: `http://127.0.0.1:${HTTP}/__runner.html?${query}` });
+    const runner = vite ? `${vite}scripts/smoke/browser-runner.html` : `http://127.0.0.1:${HTTP}/__runner.html`;
+    await send('Page.navigate', { url: `${runner}?${query}` });
     const start = Date.now();
     let done = false;
     while (Date.now() - start < TIMEOUT_MS) {

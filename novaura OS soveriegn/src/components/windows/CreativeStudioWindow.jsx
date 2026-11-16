@@ -27,6 +27,7 @@ import ConfirmCloseDialog from './creative/ConfirmCloseDialog.jsx';
 import StatusBar from './creative/StatusBar.jsx';
 import { loadBudgets } from '../../creative/memory.js';
 import FileMenu from './creative/FileMenu.jsx';
+import ExportDialog from './creative/ExportDialog.jsx';
 import { openFileBlob, saveProject, downloadProject, openVaultFile } from '../../creative/io/projectFiles.js';
 import { startRecovery, listRecovery, takeRecovery, clearRecovery } from '../../creative/io/recovery.js';
 import RecoveryPrompt from './creative/RecoveryPrompt.jsx';
@@ -89,6 +90,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
   const openReport = useStudio(store, s => s.openReport);
   const hasDocument = useStudio(store, s => s.activeId) !== null;
   const [newDocOpen, setNewDocOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [closing, setClosing] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [budgets, setBudgets] = useState(null);
@@ -245,7 +247,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
             <h2 className="text-sm font-bold text-white leading-tight">Creative Studio</h2>
             <p className="text-[11px] text-slate-400 truncate">Layered painting, photo editing and memes</p>
           </div>
-          <FileMenu store={store} onNew={() => setNewDocOpen(true)} onOpen={openFile} onSave={() => save()} onDownload={download} />
+          <FileMenu store={store} onNew={() => setNewDocOpen(true)} onOpen={openFile} onSave={() => save()} onDownload={download} onExport={() => setExportOpen(true)} />
         </div>
         <div role="tablist" aria-label="Workspace" className="flex items-center bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/60 text-xs">
           {TABS.map(({ id, label, icon: Icon, on }) => (
@@ -286,6 +288,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
 
       <StatusBar store={store} zoom={zoom} budgets={budgets} onBudgets={applyBudgets} />
 
+      {exportOpen && <ExportDialog store={store} onClose={() => setExportOpen(false)} />}
       {newDocOpen && (
         <NewDocumentDialog
           onCancel={() => setNewDocOpen(false)}

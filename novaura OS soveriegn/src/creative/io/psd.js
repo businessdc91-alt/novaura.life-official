@@ -9,11 +9,13 @@
 // ag-psd only makes canvases by itself when `document` exists; elsewhere (Node tests,
 // workers) it is given plain RGBA arrays.
 
-import { readPsd, initializeCanvas } from 'ag-psd';
+import { readPsd, writePsd, initializeCanvas } from 'ag-psd';
 import { MAX_SIDE, surfaceFromPixels, createSurface } from '../surface.js';
 import { createDocument, createLayer, removeLayerAt } from '../document.js';
-import { fromPsdBlend } from '../blendModes.js';
+import { fromPsdBlend, toPsdBlend } from '../blendModes.js';
 import { defaultParams } from '../adjustments.js';
+import { rasterizeLayer, flatten as flattenDocument, compositeBelow as compositeBeneath } from '../compositor.js';
+import { adjustBelow as adjustBeneath } from '../adjustmentLayers.js';
 
 if (typeof document === 'undefined') {
   initializeCanvas(
@@ -171,4 +173,65 @@ export function readPsdFile(bytes, name = 'Photoshop file') {
   doc.version = 0;
   for (const l of doc.layers) l.rev = 0;
   return { doc, report };
+}
+
+// ── Exporting ─────────────────────────────────────────────────────────────────
+
+const LOCK_ALL = { transparency: true, composite: true, position: true };
+const IDENTITY_CURVE = [[0, 0], [255, 255]];
+const curveOut = points => (points || IDENTITY_CURVE).map(([input, output]) => ({ input, output }));
+
+// Our adjustments that Photoshop also has, as PSD adjustment layers (null: bake it instead).
+const TO_PSD = {
+  brightnessContrast: p => ({ type: 'brightness/contrast', brightness: p.brightness, contrast: p.contrast, useLegacy: false }),
+  hueSaturation: p => ({ type: 'hue/saturation', master: { hue: p.hue, saturation: p.saturation, lightness: p.lightness } }),
+  vibrance: p => ({ type: 'vibrance', vibrance: p.vibrance, saturation: p.saturation }),
+  levels: p => ({ type: 'levels', channels: [{ shadowInput: p.inBlack, highlightInput: p.inWhite, midtoneInput: p.gamma, shadowOutput: p.outBlack, highlightOutput: p.outWhite }] }),
+  curves: (p) => {
+    const pts = p.points || {};
+    const channels = [curveOut(pts.rgb)];
+    if (pts.r || pts.g || pts.b) channels.push(curveOut(pts.r), curveOut(pts.g), curveOut(pts.b));
+    return { type: 'curves', channels };
+  },
+  blackWhite: p => (p.amount === 100 ? { type: 'black & white' } : null),
+  invert: () => ({ type: 'invert' }),
+  threshold: p => ({ type: 'threshold', level: p.level }),
+  posterize: p => ({ type: 'posterize', levels: p.levels }),
+};
+
+const pixelsOf = surface => surface.read(0, 0, surface.width, surface.height);
+
+/**
+ * The document as PSD bytes (ArrayBuffer). Pixel layers go out as they are; shapes and
+ * text as their pixels; adjustments Photoshop has as live adjustment layers, the rest
+ * (and all of them with exactLook) baked: a pixel layer holding the adjusted picture
+ * beneath, with the same opacity and mask, which looks identical. The drawing
+ * functions can be swapped (tests run without a canvas).
+ */
+export function writePsdFile(doc, {
+  exactLook = false, rasterize = rasterizeLayer, flatten = flattenDocument,
+  compositeBelow = compositeBeneath, adjustBelow = adjustBeneath,
+} = {}) {
+  const children = doc.layers.map((layer) => {
+    const out = { name: layer.name, opacity: layer.opacity, hidden: !layer.visible, blendMode: toPsdBlend(layer) };
+    if (layer.locked) out.protected = { ...LOCK_ALL };
+    if (layer.mask) {
+      const m = layer.mask;
+      out.mask = {
+        left: m.x, top: m.y, right: m.x + m.width, bottom: m.y + m.height,
+        defaultColor: m.defaultValue, disabled: m.enabled === false, imageData: pixelsOf(doc.buffers.get(m.bufferId)),
+      };
+    }
+    if (layer.kind === 'adjust') {
+      const live = !exactLook && TO_PSD[layer.adjust]?.(layer.params);
+      if (live) return { ...out, adjustment: live };
+      const beneath = compositeBelow(doc, layer.id);
+      const adjusted = adjustBelow(doc, layer, beneath, { x: 0, y: 0, w: doc.width, h: doc.height }) || beneath;
+      return { ...out, name: `${layer.name} (baked)`, blendMode: 'normal', left: 0, top: 0, imageData: pixelsOf(adjusted) };
+    }
+    if (layer.kind === 'pixel') return { ...out, left: layer.x, top: layer.y, imageData: pixelsOf(doc.buffers.get(layer.bufferId)) };
+    const { surface, x, y } = rasterize(doc, layer);
+    return { ...out, left: x, top: y, imageData: pixelsOf(surface) };
+  });
+  return writePsd({ width: doc.width, height: doc.height, children, imageData: pixelsOf(flatten(doc)) }, { generateThumbnail: false, noBackground: true });
 }
