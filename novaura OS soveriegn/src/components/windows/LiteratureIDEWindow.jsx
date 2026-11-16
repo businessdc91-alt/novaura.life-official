@@ -1,14 +1,14 @@
-// LiteratureIDEWindow.jsx — Sovereign Literary Studio & IDE
+// LiteratureIDEWindow.jsx — Literature Forge: Sovereign Literary Studio & Narrative IDE
 // An Integrated Development Environment tailored for high-craft narrative fiction and prose.
-// Fuses Scrivener-style split-screen & outliner, Novelcrafter-grade Codex, Sudowrite 5-senses expansion,
+// Fuses Scrivener-style split-screen & Corkboard outliner, Novelcrafter-grade Codex, Sudowrite 5-senses expansion,
 // and ProWritingAid cadence analytics with 100% offline sovereign privacy and universal frontier inference.
 
 import '../../config/monacoConfig.js';
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  Files, BookOpen, Clock, SpellCheck, CheckCircle2, GitFork, BarChart2,
-  MessageSquare, Plus, Trash2, X, FileText, CornerDownLeft, Sparkles,
-  RotateCcw, History, Share2, Layers, Check, Bot
+  BookOpen, Plus, Trash2, X, FileText, CornerDownLeft, Sparkles,
+  RotateCcw, History, Share2, ChevronUp, ChevronDown, Search, Replace,
+  LayoutGrid, Wand2, RefreshCw, Tag
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 
@@ -16,14 +16,19 @@ import {
   getManuscriptFiles, getActiveDocument, setActiveDocumentId,
   getOpenTabs, closeTab, updateDocumentContent, createManuscriptFile,
   deleteManuscriptFile, subscribeManuscriptStore, getManuscriptVersions,
-  rollbackManuscriptVersion, exportManuscript, publishDocumentToMesh
+  rollbackManuscriptVersion, exportManuscript, publishDocumentToMesh,
+  updateManuscriptMetadata, moveManuscriptFile, replaceTextInHtml,
+  replaceAcrossAllManuscripts
 } from '../../services/manuscriptStore.js';
 import { getPeerCount, getLocalIdentity } from '../../services/sovereignMesh.js';
 import { sanitizeRichHtml, escapeHtml } from '../../services/htmlSanitizer.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { contentToBytes } from '../../services/fileStorageService.js';
-import { predictNextPhrase } from '../../services/literatureAiService.js';
-import { phraseRegex } from './literature/engines/SpellCheckEngine.js';
+import { predictNextPhrase, expandBeatToSceneProse } from '../../services/literatureAiService.js';
+import { spellCheckEngine, phraseRegex } from './literature/engines/SpellCheckEngine.js';
+import { factChecker } from './literature/engines/FactChecker.js';
+import { storyTimeline, BEAT_TEMPLATES } from './literature/engines/StoryTimeline.js';
+import { parseDocxBytes } from './literature/engines/BookCompiler.js';
 
 import ActivityBar from './literature/panels/ActivityBar.jsx';
 import CodexPanel from './literature/panels/CodexPanel.jsx';
@@ -42,6 +47,12 @@ import AICoAuthorPanel from './literature/panels/AICoAuthorPanel.jsx';
 import EbookPublisherModal from './literature/panels/EbookPublisherModal.jsx';
 import ZenFocusOverlay from './literature/panels/ZenFocusOverlay.jsx';
 
+const STATUS_BADGES = {
+  Draft: { color: '#94a3b8', bg: 'rgba(148,163,184,0.14)' },
+  Revised: { color: '#38bdf8', bg: 'rgba(56,189,248,0.16)' },
+  Final: { color: '#10b981', bg: 'rgba(16,185,129,0.18)' },
+};
+
 export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
   // ── Workspace & File Tree State ──
   const [files, setFiles] = useState([]);
@@ -50,26 +61,49 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
   const [wordCount, setWordCount] = useState(0);
 
   // ── Modular IDE Layout State ──
-  const [activeActivity, setActiveActivity] = useState('explorer'); // 'explorer' | 'codex' | 'timeline' | 'grammar' | 'factcheck' | 'remaster' | 'pacing'
+  const [activeActivity, setActiveActivity] = useState('explorer');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(true);
   const [isSplitView, setIsSplitView] = useState(false);
   const [isZenMode, setIsZenMode] = useState(false);
 
   // ── Word Ribbon & Formatting State ──
-  const [ribbonTab, setRibbonTab] = useState('home'); // 'home' | 'insert' | 'layout' | 'view' | 'tools'
+  const [ribbonTab, setRibbonTab] = useState('home');
   const [fontFamily, setFontFamily] = useState('Georgia, serif');
   const [fontSize, setFontSize] = useState('12pt');
-  const [pageMargin, setPageMargin] = useState('normal'); // 'normal' | 'narrow' | 'wide'
-  const [pageOrientation, setPageOrientation] = useState('portrait'); // 'portrait' | 'landscape'
+  const [pageMargin, setPageMargin] = useState('normal');
+  const [pageOrientation, setPageOrientation] = useState('portrait');
   const [zoomLevel, setZoomLevel] = useState(100);
   const [isDarkCanvas, setIsDarkCanvas] = useState(false);
   const [isTypewriterScroll, setIsTypewriterScroll] = useState(false);
-  const [editorMode, setEditorMode] = useState('manuscript'); // 'manuscript' | 'code'
+  const [editorMode, setEditorMode] = useState('manuscript');
   const [codeLanguage, setCodeLanguage] = useState('html');
+
+  // ── Find & Replace Bar State ──
+  const [isFindBarOpen, setIsFindBarOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [findMatchCase, setFindMatchCase] = useState(false);
+  const [findWholeWord, setFindWholeWord] = useState(false);
+  const [findScope, setFindScope] = useState('current'); // 'current' | 'all'
+  const [findFeedback, setFindFeedback] = useState('');
+  const [findMatchIndex, setFindMatchIndex] = useState(0);
+
+  // ── @Mention Entity Autocomplete State ──
+  const [mentionPopup, setMentionPopup] = useState(null); // { query, items, selectedIdx, top, left }
+
+  // ── Corkboard / Beat Sheet Outliner State ──
+  const [plotBeats, setPlotBeats] = useState(() => [...storyTimeline.plotThreads]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('save_the_cat');
+  const [newBeatTitle, setNewBeatTitle] = useState('');
+  const [newBeatAct, setNewBeatAct] = useState('Act I');
+  const [newBeatSynopsis, setNewBeatSynopsis] = useState('');
+  const [draftingBeatId, setDraftingBeatId] = useState(null);
 
   // ── Editor Canvas & Prediction State ──
   const editorRef = useRef(null);
+  const rootRef = useRef(null);
+  const canvasScrollRef = useRef(null);
   const typingTimerRef = useRef(null);
   const ghostSeqRef = useRef(0);
   const [ghostPrediction, setGhostPrediction] = useState('');
@@ -92,6 +126,17 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
   const [incomingDocAlert, setIncomingDocAlert] = useState(null);
   const [meshPeerCount, setMeshPeerCount] = useState(0);
 
+  // ── Live Linter & Fact Badge Counts ──
+  const grammarIssueCount = useMemo(() => {
+    if (!activeDoc?.content) return 0;
+    return spellCheckEngine.analyzeText(activeDoc.content).length;
+  }, [activeDoc?.content]);
+
+  const factIssueCount = useMemo(() => {
+    if (!activeDoc?.content) return 0;
+    return factChecker.extractPotentialClaims(activeDoc.content).length;
+  }, [activeDoc?.content]);
+
   // ── 1. Workspace Subscriptions & Initialization ──
   useEffect(() => {
     refreshWorkspace();
@@ -106,6 +151,19 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
       if (e.detail) setIncomingDocAlert(e.detail);
     };
     window.addEventListener('novaura:literature_received', handleIncomingLit);
+
+    const syncTimeline = () => setPlotBeats([...storyTimeline.plotThreads]);
+    window.addEventListener('novaura:timeline_updated', syncTimeline);
+
+    const handleGlobalKeyDown = (e) => {
+      // Only while focus is inside this window: other apps keep their own Ctrl+F.
+      if (!rootRef.current?.contains(e.target)) return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'h')) {
+        e.preventDefault();
+        setIsFindBarOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
 
     const unsubscribe = subscribeManuscriptStore((state) => {
       setFiles(state.files || []);
@@ -122,6 +180,8 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
       window.removeEventListener('novaura:peer_discovered', updatePeerStats);
       window.removeEventListener('novaura:peer_lost', updatePeerStats);
       window.removeEventListener('novaura:literature_received', handleIncomingLit);
+      window.removeEventListener('novaura:timeline_updated', syncTimeline);
+      window.removeEventListener('keydown', handleGlobalKeyDown);
     };
   }, []);
 
@@ -134,10 +194,6 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     setWordCount(active ? active.wordCount || 0 : 0);
   };
 
-  // Load the stored text into the editor when it changed anywhere else (Zen
-  // mode, a restored version, Monaco) or the editor element is new (coming back
-  // from Monaco remounts it). Text the editor wrote itself is left alone so the
-  // caret stays put. Runs after every render; the check is two comparisons.
   useEffect(() => {
     const el = editorRef.current;
     if (!el || !activeDoc) return;
@@ -156,6 +212,88 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     }
   }, [activeDoc?.id]);
 
+  // ── Typewriter Vertical Centering Helper ──
+  const scrollCaretToCenter = useCallback(() => {
+    if (!isTypewriterScroll || !canvasScrollRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || rect.top === 0) return;
+    const container = canvasScrollRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const offset = rect.top - containerRect.top - containerRect.height * 0.45;
+    if (Math.abs(offset) > 28) {
+      container.scrollBy({ top: offset, behavior: 'smooth' });
+    }
+  }, [isTypewriterScroll]);
+
+  // ── @Mention Detection Helper ──
+  const detectMentionTrigger = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) {
+      setMentionPopup(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (!node || node.nodeType !== Node.TEXT_NODE) {
+      setMentionPopup(null);
+      return;
+    }
+    const textBefore = node.data.slice(0, range.startOffset);
+    const match = textBefore.match(/@([\w-]{0,24})$/);
+    if (!match) {
+      setMentionPopup(null);
+      return;
+    }
+    const query = match[1].toLowerCase();
+    const allMentionables = storyTimeline.getAllMentionables();
+    const filtered = allMentionables
+      .filter(item =>
+        item.name.toLowerCase().includes(query) ||
+        (item.aliases || []).some(a => String(a).toLowerCase().includes(query))
+      )
+      .slice(0, 6);
+    if (filtered.length === 0) {
+      setMentionPopup(null);
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    const canvas = canvasScrollRef.current;
+    const box = canvas?.getBoundingClientRect();
+    setMentionPopup({
+      query: match[1],
+      items: filtered,
+      selectedIdx: 0,
+      // Relative to the scrolling canvas: the window frame's backdrop blur makes
+      // position:fixed measure from the window, not the screen.
+      top: rect.bottom - (box?.top || 0) + (canvas?.scrollTop || 0) + 6,
+      left: Math.max(8, rect.left - (box?.left || 0) + (canvas?.scrollLeft || 0))
+    });
+  }, []);
+
+  const applyMentionSelection = (item) => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (node && node.nodeType === Node.TEXT_NODE) {
+      const textBefore = node.data.slice(0, range.startOffset);
+      const match = textBefore.match(/@([\w-]{0,24})$/);
+      if (match) {
+        const replaceRange = document.createRange();
+        replaceRange.setStart(node, range.startOffset - match[0].length);
+        replaceRange.setEnd(node, range.startOffset);
+        sel.removeAllRanges();
+        sel.addRange(replaceRange);
+        document.execCommand('insertText', false, item.name + ' ');
+      }
+    }
+    setMentionPopup(null);
+    handleEditorInput();
+  };
+
   // ── 2. Editor Input & Ghostwriter Inline Prediction ──
   const handleEditorInput = useCallback(() => {
     if (!editorRef.current || !activeDoc) return;
@@ -167,8 +305,9 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     const words = plain.trim() ? plain.trim().split(/\s+/).filter(Boolean).length : 0;
     setWordCount(words);
 
-    // Debounced ghostwriter prediction. A prediction that arrives after more
-    // typing is for old text and is dropped.
+    scrollCaretToCenter();
+    detectMentionTrigger();
+
     const seq = ++ghostSeqRef.current;
     setGhostPrediction('');
     clearTimeout(typingTimerRef.current);
@@ -176,10 +315,38 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
       const prediction = await predictNextPhrase(plain);
       if (prediction && seq === ghostSeqRef.current) setGhostPrediction(prediction);
     }, 1100);
-  }, [activeDoc]);
+  }, [activeDoc, scrollCaretToCenter, detectMentionTrigger]);
 
-  // Tab key to accept ghostwriter completion
+  // Keyboard navigation for @Mention popup and Ghostwriter Tab completion
   const handleEditorKeyDown = (e) => {
+    if (mentionPopup && mentionPopup.items.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionPopup(prev => ({
+          ...prev,
+          selectedIdx: (prev.selectedIdx + 1) % prev.items.length
+        }));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionPopup(prev => ({
+          ...prev,
+          selectedIdx: (prev.selectedIdx - 1 + prev.items.length) % prev.items.length
+        }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        applyMentionSelection(mentionPopup.items[mentionPopup.selectedIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setMentionPopup(null);
+        return;
+      }
+    }
+
     if (e.key === 'Tab' && ghostPrediction) {
       e.preventDefault();
       document.execCommand('insertText', false, ' ' + ghostPrediction);
@@ -211,7 +378,7 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     handleEditorInput();
   };
 
-  // ── 3. File Actions ──
+  // ── 3. File & Chapter Metadata Actions ──
   const handleSelectFile = (id) => {
     setActiveDocumentId(id);
     refreshWorkspace();
@@ -226,7 +393,11 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
   const handleCreateNewChapter = (customTitle = null, customContent = null) => {
     const num = files.filter(f => f.type === 'chapter').length + 1;
     const title = customTitle || `Chapter ${num} - Untitled`;
-    const initialProse = customContent || `<h1>${title}</h1><p>Begin writing chapter here...</p>`;
+    const initialProse = customContent
+      ? (customContent.trim().startsWith('<')
+          ? sanitizeRichHtml(customContent)
+          : `<h1>${escapeHtml(title)}</h1>` + customContent.split(/\n\s*\n/).map(p => `<p>${escapeHtml(p.trim())}</p>`).join(''))
+      : `<h1>${escapeHtml(title)}</h1><p>Begin writing chapter here...</p>`;
     const newDoc = createManuscriptFile(title, 'chapter', initialProse);
     refreshWorkspace();
     setActiveDocumentId(newDoc.id);
@@ -246,7 +417,21 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     }
   };
 
-  // ── 4. Insert / Replace Utilities ──
+  const handleMoveChapter = (id, direction, e) => {
+    e.stopPropagation();
+    moveManuscriptFile(id, direction);
+    refreshWorkspace();
+  };
+
+  const handleCycleStatus = (file, e) => {
+    e.stopPropagation();
+    const order = ['Draft', 'Revised', 'Final'];
+    const nextStatus = order[(order.indexOf(file.status || 'Draft') + 1) % order.length];
+    updateManuscriptMetadata(file.id, { status: nextStatus });
+    refreshWorkspace();
+  };
+
+  // ── 4. Insert / Replace / Focus Utilities ──
   const handleInsertProseAtCursor = (prose) => {
     if (!prose) return;
     if (editorRef.current) {
@@ -266,9 +451,38 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     setSelectionPosition(null);
   };
 
-  // Applies a Grammar fix to exactly the flagged words: the issue's nth
-  // whole-word match in the editor's text, never a match inside another word
-  // or inside the HTML. Goes through the editor's undo history.
+  // Focuses and selects a specific Grammar issue occurrence in the live editor
+  const handleFocusSpecificText = (issue) => {
+    const el = editorRef.current;
+    if (!el || !activeDoc || !issue?.text) return;
+    const re = phraseRegex(issue.text);
+    let remaining = issue.occurrence ?? 0;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(node.data)) !== null) {
+        if (remaining-- > 0) continue;
+        const range = document.createRange();
+        range.setStart(node, m.index);
+        range.setEnd(node, m.index + m[0].length);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        el.focus();
+        const rect = range.getBoundingClientRect();
+        if (rect && canvasScrollRef.current) {
+          const cRect = canvasScrollRef.current.getBoundingClientRect();
+          canvasScrollRef.current.scrollBy({
+            top: rect.top - cRect.top - cRect.height * 0.4,
+            behavior: 'smooth'
+          });
+        }
+        return;
+      }
+    }
+  };
+
   const handleReplaceSpecificText = (issue) => {
     const el = editorRef.current;
     if (!el || !activeDoc || !issue?.text) return;
@@ -283,7 +497,6 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
         let start = m.index;
         let end = m.index + m[0].length;
         const replacement = issue.replacement || '';
-        // Cutting a word also takes one neighbouring space, so no double space is left.
         if (!replacement) {
           if (node.data[end] === ' ') end++;
           else if (node.data[start - 1] === ' ') start--;
@@ -302,9 +515,120 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     }
   };
 
-  // ── 5. Import & Export ──
-  // Imported files are untrusted: HTML is cleaned before it is stored, and
-  // text is escaped so it shows as written.
+  // ── Find & Replace Handlers ──
+  const handleFindNext = () => {
+    const el = editorRef.current;
+    if (!el || !findQuery) return;
+    const escaped = findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = findWholeWord ? `\\b${escaped}\\b` : escaped;
+    const flags = findMatchCase ? 'g' : 'gi';
+    const re = new RegExp(pattern, flags);
+
+    const matches = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(node.data)) !== null) {
+        matches.push({ node, start: m.index, end: m.index + m[0].length });
+      }
+    }
+
+    if (matches.length === 0) {
+      setFindFeedback('0 matches');
+      return;
+    }
+
+    const idx = findMatchIndex % matches.length;
+    const target = matches[idx];
+    const range = document.createRange();
+    range.setStart(target.node, target.start);
+    range.setEnd(target.node, target.end);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    el.focus();
+    setFindMatchIndex((idx + 1) % matches.length);
+    setFindFeedback(`${idx + 1} of ${matches.length}`);
+  };
+
+  const handleExecuteReplace = async () => {
+    if (!findQuery) return;
+    if (findScope === 'all') {
+      if (!window.confirm(`Replace every "${findQuery}" with "${replaceQuery}" in all chapters and lore notes? Each chapter's version history keeps the old text.`)) return;
+      const stats = await replaceAcrossAllManuscripts(findQuery, replaceQuery, {
+        matchCase: findMatchCase,
+        wholeWord: findWholeWord
+      });
+      refreshWorkspace();
+      setFindFeedback(`Replaced ${stats.totalReplacements} across ${stats.docsModified} file(s)`);
+    } else if (activeDoc) {
+      const { html, count } = replaceTextInHtml(activeDoc.content || '', findQuery, replaceQuery, {
+        matchCase: findMatchCase,
+        wholeWord: findWholeWord
+      });
+      if (count > 0) {
+        updateDocumentContent(activeDoc.id, html);
+        if (editorRef.current) {
+          editorRef.current.innerHTML = sanitizeRichHtml(html);
+          editorRef.current.__syncedContent = html;
+        }
+        refreshWorkspace();
+      }
+      setFindFeedback(`Replaced ${count} occurrence(s)`);
+    }
+  };
+
+  // ── Corkboard / Beat Sheet Handlers ──
+  const handleApplyBeatTemplate = () => {
+    // Applying over existing cards replaces them (and their synopses), so ask first.
+    if (plotBeats.length > 0) {
+      const label = BEAT_TEMPLATES[selectedTemplateId]?.label || 'this template';
+      if (!window.confirm(`Replace your ${plotBeats.length} beat card${plotBeats.length === 1 ? '' : 's'} with ${label}? Their synopses will be lost.`)) return;
+    }
+    storyTimeline.applyBeatTemplate(selectedTemplateId, plotBeats.length > 0);
+    setPlotBeats([...storyTimeline.plotThreads]);
+  };
+
+  const handleAddCustomBeat = () => {
+    if (!newBeatTitle.trim()) return;
+    storyTimeline.addPlotBeat({
+      title: newBeatTitle.trim(),
+      act: newBeatAct,
+      synopsis: newBeatSynopsis.trim(),
+      status: 'Planned'
+    });
+    setNewBeatTitle('');
+    setNewBeatSynopsis('');
+    setPlotBeats([...storyTimeline.plotThreads]);
+  };
+
+  const handleDraftChapterFromBeat = async (beat) => {
+    if (draftingBeatId) return;
+    setDraftingBeatId(beat.id);
+    try {
+      const prose = await expandBeatToSceneProse({
+        beat,
+        storyBible: storyTimeline.bibleContext(3000, `${beat.title} ${beat.synopsis}`)
+      });
+      const newDoc = createManuscriptFile(
+        `${beat.act ? beat.act + ' — ' : ''}${beat.title}`,
+        'chapter',
+        `<h1>${escapeHtml(beat.title)}</h1>` + prose.split(/\n\s*\n/).map(p => `<p>${escapeHtml(p.trim())}</p>`).join('')
+      );
+      storyTimeline.updatePlotBeat(beat.id, { status: 'Drafted', linkedDocId: newDoc.id });
+      setPlotBeats([...storyTimeline.plotThreads]);
+      setActiveDocumentId(newDoc.id);
+      refreshWorkspace();
+    } catch (err) {
+      console.warn('[Corkboard] Failed to draft chapter from beat:', err);
+      alert(`Could not draft this beat: ${err.message || err}`);
+    } finally {
+      setDraftingBeatId(null);
+    }
+  };
+
+  // ── 5. Import & Export (including Real .DOCX Binary Unpacking) ──
   const importText = (name, content) => {
     let html = '';
     if (/\.html?$/i.test(name)) {
@@ -322,13 +646,29 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
   const handleImportFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => importText(file.name || 'Imported Document.txt', event.target.result);
-    reader.readAsText(file);
+    const fileName = file.name || 'Imported Document.txt';
+    if (/\.docx$/i.test(fileName)) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const parsed = await parseDocxBytes(new Uint8Array(event.target.result));
+          const cleanName = fileName.replace(/\.docx$/i, '');
+          const newDoc = createManuscriptFile(cleanName, 'chapter', sanitizeRichHtml(parsed.html));
+          setActiveDocumentId(newDoc.id);
+          refreshWorkspace();
+        } catch (err) {
+          alert('Failed to unpack .docx archive: ' + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (event) => importText(fileName, event.target.result);
+      reader.readAsText(file);
+    }
     e.target.value = '';
   };
 
-  // A file handed over from Files ("Open in Literature IDE") is imported as a new chapter.
   const lastImportRef = useRef(null);
   const importVaultFile = async (fileId, openId) => {
     if (openId && lastImportRef.current === openId) return;
@@ -336,6 +676,14 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     try {
       const doc = await db.documents.get(fileId);
       if (!doc || doc.type !== 'file') return;
+      if (/\.docx$/i.test(doc.name || '')) {
+        const bytes = await contentToBytes(doc.content);
+        const parsed = await parseDocxBytes(bytes);
+        const newDoc = createManuscriptFile(doc.name.replace(/\.docx$/i, ''), 'chapter', sanitizeRichHtml(parsed.html));
+        setActiveDocumentId(newDoc.id);
+        refreshWorkspace();
+        return;
+      }
       const text = typeof doc.content === 'string' && !doc.content.startsWith('data:')
         ? doc.content
         : new TextDecoder().decode(await contentToBytes(doc.content));
@@ -357,9 +705,13 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     return () => window.removeEventListener('novaura:app_context', onContext);
   }, []);
 
-  const handleExportFormat = (fmt) => {
+  const handleExportFormat = async (fmt) => {
     if (!activeDoc) return;
-    exportManuscript(activeDoc.id, fmt);
+    try {
+      await exportManuscript(activeDoc.id, fmt);
+    } catch (err) {
+      alert(`Export failed: ${err.message || err}`);
+    }
     setIsExportMenuOpen(false);
   };
 
@@ -410,8 +762,11 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(wordCount / 250));
+  const readingTimeMin = Math.max(1, Math.ceil(wordCount / 230));
+
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#181824', color: '#e2e8f0', fontFamily: "'Inter', sans-serif", overflow: 'hidden' }}>
+    <div ref={rootRef} style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#181824', color: '#e2e8f0', fontFamily: "'Inter', sans-serif", overflow: 'hidden' }}>
 
       {/* ── 1. ACTIVITY BAR (Far Left, 48px) ── */}
       <ActivityBar
@@ -425,12 +780,14 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
         setIsZenMode={setIsZenMode}
         isAiPanelOpen={isAiPanelOpen}
         setIsAiPanelOpen={setIsAiPanelOpen}
+        grammarIssueCount={grammarIssueCount}
+        factIssueCount={factIssueCount}
       />
 
-      {/* ── 2. MODULAR PRIMARY SIDEBAR (Collapsible, Adaptive 240px-380px) ── */}
+      {/* ── 2. MODULAR PRIMARY SIDEBAR (Collapsible, Adaptive 260px-380px) ── */}
       {isSidebarOpen && (
         <div style={{
-          width: (activeActivity === 'causality' || activeActivity === 'sketch') ? '380px' : '240px',
+          width: (activeActivity === 'causality' || activeActivity === 'sketch' || activeActivity === 'corkboard') ? '380px' : '265px',
           backgroundColor: '#12121e',
           borderRight: '1px solid rgba(255,255,255,0.06)',
           display: 'flex',
@@ -438,10 +795,11 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
           flexShrink: 0,
           transition: 'width 0.18s ease'
         }}>
+          {/* EXPLORER SIDEBAR */}
           {activeActivity === 'explorer' && (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div style={{ height: '36px', padding: '0 0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.72rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
-                <span>Manuscript Files</span>
+                <span>Manuscript Binder</span>
                 <div style={{ display: 'flex', gap: '0.2rem' }}>
                   <button onClick={() => handleCreateNewChapter()} title="New Chapter" style={{ background: 'none', border: 'none', color: '#00f0ff', cursor: 'pointer', padding: '2px' }}>
                     <Plus size={14} />
@@ -465,6 +823,7 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
                 ) : (
                   files.filter(f => f.type === 'chapter').map(file => {
                     const isActive = activeDoc?.id === file.id;
+                    const statusStyle = STATUS_BADGES[file.status || 'Draft'] || STATUS_BADGES.Draft;
                     return (
                       <div
                         key={file.id}
@@ -473,22 +832,35 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          padding: '0.45rem 0.8rem',
+                          padding: '0.45rem 0.65rem',
                           cursor: 'pointer',
                           backgroundColor: isActive ? 'rgba(0,240,255,0.1)' : 'transparent',
                           borderLeft: isActive ? '2px solid #00f0ff' : '2px solid transparent',
                           color: isActive ? '#00f0ff' : '#cbd5e1',
-                          fontSize: '0.78rem'
+                          fontSize: '0.76rem'
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', overflow: 'hidden' }}>
-                          <FileText size={14} color={isActive ? '#00f0ff' : '#64748b'} style={{ flexShrink: 0 }} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', overflow: 'hidden', flex: 1 }}>
+                          <FileText size={13} color={isActive ? '#00f0ff' : '#64748b'} style={{ flexShrink: 0 }} />
                           <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{file.name}</span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                          <span style={{ fontSize: '0.64rem', color: '#64748b' }}>{file.wordCount}w</span>
-                          <button onClick={(e) => handleDeleteFile(file.id, e)} title="Delete file" style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '2px' }}>
-                            <Trash2 size={12} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', flexShrink: 0 }}>
+                          <button
+                            onClick={(e) => handleCycleStatus(file, e)}
+                            title="Click to cycle chapter status (Draft → Revised → Final)"
+                            style={{ fontSize: '0.56rem', padding: '1px 5px', borderRadius: '3px', border: 'none', backgroundColor: statusStyle.bg, color: statusStyle.color, fontWeight: 700, cursor: 'pointer' }}
+                          >
+                            {file.status || 'Draft'}
+                          </button>
+                          <span style={{ fontSize: '0.62rem', color: '#64748b' }}>{file.wordCount}w</span>
+                          <button onClick={(e) => handleMoveChapter(file.id, 'up', e)} title="Move Chapter Up" style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '1px' }}>
+                            <ChevronUp size={11} />
+                          </button>
+                          <button onClick={(e) => handleMoveChapter(file.id, 'down', e)} title="Move Chapter Down" style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '1px' }}>
+                            <ChevronDown size={11} />
+                          </button>
+                          <button onClick={(e) => handleDeleteFile(file.id, e)} title="Delete file" style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '1px' }}>
+                            <Trash2 size={11} />
                           </button>
                         </div>
                       </div>
@@ -535,13 +907,141 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
             </div>
           )}
 
-          {activeActivity === 'codex' && <CodexPanel />}
+          {/* CORKBOARD & BEAT SHEET OUTLINER */}
+          {activeActivity === 'corkboard' && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#12121e', color: '#e2e8f0', fontSize: '0.74rem' }}>
+              <div style={{ height: '36px', padding: '0 0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.06)', fontWeight: 700, color: '#fb923c' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <LayoutGrid size={15} />
+                  <span>CORKBOARD & BEAT SHEET ({plotBeats.length})</span>
+                </div>
+              </div>
+
+              {/* Structural Beat Template Bar */}
+              <div style={{ padding: '0.5rem 0.8rem', backgroundColor: '#090d16', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.62rem', color: '#94a3b8', textTransform: 'uppercase' }}>Load Story Structure Template:</span>
+                <div style={{ display: 'flex', gap: '0.3rem' }}>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={e => setSelectedTemplateId(e.target.value)}
+                    style={{ flex: 1, padding: '0.28rem', backgroundColor: '#12121e', border: '1px solid rgba(251,146,60,0.35)', borderRadius: '4px', color: '#f8fafc', fontSize: '0.7rem', outline: 'none' }}
+                  >
+                    {Object.entries(BEAT_TEMPLATES).map(([id, tpl]) => (
+                      <option key={id} value={id}>{tpl.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleApplyBeatTemplate}
+                    style={{ padding: '0.25rem 0.6rem', backgroundColor: 'rgba(251,146,60,0.2)', border: '1px solid rgba(251,146,60,0.45)', borderRadius: '4px', color: '#fb923c', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Apply Beats
+                  </button>
+                </div>
+
+                {/* Custom Beat Quick Add */}
+                <div style={{ display: 'flex', gap: '0.3rem', marginTop: '0.2rem' }}>
+                  <input
+                    value={newBeatTitle}
+                    onChange={e => setNewBeatTitle(e.target.value)}
+                    placeholder="Custom Beat Title..."
+                    style={{ flex: 1, padding: '0.25rem 0.45rem', backgroundColor: '#12121e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#f8fafc', fontSize: '0.7rem', outline: 'none' }}
+                  />
+                  <select
+                    value={newBeatAct}
+                    onChange={e => setNewBeatAct(e.target.value)}
+                    style={{ padding: '0.25rem', backgroundColor: '#12121e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#cbd5e1', fontSize: '0.68rem' }}
+                  >
+                    <option value="Act I">Act I</option>
+                    <option value="Act II-A">Act II-A</option>
+                    <option value="Act II-B">Act II-B</option>
+                    <option value="Act III">Act III</option>
+                  </select>
+                  <button
+                    onClick={handleAddCustomBeat}
+                    disabled={!newBeatTitle.trim()}
+                    style={{ padding: '0.25rem 0.5rem', backgroundColor: '#ea580c', border: 'none', borderRadius: '4px', color: '#fff', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    + Card
+                  </button>
+                </div>
+              </div>
+
+              {/* Beat Cards Stream */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '0.6rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {plotBeats.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#64748b' }}>
+                    <LayoutGrid size={24} style={{ opacity: 0.3, margin: '0 auto 0.5rem' }} />
+                    <p style={{ margin: 0 }}>Corkboard is empty.</p>
+                    <p style={{ fontSize: '0.66rem', margin: '0.25rem 0 0' }}>Select a structural template above (Save the Cat!, Hero's Journey, 7-Point, or 3-Act) and click "Apply Beats".</p>
+                  </div>
+                ) : (
+                  plotBeats.map((beat, idx) => (
+                    <div
+                      key={beat.id}
+                      style={{
+                        padding: '0.6rem 0.75rem',
+                        backgroundColor: 'rgba(2,6,23,0.7)',
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        borderLeft: `3px solid ${beat.status === 'Drafted' ? '#10b981' : '#fb923c'}`,
+                        borderRadius: '6px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.35rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span style={{ fontSize: '0.6rem', padding: '1px 5px', borderRadius: '3px', backgroundColor: 'rgba(251,146,60,0.15)', color: '#fb923c', fontWeight: 700 }}>
+                            {beat.act || `Beat ${idx + 1}`}
+                          </span>
+                          <span style={{ fontWeight: 700, color: '#f8fafc', fontSize: '0.74rem' }}>{beat.title}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                          <button onClick={() => { storyTimeline.movePlotBeat(beat.id, 'up'); setPlotBeats([...storyTimeline.plotThreads]); }} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '1px' }}><ChevronUp size={11} /></button>
+                          <button onClick={() => { storyTimeline.movePlotBeat(beat.id, 'down'); setPlotBeats([...storyTimeline.plotThreads]); }} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '1px' }}><ChevronDown size={11} /></button>
+                          <button onClick={() => { storyTimeline.deletePlotBeat(beat.id); setPlotBeats([...storyTimeline.plotThreads]); }} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '1px' }}><Trash2 size={11} /></button>
+                        </div>
+                      </div>
+
+                      <textarea
+                        rows={2}
+                        value={beat.synopsis || ''}
+                        onChange={(e) => {
+                          storyTimeline.updatePlotBeat(beat.id, { synopsis: e.target.value });
+                          setPlotBeats([...storyTimeline.plotThreads]);
+                        }}
+                        placeholder="Scene goal, conflict, and outcome..."
+                        style={{ width: '100%', padding: '0.3rem', backgroundColor: '#090d16', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '4px', color: '#cbd5e1', fontSize: '0.68rem', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }}
+                      />
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '0.6rem', color: beat.status === 'Drafted' ? '#34d399' : '#64748b' }}>
+                          ● {beat.status || 'Planned'}
+                        </span>
+                        <button
+                          onClick={() => handleDraftChapterFromBeat(beat)}
+                          disabled={draftingBeatId === beat.id}
+                          style={{ padding: '2px 8px', backgroundColor: 'rgba(0,240,255,0.14)', border: '1px solid rgba(0,240,255,0.35)', borderRadius: '4px', color: '#00f0ff', fontSize: '0.64rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
+                        >
+                          {draftingBeatId === beat.id ? <RefreshCw size={10} className="animate-spin" /> : <Wand2 size={10} />}
+                          <span>{draftingBeatId === beat.id ? 'Drafting Scene...' : 'Draft Chapter from Beat'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeActivity === 'codex' && <CodexPanel onGlobalRenameComplete={refreshWorkspace} />}
           {activeActivity === 'timeline' && <TimelinePanel activeDocContent={activeDoc?.content || ''} activeDocName={activeDoc?.name || ''} />}
           {activeActivity === 'causality' && <CausalityPanel activeDocContent={activeDoc?.content || ''} activeDocName={activeDoc?.name || ''} />}
           {activeActivity === 'grammar' && (
             <GrammarPanel
               activeDocContent={activeDoc?.content || ''}
               onReplaceText={handleReplaceSpecificText}
+              onFocusIssue={handleFocusSpecificText}
             />
           )}
           {activeActivity === 'factcheck' && <FactCheckPanel activeDocContent={activeDoc?.content || ''} />}
@@ -559,7 +1059,7 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
         </div>
       )}
 
-      {/* ── 3. CENTER AREA: EDITOR TABS + RIBBON + EDITING PAGE ── */}
+      {/* ── 3. CENTER AREA: EDITOR TABS + RIBBON + FIND BAR + EDITING PAGE ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
         
         {/* Editor Tabs Bar */}
@@ -596,7 +1096,7 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
           })}
         </div>
 
-        {/* Word Ribbon Toolbar */}
+        {/* Literature Forge Ribbon Toolbar */}
         <WordRibbon
           ribbonTab={ribbonTab}
           setRibbonTab={setRibbonTab}
@@ -632,8 +1132,73 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
           isAiPanelOpen={isAiPanelOpen}
           onToggleSplitView={() => setIsSplitView(!isSplitView)}
           isSplitView={isSplitView}
+          onToggleFindBar={() => setIsFindBarOpen(!isFindBarOpen)}
+          isFindBarOpen={isFindBarOpen}
+          onOpenCorkboard={() => { setActiveActivity('corkboard'); setIsSidebarOpen(true); }}
           onClose={onClose}
         />
+
+        {/* Collapsible Find & Replace Bar (Ctrl+F / Ctrl+H) */}
+        {isFindBarOpen && (
+          <div style={{ padding: '0.4rem 0.9rem', backgroundColor: '#111827', borderBottom: '1px solid rgba(56,189,248,0.3)', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', backgroundColor: '#090d16', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.12)' }}>
+              <Search size={12} color="#38bdf8" />
+              <input
+                value={findQuery}
+                onChange={e => { setFindQuery(e.target.value); setFindMatchIndex(0); }}
+                onKeyDown={e => { if (e.key === 'Enter') handleFindNext(); }}
+                placeholder="Find in prose..."
+                style={{ background: 'none', border: 'none', color: '#f8fafc', fontSize: '0.72rem', outline: 'none', width: '140px' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', backgroundColor: '#090d16', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.12)' }}>
+              <Replace size={12} color="#c084fc" />
+              <input
+                value={replaceQuery}
+                onChange={e => setReplaceQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleExecuteReplace(); }}
+                placeholder="Replace with..."
+                style={{ background: 'none', border: 'none', color: '#f8fafc', fontSize: '0.72rem', outline: 'none', width: '140px' }}
+              />
+            </div>
+
+            <button onClick={handleFindNext} style={{ padding: '2px 8px', backgroundColor: 'rgba(56,189,248,0.15)', border: '1px solid rgba(56,189,248,0.35)', borderRadius: '4px', color: '#38bdf8', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}>
+              Find Next
+            </button>
+
+            <button onClick={handleExecuteReplace} style={{ padding: '2px 8px', backgroundColor: 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.4)', borderRadius: '4px', color: '#c084fc', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}>
+              Replace All
+            </button>
+
+            <select
+              value={findScope}
+              onChange={e => setFindScope(e.target.value)}
+              style={{ padding: '2px 6px', backgroundColor: '#090d16', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '4px', color: '#cbd5e1', fontSize: '0.68rem' }}
+            >
+              <option value="current">Current Chapter</option>
+              <option value="all">All Manuscript Chapters</option>
+            </select>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#94a3b8', fontSize: '0.66rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={findMatchCase} onChange={e => setFindMatchCase(e.target.checked)} />
+              Match Case
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#94a3b8', fontSize: '0.66rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={findWholeWord} onChange={e => setFindWholeWord(e.target.checked)} />
+              Whole Word
+            </label>
+
+            {findFeedback && (
+              <span style={{ color: '#34d399', fontSize: '0.68rem', fontWeight: 600 }}>{findFeedback}</span>
+            )}
+
+            <button onClick={() => setIsFindBarOpen(false)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
 
         <input
           type="file"
@@ -675,8 +1240,10 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
                 />
               </div>
             ) : (
-              <div style={{ flex: 1, backgroundColor: isDarkCanvas ? '#090d16' : '#cbd5e1', overflowY: 'auto', padding: '2rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
-                
+              <div
+                ref={canvasScrollRef}
+                style={{ flex: 1, backgroundColor: isDarkCanvas ? '#090d16' : '#cbd5e1', overflowY: 'auto', padding: '2rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}
+              >
                 {/* Incoming Peer Chapter Alert */}
                 {incomingDocAlert && (
                   <div style={{ width: '100%', maxWidth: '816px', marginBottom: '1rem', padding: '0.6rem 1rem', backgroundColor: '#090d16', border: '1px solid #10b981', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#f8fafc', fontSize: '0.78rem', zIndex: 40 }}>
@@ -693,7 +1260,7 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
                   </div>
                 )}
 
-                {/* 8.5 x 11 in Word Sheet */}
+                {/* 8.5 x 11 in Manuscript Sheet */}
                 {activeDoc && (
                   <div style={{
                     width: pageOrientation === 'landscape' ? '1050px' : '820px',
@@ -745,6 +1312,55 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
                     )}
                   </div>
                 )}
+
+                {/* Inline @Mention Codex Autocomplete Popup */}
+                {mentionPopup && mentionPopup.items.length > 0 && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: `${mentionPopup.top}px`,
+                      left: `${mentionPopup.left}px`,
+                      width: '240px',
+                      backgroundColor: '#0f172a',
+                      border: '1px solid rgba(56,189,248,0.45)',
+                      borderRadius: '6px',
+                      boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                      zIndex: 99999,
+                      padding: '0.25rem',
+                      fontFamily: "'Inter', sans-serif"
+                    }}
+                  >
+                    <div style={{ padding: '2px 6px', fontSize: '0.6rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Story Bible @Mention
+                    </div>
+                    {mentionPopup.items.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyMentionSelection(item);
+                        }}
+                        style={{
+                          padding: '0.35rem 0.5rem',
+                          borderRadius: '4px',
+                          backgroundColor: idx === mentionPopup.selectedIdx ? 'rgba(56,189,248,0.2)' : 'transparent',
+                          color: '#f8fafc',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <Tag size={11} color="#38bdf8" />
+                          <span style={{ fontWeight: 600 }}>{item.name}</span>
+                        </div>
+                        <span style={{ fontSize: '0.6rem', color: '#94a3b8' }}>{item.badge}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -772,16 +1388,16 @@ export default function LiteratureIDEWindow({ onClose, props: windowProps }) {
         </div>
 
         {/* ── Status Bar ── */}
-        <div style={{ height: '26px', backgroundColor: '#007acc', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 0.8rem', fontSize: '0.72rem', zIndex: 20 }}>
+        <div style={{ height: '26px', backgroundColor: '#007acc', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', padding: '0 0.8rem', fontSize: '0.72rem', zIndex: 20, whiteSpace: 'nowrap', overflow: 'hidden', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <span>Page 1 of 1</span>
-            <span>{wordCount} words</span>
-            <span>{activeDoc?.name || 'Untitled'}</span>
+            <span>Page {totalPages} of {totalPages}</span>
+            <span>{wordCount.toLocaleString()} words (~{readingTimeMin}m read)</span>
+            <span>{activeDoc?.name || 'Untitled'} [{activeDoc?.status || 'Draft'}]</span>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <span style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '1px 6px', borderRadius: '3px', fontWeight: 600 }}>
-              {editorMode === 'code' ? `Monaco (${codeLanguage.toUpperCase()})` : 'Word WYSIWYG'}
+              {editorMode === 'code' ? `Monaco (${codeLanguage.toUpperCase()})` : 'Forge Manuscript'}
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
               <Sparkles size={12} />

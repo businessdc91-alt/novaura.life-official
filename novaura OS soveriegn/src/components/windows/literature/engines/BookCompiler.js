@@ -14,7 +14,7 @@
  * a small tokenizer, so this runs anywhere (no DOM) and is unit tested.
  */
 
-import { compressZip } from '../../../../services/zipService.js';
+import { compressZip, readZip } from '../../../../services/zipService.js';
 
 // ── Reading chapter HTML ───────────────────────────────────────────────────
 
@@ -406,6 +406,109 @@ export function buildMarkdown({ title, author, chapters }) {
 }
 
 // ── Entry point for the publisher ──────────────────────────────────────────
+
+/**
+ * Converts WordprocessingML (`word/document.xml`) into clean semantic chapter HTML
+ * (`<h1>`, `<h2>`, `<p>`, `<strong>`, `<em>`, `<hr/>`).
+ */
+export function docxXmlToHtml(xmlText) {
+  const src = String(xmlText || '');
+  if (!src.trim()) return '<p></p>';
+
+  const out = [];
+  const pRe = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/gi;
+  let pm;
+  while ((pm = pRe.exec(src)) !== null) {
+    const pBody = pm[1];
+    if (/<w:br\b[^>]*w:type=["']page["']/i.test(pBody) && !/<w:t\b/i.test(pBody)) {
+      continue;
+    }
+
+    const pPrMatch = /<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr>/i.exec(pBody);
+    const pPr = pPrMatch ? pPrMatch[1] : '';
+    const styleMatch = /<w:pStyle\b[^>]*w:val=["']([^"']+)["']/i.exec(pPr);
+    const styleVal = styleMatch ? styleMatch[1].toLowerCase() : '';
+    const isCentered = /<w:jc\b[^>]*w:val=["']center["']/i.test(pPr);
+
+    const runs = [];
+    const rRe = /<w:r\b[^>]*>([\s\S]*?)<\/w:r>/gi;
+    let rm;
+    while ((rm = rRe.exec(pBody)) !== null) {
+      const rBody = rm[1];
+      // Skip dynamic field instructions like PAGE numbers in headers/title blocks
+      if (/<w:instrText\b/i.test(rBody) || /<w:fldChar\b/i.test(rBody)) continue;
+      if (/<w:tab\b/i.test(rBody)) {
+        runs.push({ text: '\t', bold: false, italic: false });
+      }
+      if (/<w:br\b(?![^>]*w:type=["']page["'])/i.test(rBody)) {
+        runs.push({ text: '\n', bold: false, italic: false });
+      }
+      const rPrMatch = /<w:rPr\b[^>]*>([\s\S]*?)<\/w:rPr>/i.exec(rBody);
+      const rPr = rPrMatch ? rPrMatch[1] : '';
+      const bold = /<w:b\b(?![^>]*w:val=["'](?:0|false)["'])/i.test(rPr);
+      const italic = /<w:i\b(?![^>]*w:val=["'](?:0|false)["'])/i.test(rPr);
+
+      const tRe = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
+      let tm;
+      while ((tm = tRe.exec(rBody)) !== null) {
+        const text = decodeEntities(tm[1]);
+        if (!text) continue;
+        const prev = runs[runs.length - 1];
+        if (prev && prev.bold === bold && prev.italic === italic) {
+          prev.text += text;
+        } else {
+          runs.push({ text, bold, italic });
+        }
+      }
+    }
+
+    const plain = runs.map(r => r.text).join('').trim();
+    if (!plain) continue;
+    // Skip Shunn manuscript title-page word count / END marker lines when round-tripping
+    if (/\t.*about\s+[\d,]+\s+words$/i.test(plain)) continue;
+    if (isCentered && /^END$/i.test(plain)) continue;
+
+    if (SCENE_BREAK_RE.test(plain) || (isCentered && plain === '—')) {
+      out.push('<hr/>');
+      continue;
+    }
+
+    const htmlInner = runsToHtml(runs);
+    if (/^heading\s*1|^title/i.test(styleVal)) {
+      out.push(`<h1>${htmlInner}</h1>`);
+    } else if (/^heading\s*[2-6]|^subtitle/i.test(styleVal)) {
+      out.push(`<h2>${htmlInner}</h2>`);
+    } else if (isCentered && out.length === 0 && plain.length < 120) {
+      out.push(`<h1>${htmlInner}</h1>`);
+    } else if (isCentered && plain.length < 90 && !/[.!?]$/.test(plain)) {
+      out.push(`<h2>${htmlInner}</h2>`);
+    } else {
+      out.push(`<p>${htmlInner}</p>`);
+    }
+  }
+
+  return out.length ? out.join('') : '<p></p>';
+}
+
+/**
+ * Unpacks a `.docx` archive (Uint8Array or ArrayBuffer) and converts `word/document.xml`
+ * into clean chapter HTML for the manuscript editor.
+ */
+export async function parseDocxBytes(inputBytes) {
+  const entries = await readZip(inputBytes);
+  const docEntry = entries.find(e => e.path.toLowerCase() === 'word/document.xml');
+  if (!docEntry) {
+    throw new Error('Invalid .docx file: missing word/document.xml.');
+  }
+  const xmlText = new TextDecoder().decode(docEntry.bytes);
+  const html = docxXmlToHtml(xmlText);
+  const plainText = html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(nbsp|amp|lt|gt|quot|#39);/g, (_, e) => ({ nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[e] || ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { html, plainText };
+}
 
 /** Builds the chosen format and downloads it. Returns the file name. */
 export async function compileBook(format, options) {

@@ -1,10 +1,10 @@
-// WordRibbon.jsx — Microsoft Word Ribbon Menu & Formatting Toolbar
+// WordRibbon.jsx — Literature Forge Ribbon Menu & Formatting Toolbar
 import React from 'react';
 import {
   Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter,
-  AlignRight, AlignJustify, List, ListOrdered, Undo, Redo, ZoomIn,
-  ZoomOut, Upload, Download, History, Share2, BookOpen, Sparkles,
-  FileText, Code2, Eye, Printer, Split, Layers, X
+  AlignRight, AlignJustify, List, ListOrdered, Undo, Redo,
+  Upload, Download, History, Share2, BookOpen, Sparkles,
+  FileText, Code2, Printer, Split, X, Search, LayoutGrid, Feather
 } from 'lucide-react';
 
 export default function WordRibbon({
@@ -42,13 +42,31 @@ export default function WordRibbon({
   isAiPanelOpen,
   onToggleSplitView,
   isSplitView,
+  onToggleFindBar,
+  isFindBarOpen,
+  onOpenCorkboard,
   onClose
 }) {
+  const fontSizeToCommandSize = (pt) => {
+    switch (pt) {
+      case '11pt': return '2';
+      case '12pt': return '3';
+      case '14pt': return '4';
+      case '16pt': return '5';
+      case '18pt': return '6';
+      case '24pt': return '7';
+      default: return '3';
+    }
+  };
+
   return (
     <div style={{ backgroundColor: '#f1f5f9', color: '#1e293b', borderBottom: '1px solid #cbd5e1', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', flexShrink: 0 }}>
       {/* ── Ribbon Tabs Header ── */}
       <div style={{ display: 'flex', alignItems: 'center', padding: '0 0.5rem', height: '30px', backgroundColor: '#e2e8f0', borderBottom: '1px solid #cbd5e1', fontSize: '0.74rem', fontWeight: 600 }}>
-        <span style={{ color: '#0284c7', fontWeight: 800, marginRight: '0.75rem', letterSpacing: '0.04em' }}>WORD</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: '#0f172a', backgroundColor: 'rgba(2,132,199,0.14)', border: '1px solid rgba(2,132,199,0.35)', padding: '1px 7px', borderRadius: '4px', fontWeight: 800, marginRight: '0.6rem', letterSpacing: '0.04em', fontSize: '0.68rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          <Feather size={11} color="#0284c7" />
+          <span>LITERATURE FORGE</span>
+        </span>
         {[
           { id: 'home', label: 'Home' },
           { id: 'insert', label: 'Insert' },
@@ -75,7 +93,7 @@ export default function WordRibbon({
         ))}
 
         {/* Editor Mode Toggle: Manuscript vs Monaco Code */}
-        <div style={{ marginLeft: '1rem', display: 'flex', alignItems: 'center', gap: '2px', backgroundColor: '#cbd5e1', padding: '2px', borderRadius: '4px' }}>
+        <div style={{ marginLeft: '0.75rem', display: 'flex', alignItems: 'center', gap: '2px', backgroundColor: '#cbd5e1', padding: '2px', borderRadius: '4px' }}>
           <button
             onClick={() => setEditorMode('manuscript')}
             style={{
@@ -142,9 +160,32 @@ export default function WordRibbon({
 
         {/* Right Action Icons */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.35rem', position: 'relative' }}>
+          {onToggleFindBar && (
+            <button
+              onClick={onToggleFindBar}
+              title="Find & Replace across chapter or entire manuscript (Ctrl+F)"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '4px',
+                border: isFindBarOpen ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                backgroundColor: isFindBarOpen ? '#e0f2fe' : '#ffffff',
+                color: isFindBarOpen ? '#0369a1' : '#475569',
+                fontSize: '0.68rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <Search size={12} />
+              <span>Find / Replace</span>
+            </button>
+          )}
+
           <button
             onClick={onImportClick}
-            title="Import Local File into Manuscript Studio"
+            title="Import Local File (.docx, .md, .txt, .html) into Literature Forge"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -200,22 +241,34 @@ export default function WordRibbon({
                 boxShadow: '0 8px 20px rgba(0,0,0,0.15)',
                 padding: '4px',
                 zIndex: 100,
-                minWidth: '140px',
+                minWidth: '175px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '2px'
               }}>
                 <button
-                  onClick={() => onExportFormat('html')}
-                  style={{ padding: '6px 10px', textAlign: 'left', background: 'none', border: 'none', fontSize: '0.72rem', cursor: 'pointer', borderRadius: '4px', color: '#1e293b' }}
+                  onClick={() => onExportFormat('docx')}
+                  style={{ padding: '6px 10px', textAlign: 'left', background: 'none', border: 'none', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', borderRadius: '4px', color: '#0284c7' }}
                 >
-                  Export HTML (.html)
+                  Export Word Manuscript (.docx)
+                </button>
+                <button
+                  onClick={() => onExportFormat('epub')}
+                  style={{ padding: '6px 10px', textAlign: 'left', background: 'none', border: 'none', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', borderRadius: '4px', color: '#7e22ce' }}
+                >
+                  Export E-Book (.epub)
                 </button>
                 <button
                   onClick={() => onExportFormat('markdown')}
                   style={{ padding: '6px 10px', textAlign: 'left', background: 'none', border: 'none', fontSize: '0.72rem', cursor: 'pointer', borderRadius: '4px', color: '#1e293b' }}
                 >
                   Export Markdown (.md)
+                </button>
+                <button
+                  onClick={() => onExportFormat('html')}
+                  style={{ padding: '6px 10px', textAlign: 'left', background: 'none', border: 'none', fontSize: '0.72rem', cursor: 'pointer', borderRadius: '4px', color: '#1e293b' }}
+                >
+                  Export HTML (.html)
                 </button>
                 <button
                   onClick={() => onExportFormat('txt')}
@@ -289,14 +342,24 @@ export default function WordRibbon({
               <option value="Garamond, serif">Garamond</option>
             </select>
 
-            <select value={fontSize} onChange={e => { setFontSize(e.target.value); onExec('fontSize', e.target.value === '18pt' ? '5' : e.target.value === '14pt' ? '4' : '3'); }}
-              style={{ padding: '0.2rem 0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.74rem', outline: 'none', backgroundColor: '#fff', color: '#1e293b' }}>
-              <option value="11pt">11</option>
-              <option value="12pt">12</option>
-              <option value="14pt">14</option>
-              <option value="16pt">16</option>
-              <option value="18pt">18</option>
-              <option value="24pt">24</option>
+            <select
+              value={fontSize}
+              onChange={e => {
+                const next = e.target.value;
+                setFontSize(next);
+                const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+                if (sel && sel.toString().trim()) {
+                  onExec('fontSize', fontSizeToCommandSize(next));
+                }
+              }}
+              style={{ padding: '0.2rem 0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.74rem', outline: 'none', backgroundColor: '#fff', color: '#1e293b' }}
+            >
+              <option value="11pt">11 pt</option>
+              <option value="12pt">12 pt</option>
+              <option value="14pt">14 pt</option>
+              <option value="16pt">16 pt</option>
+              <option value="18pt">18 pt</option>
+              <option value="24pt">24 pt</option>
             </select>
 
             <div style={{ width: '1px', height: '20px', backgroundColor: '#cbd5e1' }} />
@@ -406,7 +469,69 @@ export default function WordRibbon({
               }}
             >
               <Printer size={13} />
-              <span>Publish E-Book / Typeset</span>
+              <span>Compile & Publish E-Book / Shunn Manuscript</span>
+            </button>
+
+            {onOpenCorkboard && (
+              <button
+                onClick={onOpenCorkboard}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.3rem',
+                  padding: '0.25rem 0.6rem',
+                  backgroundColor: '#fef3c7',
+                  border: '1px solid #f59e0b',
+                  borderRadius: '4px',
+                  color: '#b45309',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                <LayoutGrid size={13} />
+                <span>Corkboard & Beat Templates</span>
+              </button>
+            )}
+
+            <button
+              onClick={onToggleSplitView}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                padding: '0.25rem 0.6rem',
+                backgroundColor: isSplitView ? '#f3e8ff' : '#ffffff',
+                border: '1px solid #cbd5e1',
+                borderRadius: '4px',
+                color: isSplitView ? '#7e22ce' : '#334155',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <Split size={13} />
+              <span>{isSplitView ? 'Close Split View' : 'Scrivener Split View'}</span>
+            </button>
+
+            <button
+              onClick={onToggleAiPanel}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                padding: '0.25rem 0.6rem',
+                backgroundColor: isAiPanelOpen ? '#e0f2fe' : '#ffffff',
+                border: '1px solid #cbd5e1',
+                borderRadius: '4px',
+                color: isAiPanelOpen ? '#0369a1' : '#334155',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <Sparkles size={13} />
+              <span>{isAiPanelOpen ? 'Hide Co-Author' : 'Open Co-Author'}</span>
             </button>
           </div>
         )}

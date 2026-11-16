@@ -1,9 +1,10 @@
-// manuscriptStore.js — Durable Local Storage & Versioning Engine for Literature Studio
+// manuscriptStore.js — Durable Local Storage & Versioning Engine for Literature Forge
 // Backed by Dexie IndexedDB (NovauraSovereignPrivateCloud) with an in-memory sync cache
 // for zero-latency UI reads, debounced persistence, and automatic local version tracking.
 
 import { db } from '../database/sovereignDatabase.js';
 import { ipc } from '../kernel/IPCBus.js';
+import { compileBook } from '../components/windows/literature/engines/BookCompiler.js';
 
 const LEGACY_STORAGE_KEY = 'novaura_sovereign_manuscripts_v1';
 const STATE_KEY = 'literature_workspace_state';
@@ -163,13 +164,10 @@ async function hydrateManuscriptStore() {
           if (parsed && Array.isArray(parsed.files) && parsed.files.length > 0) {
             console.info(`[ManuscriptStore] Migrating ${parsed.files.length} documents from localStorage into durable IndexedDB...`);
             
-            // Check if it's the stock default seed without edits
             const isStockSeed = parsed.files.length === 4 &&
               parsed.files.some(f => f.id === 'doc_chap_1' && f.name.includes('The Awakening')) &&
               parsed.files.some(f => f.id === 'doc_lore_world' && f.content.includes('Shattered Lattice'));
 
-            // If user had actually written/modified things, migrate them!
-            // If it was just the untouched default seed, start clean (empty state).
             if (!isStockSeed) {
               for (const f of parsed.files) {
                 await db.manuscripts.put(f);
@@ -193,12 +191,14 @@ async function hydrateManuscriptStore() {
 
     // Chapters received over the mesh used to be stored as the author's own
     // chapters; they have their own "shared" section now.
-    _cache.files = (Array.isArray(files) ? files : [])
-      .map(f => (f.isMeshShared && f.type !== 'shared' ? { ...f, type: 'shared' } : f));
+    const sorted = (Array.isArray(files) ? files : [])
+      .map(f => (f.isMeshShared && f.type !== 'shared' ? { ...f, type: 'shared' } : f))
+      .sort((a, b) => (Number.isFinite(a.order) && Number.isFinite(b.order)) ? a.order - b.order : 0);
+
+    _cache.files = sorted;
     _cache.activeFileId = state?.activeFileId || (_cache.files[0] ? _cache.files[0].id : null);
     _cache.openTabs = Array.isArray(state?.openTabs) ? state.openTabs.filter(id => _cache.files.some(f => f.id === id)) : [];
     
-    // Ensure activeFileId is in openTabs if documents exist
     if (_cache.activeFileId && !_cache.openTabs.includes(_cache.activeFileId)) {
       _cache.openTabs.push(_cache.activeFileId);
     }
@@ -287,7 +287,6 @@ export function updateDocumentContent(id, htmlContent) {
   const current = _cache.files.find(f => f.id === id);
   if (!current) return;
 
-  // A new object (not edited in place), so React sees the change.
   const plain = htmlContent.replace(/<[^>]+>/g, ' ').trim();
   const now = new Date().toISOString();
   const file = {
@@ -299,22 +298,132 @@ export function updateDocumentContent(id, htmlContent) {
   };
   _cache.files = _cache.files.map(f => (f.id === id ? file : f));
 
-  // Notify UI
   notifySubscribers();
 
-  // Async persist to Dexie
   db.manuscripts.put(file).catch(err => {
     console.error('[ManuscriptStore] Failed to update document in Dexie:', err);
   });
 
-  // Schedule rolling snapshot for version history
   scheduleVersionSnapshot(file);
+}
+
+/**
+ * Update chapter metadata (status badge, target word count, synopsis, or file name)
+ */
+export function updateManuscriptMetadata(id, updates = {}) {
+  const current = _cache.files.find(f => f.id === id);
+  if (!current) return null;
+
+  const now = new Date().toISOString();
+  const file = {
+    ...current,
+    ...updates,
+    lastModified: now,
+    updatedAt: now,
+  };
+  _cache.files = _cache.files.map(f => (f.id === id ? file : f));
+  notifySubscribers();
+  db.manuscripts.put(file).catch(() => {});
+  return file;
+}
+
+/**
+ * Reorder a chapter up (-1) or down (+1) within its type group
+ */
+export function moveManuscriptFile(id, direction = -1) {
+  const idx = _cache.files.findIndex(f => f.id === id);
+  if (idx === -1) return;
+  const currentType = _cache.files[idx].type;
+  // The binder passes 'up' / 'down'; idx + 'up' would be the string "3up".
+  const step = direction === 'up' ? -1 : direction === 'down' ? 1 : (Math.sign(Number(direction)) || -1);
+  let targetIdx = idx + step;
+  while (targetIdx >= 0 && targetIdx < _cache.files.length && _cache.files[targetIdx].type !== currentType) {
+    targetIdx += step;
+  }
+  if (targetIdx < 0 || targetIdx >= _cache.files.length) return;
+
+  const copy = [..._cache.files];
+  const [item] = copy.splice(idx, 1);
+  copy.splice(targetIdx, 0, item);
+  _cache.files = copy.map((f, i) => ({ ...f, order: i }));
+  notifySubscribers();
+  for (const f of _cache.files) {
+    db.manuscripts.put(f).catch(() => {});
+  }
+}
+
+/**
+ * Safely replaces text inside HTML text segments (never corrupting HTML tag names or attributes)
+ * across either a single document or all editable chapters & lore notes.
+ */
+export function replaceTextInHtml(html, searchTerm, replacement, { matchCase = false, wholeWord = false } = {}) {
+  const query = String(searchTerm || '');
+  if (!query) return { html, count: 0 };
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = wholeWord ? `(?<![\\w'-])${escaped}(?![\\w'-])` : escaped;
+  const flags = matchCase ? 'g' : 'gi';
+  const re = new RegExp(pattern, flags);
+
+  let count = 0;
+  // Split into HTML tags vs text segments so tags are untouched. Text is
+  // matched as the reader sees it ("Tom & Jerry", never the "amp" inside
+  // "&amp;"), and a changed segment is escaped again, so the replacement is
+  // always plain text, never markup.
+  const parts = String(html || '').split(/(<[^>]+>)/g);
+  const updated = parts.map(part => {
+    if (part.startsWith('<') && part.endsWith('>')) return part;
+    let hits = 0;
+    const replaced = decodeTextEntities(part).replace(re, () => {
+      hits++;
+      return String(replacement ?? '');
+    });
+    if (!hits) return part;
+    count += hits;
+    return encodeTextEntities(replaced);
+  }).join('');
+
+  return { html: updated, count };
+}
+
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”' };
+
+function decodeTextEntities(text) {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+    if (e[0] === '#') {
+      const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+    }
+    return NAMED_ENTITIES[e.toLowerCase()] ?? m;
+  });
+}
+
+function encodeTextEntities(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/ /g, '&nbsp;');
+}
+
+/**
+ * Global Find & Replace across all chapters and lore dossiers in the workspace.
+ */
+export function replaceAcrossAllManuscripts(searchTerm, replacement, options = {}) {
+  let totalReplacements = 0;
+  let docsModified = 0;
+
+  for (const doc of _cache.files) {
+    if (doc.type === 'shared') continue;
+    const { html, count } = replaceTextInHtml(doc.content, searchTerm, replacement, options);
+    if (count > 0) {
+      totalReplacements += count;
+      docsModified++;
+      updateDocumentContent(doc.id, html);
+    }
+  }
+  return { totalReplacements, docsModified };
 }
 
 /**
  * Create a new manuscript file (chapter or lore dossier)
  */
-export function createManuscriptFile(name, type = 'chapter', content = '') {
+export function createManuscriptFile(name, type = 'chapter', content = '', extra = {}) {
   const newId = 'doc_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
   const cleanName = name.endsWith('.docx') || name.endsWith('.md') ? name : `${name}.docx`;
   
@@ -331,6 +440,10 @@ export function createManuscriptFile(name, type = 'chapter', content = '') {
     id: newId,
     name: cleanName,
     type,
+    status: extra.status || 'Draft',
+    targetWords: Number(extra.targetWords) || 2000,
+    synopsis: extra.synopsis || '',
+    order: _cache.files.length,
     wordCount,
     lastModified: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -346,7 +459,6 @@ export function createManuscriptFile(name, type = 'chapter', content = '') {
   notifySubscribers();
   persistWorkspaceState();
 
-  // Persist to Dexie and record initial version
   db.manuscripts.put(newDoc).then(() => {
     recordDocumentVersion(newDoc);
   }).catch(err => {
@@ -369,7 +481,6 @@ export function deleteManuscriptFile(id) {
   notifySubscribers();
   persistWorkspaceState();
 
-  // Delete from Dexie
   db.manuscripts.delete(id).catch(err => {
     console.warn('[ManuscriptStore] Dexie delete error:', err);
   });
@@ -407,11 +518,27 @@ export async function rollbackManuscriptVersion(docId, versionId) {
 }
 
 /**
- * Export manuscript in chosen format
+ * Export manuscript in chosen format (docx, epub, html, markdown, json, txt)
  */
-export function exportManuscript(docId, format = 'html') {
+export async function exportManuscript(docId, format = 'html') {
   const doc = _cache.files.find(f => f.id === docId);
   if (!doc) throw new Error('Document not found');
+
+  const cleanTitle = doc.name.replace(/\.[^/.]+$/, '');
+  if (format === 'docx' || format === 'shunn') {
+    return await compileBook('shunn', {
+      title: cleanTitle,
+      author: 'Sovereign Author',
+      chapters: [doc],
+    });
+  }
+  if (format === 'epub') {
+    return await compileBook('epub', {
+      title: cleanTitle,
+      author: 'Sovereign Author',
+      chapters: [doc],
+    });
+  }
 
   let output = '';
   let mimeType = 'text/plain';
@@ -422,7 +549,6 @@ export function exportManuscript(docId, format = 'html') {
     mimeType = 'text/html';
     extension = 'html';
   } else if (format === 'markdown' || format === 'md') {
-    // Simple HTML to Markdown conversion
     output = doc.content
       .replace(/<h1>(.*?)<\/h1>/gi, '# $1\n\n')
       .replace(/<h2>(.*?)<\/h2>/gi, '## $1\n\n')
@@ -440,7 +566,6 @@ export function exportManuscript(docId, format = 'html') {
     mimeType = 'application/json';
     extension = 'json';
   } else {
-    // Plain text
     output = doc.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     mimeType = 'text/plain';
     extension = 'txt';
@@ -450,7 +575,7 @@ export function exportManuscript(docId, format = 'html') {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${doc.name.replace(/\.[^/.]+$/, '')}.${extension}`;
+  a.download = `${cleanTitle}.${extension}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -459,13 +584,11 @@ export function exportManuscript(docId, format = 'html') {
 
 /**
  * Store a chapter another node shared (already validated by meshManuscripts.js).
- * Keeps at most `maxPerSender` per sender and `maxTotal` overall, dropping the
- * oldest. Returns true when stored.
  */
 export async function receiveSharedManuscript(doc, { maxPerSender, maxTotal }) {
   await initManuscriptStore();
   const existing = _cache.files.find(f => f.id === doc.id);
-  if (existing && existing.type !== 'shared') return false; // never replaces the author's own files
+  if (existing && existing.type !== 'shared') return false;
 
   let files = existing ? _cache.files.map(f => (f.id === doc.id ? doc : f)) : [..._cache.files, doc];
   const byAge = (a, b) => String(a.sharedAt || '').localeCompare(String(b.sharedAt || ''));

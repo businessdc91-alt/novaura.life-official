@@ -1,8 +1,7 @@
 // ZenFocusOverlay.jsx — Distraction-Free Typewriter Canvas with Generative Soundscapes & Sprint Station
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Maximize2, Minimize2, Volume2, VolumeX, Play, Pause, RotateCcw,
-  Sparkles, X, Activity, Target
+  Maximize2, Minimize2, Volume2, VolumeX, X, Target, AlignCenter
 } from 'lucide-react';
 import { sanitizeRichHtml } from '../../../../services/htmlSanitizer.js';
 
@@ -13,7 +12,8 @@ export default function ZenFocusOverlay({
   onClose,
   initialWordCount = 0
 }) {
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
+  const [isTypewriterCenter, setIsTypewriterCenter] = useState(true);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [soundscape, setSoundscape] = useState('rain'); // 'rain' | 'fireplace' | 'space' | 'cyberpunk'
   const [volume, setVolume] = useState(0.35);
@@ -26,11 +26,11 @@ export default function ZenFocusOverlay({
   const [currentWordCount, setCurrentWordCount] = useState(initialWordCount);
 
   const editorRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const audioCtxRef = useRef(null);
   const gainNodeRef = useRef(null);
   const noiseSourceRef = useRef(null);
 
-  // Initialize editor content
   useEffect(() => {
     if (editorRef.current && activeDocContent) {
       if (editorRef.current.innerHTML !== activeDocContent) {
@@ -39,8 +39,6 @@ export default function ZenFocusOverlay({
     }
   }, []);
 
-  // The soundscape stops however the overlay closes (exit button, the activity
-  // bar toggle, closing the window).
   useEffect(() => () => stopAudio(), []);
 
   // Sprint Timer Loop
@@ -57,7 +55,21 @@ export default function ZenFocusOverlay({
     return () => clearInterval(interval);
   }, [isSprintActive, secondsRemaining, currentWordCount, sprintWordsStart]);
 
-  // Handle Input
+  const centerCaretVertically = () => {
+    if (!isTypewriterCenter || !scrollContainerRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || rect.top === 0) return;
+    const container = scrollContainerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    const targetOffset = rect.top - containerRect.top - containerRect.height * 0.45;
+    if (Math.abs(targetOffset) > 28) {
+      container.scrollBy({ top: targetOffset, behavior: 'smooth' });
+    }
+  };
+
   const handleInput = () => {
     if (!editorRef.current) return;
     const html = editorRef.current.innerHTML;
@@ -67,9 +79,23 @@ export default function ZenFocusOverlay({
     if (onUpdateContent && activeDoc) {
       onUpdateContent(activeDoc.id, html);
     }
+    centerCaretVertically();
   };
 
-  // Generative Web Audio API Synthesizer (Zero asset dependencies!)
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+        setIsFullscreen(true);
+      } else {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    } catch {
+      setIsFullscreen(prev => !prev);
+    }
+  };
+
   const toggleSoundscape = () => {
     if (isPlayingAudio) {
       stopAudio();
@@ -91,23 +117,26 @@ export default function ZenFocusOverlay({
       const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const data = buffer.getChannelData(0);
 
-      // Generate Brown/Pink Noise for organic soundscapes
       let lastOut = 0.0;
       for (let i = 0; i < bufferSize; i++) {
         const white = Math.random() * 2 - 1;
+        const t = i / ctx.sampleRate;
         if (type === 'rain') {
-          // Brown noise filter for gentle rainfall
           data[i] = (lastOut + (0.02 * white)) / 1.02;
           lastOut = data[i];
           data[i] *= 3.5;
         } else if (type === 'fireplace') {
-          // Crackling fire with occasional random pops
           data[i] = (lastOut + (0.05 * white)) / 1.05;
           if (Math.random() < 0.0008) data[i] += (Math.random() * 0.8 - 0.4);
           lastOut = data[i];
+        } else if (type === 'cyberpunk') {
+          // Warm Vangelis-inspired fifths pad (110Hz + 165Hz) + gentle neon rain hiss
+          // 165 Hz (not 164.81) so both tones finish whole cycles in the 2 s loop: no click.
+          const pad = Math.sin(2 * Math.PI * 110 * t) * 0.18 + Math.sin(2 * Math.PI * 165 * t) * 0.12;
+          lastOut = (lastOut + 0.03 * white) / 1.03;
+          data[i] = pad + lastOut * 1.4;
         } else {
-          // Deep space drone
-          data[i] = Math.sin(2 * Math.PI * 55 * (i / ctx.sampleRate)) * 0.3 + (white * 0.02);
+          data[i] = Math.sin(2 * Math.PI * 55 * t) * 0.3 + (white * 0.02);
         }
       }
 
@@ -116,8 +145,8 @@ export default function ZenFocusOverlay({
       noise.loop = true;
 
       const filter = ctx.createBiquadFilter();
-      filter.type = type === 'rain' ? 'lowpass' : 'bandpass';
-      filter.frequency.value = type === 'rain' ? 800 : 400;
+      filter.type = type === 'rain' || type === 'cyberpunk' ? 'lowpass' : 'bandpass';
+      filter.frequency.value = type === 'rain' ? 800 : type === 'cyberpunk' ? 620 : 400;
 
       const gain = ctx.createGain();
       gain.gain.value = vol;
@@ -246,7 +275,16 @@ export default function ZenFocusOverlay({
         </div>
 
         {/* Right: Ambient Soundscape Controls & Exit */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+          <button
+            onClick={() => setIsTypewriterCenter(!isTypewriterCenter)}
+            title="Toggle Typewriter Vertical Line Centering"
+            style={{ padding: '2px 7px', backgroundColor: isTypewriterCenter ? 'rgba(0,240,255,0.15)' : 'transparent', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: isTypewriterCenter ? '#00f0ff' : '#64748b', fontSize: '0.66rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
+          >
+            <AlignCenter size={12} />
+            <span>Typewriter</span>
+          </button>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <select
               value={soundscape}
@@ -259,6 +297,7 @@ export default function ZenFocusOverlay({
               <option value="rain">🌧️ Rain on Window</option>
               <option value="fireplace">🔥 Hearth Fireplace</option>
               <option value="space">🌌 Deep Space Hum</option>
+              <option value="cyberpunk">🌆 Cyberpunk Neon Rain</option>
             </select>
             <button
               onClick={toggleSoundscape}
@@ -279,6 +318,14 @@ export default function ZenFocusOverlay({
           </div>
 
           <button
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+
+          <button
             onClick={() => {
               stopAudio();
               onClose();
@@ -293,19 +340,23 @@ export default function ZenFocusOverlay({
       </div>
 
       {/* Main Focus Center Page */}
-      <div style={{
-        flex: 1,
-        overflowY: 'auto',
-        display: 'flex',
-        justifyContent: 'center',
-        padding: '4rem 1.5rem',
-        backgroundColor: '#070a12'
-      }}>
+      <div
+        ref={scrollContainerRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          display: 'flex',
+          justifyContent: 'center',
+          padding: '4rem 1.5rem',
+          backgroundColor: '#070a12'
+        }}
+      >
         <div
           ref={editorRef}
           contentEditable
           suppressContentEditableWarning
           onInput={handleInput}
+          onKeyUp={centerCaretVertically}
           spellCheck="true"
           style={{
             width: '100%',
@@ -317,7 +368,7 @@ export default function ZenFocusOverlay({
             color: '#f1f5f9',
             letterSpacing: '0.01em',
             wordBreak: 'break-word',
-            paddingBottom: '20vh'
+            paddingBottom: '45vh'
           }}
         />
       </div>

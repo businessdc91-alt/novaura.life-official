@@ -1,4 +1,4 @@
-// literatureAiService.js — The Literature IDE's AI calls.
+// literatureAiService.js — The Literature Forge's AI calls.
 //
 // Local first: by default ("auto") every request runs on a model on this
 // machine (LM Studio, then Ollama) through the native localModels helper, so
@@ -10,7 +10,7 @@ import { kernel } from '../kernel/NovaKernel.js';
 import { db } from '../database/sovereignDatabase.js';
 import { getProvider, providerChat, modelSetting, PROVIDERS } from './cloudProviders.js';
 import { LOCAL_RUNTIMES, discoverLocalModels, runLocalChat, toModelRef } from './localModels.js';
-import { buildContinuityContext, rememberMemory, detectPotentialMemories } from './sovereignRagService.js';
+import { buildContinuityContext, rememberMemory, updateMemory, getAllMemories, detectPotentialMemories } from './sovereignRagService.js';
 
 const INFERENCE_CONFIG_KEY = 'novaura_literature_inference_config';
 const CHAT_HISTORY_TURNS = 12;
@@ -143,6 +143,14 @@ export async function queryUniversalInference(prompt, systemInstruction = 'You a
   }
   const temperature = options.temperature ?? config.temperature ?? 0.75;
   const maxTokens = options.maxTokens || 1024;
+  const scope = options.scope || 'literature';
+  const reasoningOpts = {
+    scope,
+    ...(typeof options.think === 'boolean' ? { think: options.think } : {}),
+    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(options.effort ? { effort: options.effort } : {}),
+    ...(options.onThinking ? { onThinking: options.onThinking } : {}),
+  };
   const messages = [
     { role: 'system', content: systemInstruction },
     ...(options.history || []),
@@ -156,7 +164,7 @@ export async function queryUniversalInference(prompt, systemInstruction = 'You a
       const where = runtime ? LOCAL_RUNTIMES[runtime].label : 'LM Studio or Ollama';
       throw new Error(`No local model is running. Start ${where} and load a model, or choose a cloud model in the Co-Author model menu.`);
     }
-    const text = await runLocalChat(ref, messages, { maxTokens, temperature, jsonSchema: options.jsonSchema });
+    const text = await runLocalChat(ref, messages, { maxTokens, temperature, jsonSchema: options.jsonSchema, ...reasoningOpts });
     if (!text) throw new Error('The local model returned an empty reply.');
     return text;
   }
@@ -166,7 +174,7 @@ export async function queryUniversalInference(prompt, systemInstruction = 'You a
   if (!def) throw new Error(`Unknown model provider "${provider}".`);
   const getKey = await cloudKeyLookup(provider);
   if (!getKey(provider)) throw new Error(`No API key saved for ${def.label}. Add one in Settings, or choose a local model.`);
-  const text = await providerChat(provider, messages, getKey, { model: model || undefined, temperature, maxTokens, jsonSchema: options.jsonSchema });
+  const text = await providerChat(provider, messages, getKey, { model: model || undefined, temperature, maxTokens, jsonSchema: options.jsonSchema, ...reasoningOpts });
   if (!text || !text.trim()) throw new Error(`${def.label} returned an empty reply.`);
   return text.trim();
 }
@@ -190,8 +198,6 @@ export async function predictNextPhrase(precedingText) {
 
   const prompt = `Based on the following manuscript passage, write ONLY the next sentence (maximum 12-18 words) that continues the scene naturally. Do not include quotes, markdown, or pleasantries.\n\nPASSAGE:\n"${words}"`;
   
-  // Runs on every pause in typing, so it stays on this machine and is skipped
-  // when no local model is up.
   if (!(await hasLocalModel())) return null;
   try {
     const aiOutput = await queryUniversalInference(prompt, 'You are an intuitive literary ghostwriter predicting the author\'s next sentence.', { maxTokens: 60, localOnly: true });
@@ -244,7 +250,7 @@ export async function chatLiteratureCoAuthor({
   }
 
   // 3. Construct System Prompt with Document Context, Codex, & RAG Memory
-  const systemPrompt = `You are the master literary co-author and narrative architect inside Novaura Literature IDE.
+  const systemPrompt = `You are the master literary co-author and narrative architect inside Novaura Literature Forge.
 You collaborate directly with the author in real-time, functioning just like VS Code Copilot/Cursor but tailored specifically for deep storytelling, character psychology, worldbuilding, and prose craftsmanship.
 
 ${ragContextString ? ragContextString : ''}
@@ -261,7 +267,6 @@ GUIDELINES:
 - If writing prose, format clearly so the author can easily insert it into the manuscript.
 - Be concise, direct, and collaborative. Avoid robotic pleasantries.`;
 
-  // Earlier turns, so the co-author remembers the conversation.
   const history = messages.slice(0, -1)
     .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
     .slice(-CHAT_HISTORY_TURNS)
@@ -480,7 +485,6 @@ export async function analyzePacingAndTension({ text }) {
   const dialogueRatio = Math.round((dialogueWords / Math.max(1, words.length)) * 100);
   const avgLen = Math.round(words.length / Math.max(1, sentences.length));
 
-  // AI evaluation of emotional tension & pacing
   const prompt = `Analyze the narrative pacing and dramatic tension of this prose passage:
 """
 ${clean.slice(0, 2500)}
@@ -498,7 +502,6 @@ Return JSON:
   "suggestions": ["Suggestion 1", "Suggestion 2"]
 }`;
 
-  // Counted locally, so these are real even when the AI part fails.
   const localPace = avgLen > 22 ? 'Slow / Descriptive' : avgLen < 11 ? 'Fast / Punchy' : 'Balanced';
   try {
     const res = await queryUniversalInference(prompt, 'You are an expert literary pacing editor.', { maxTokens: 400 });
@@ -529,12 +532,6 @@ Return JSON:
 
 // ── 8b. Story Event Extraction (Timeline) ───────────────────────────────────
 
-/**
- * Reads a chapter and lists the story events in it, with the characters
- * involved (names as written). `eventTypes` are the allowed type ids;
- * `knownCharacters` are names from the story bible so the model reuses them.
- * Returns [{ type, title, description, impact, characterNames }].
- */
 export async function extractStoryEvents({ text, chapterName = 'This chapter', eventTypes = [], knownCharacters = [] }) {
   const clean = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (clean.length < 80) throw new Error('Write a little more of the chapter first.');
@@ -602,7 +599,6 @@ Return JSON:
       sources: (Array.isArray(parsed.sources) ? parsed.sources : []).map(String).slice(0, 4),
     };
   } catch {
-    // Never report a claim as checked when the answer couldn't be read.
     return {
       status: 'UNVERIFIED',
       confidence: null,
@@ -610,4 +606,106 @@ Return JSON:
       sources: [],
     };
   }
+}
+
+// ── 10. Scene Beat → Drafted Chapter Prose Expansion ────────────────────────
+
+export async function expandBeatToSceneProse({ beat, storyBible = '', authorVoice = '' }) {
+  if (!beat || !beat.title) throw new Error('Beat card title is required.');
+  const prompt = `${storyBible ? `STORY BIBLE & CANON:\n${storyBible}\n\n` : ''}${authorVoice ? `AUTHOR VOICE FINGERPRINT (mirror this cadence and style):\n${authorVoice}\n\n` : ''}Write a vivid, literary scene chapter for the following story beat:
+- Act / Stage: ${beat.act || 'Act I'}
+- Beat Title: ${beat.title}
+- POV Character: ${beat.pov || 'Primary Protagonist'}
+- Beat Synopsis: ${beat.synopsis || 'Unfold the dramatic turning point of this beat.'}
+
+Write 3-5 rich, immersive paragraphs of narrative prose with sensory grounding, psychological subtext, and sharp dialogue. Return ONLY the narrative prose paragraphs separated by blank lines.`;
+
+  return await queryUniversalInference(prompt, 'You are an award-winning novelist expanding an outline beat into manuscript prose.', { maxTokens: 1600 });
+}
+
+// ── 11. Author Voice & Style Fingerprinting ─────────────────────────────────
+
+export async function analyzeAuthorVoice({ sampleText = '' }) {
+  const clean = String(sampleText || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean.length < 120) {
+    throw new Error('Write at least a paragraph (120+ characters) so your voice cadence can be fingerprinted.');
+  }
+
+  const prompt = `Analyze the author's prose style and literary voice from this manuscript excerpt:
+"""
+${clean.slice(0, 3000)}
+"""
+
+Summarize the author's unique voice fingerprint in 3-4 dense, actionable bullet points covering:
+1. Sentence rhythm & syntax cadence
+2. Sensory & metaphorical register
+3. POV intimacy & emotional tone
+4. Dialogue texture
+
+Return concise text suitable as a style directive for a co-author AI.`;
+
+  const voiceProfile = await queryUniversalInference(prompt, 'You are a computational stylistics expert analyzing an author\'s prose fingerprint.', { maxTokens: 450, temperature: 0.3 });
+  if (voiceProfile) {
+    // One fingerprint, refreshed in place: a new memory per click would stack
+    // stale copies at top importance into every co-author prompt.
+    const title = 'Author Voice Fingerprint';
+    const content = voiceProfile.slice(0, 600);
+    try {
+      const existing = (await getAllMemories('style')).find(m => m.title === title);
+      if (existing) await updateMemory(existing.id, { content, importance: 5 });
+      else await rememberMemory({ category: 'style', title, content, importance: 5 });
+    } catch { /* the profile is still returned */ }
+  }
+  return voiceProfile;
+}
+
+// ── 12. AI Causality & Ripple Graph Extractor ───────────────────────────────
+
+export async function extractCausalityGraph({ text = '', chapterName = 'Chapter 1' }) {
+  const clean = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean.length < 80) throw new Error('Write a little more chapter prose before mapping causal ripples.');
+
+  const prompt = `Analyze the cause-and-effect chain of events in "${chapterName}":
+"""
+${clean.slice(0, 4500)}
+"""
+
+Extract 3 to 6 connected plot beats showing how one action or trigger causes downstream reactions, threats, or resolutions.
+Return JSON only in this exact format:
+{
+  "nodes": [
+    { "key": "n1", "title": "Short trigger title", "type": "trigger", "causes": ["n2"] },
+    { "key": "n2", "title": "Downstream reaction", "type": "reaction", "causes": ["n3"] },
+    { "key": "n3", "title": "Escalating threat or climax", "type": "threat", "causes": [] }
+  ]
+}
+Allowed types: "trigger", "reaction", "threat", "climax", "resolution".`;
+
+  const res = await queryUniversalInference(prompt, 'You are a narrative systems architect mapping cause-and-effect plot dependencies.', { maxTokens: 750, temperature: 0.25 });
+  const parsed = parseJsonReply(res);
+  const rawNodes = Array.isArray(parsed) ? parsed : parsed?.nodes;
+  // The model's nodes use its own keys ("n1", causes: ["n2"]); the causality
+  // map needs unique ids and `consequences` listing those ids.
+  const items = (Array.isArray(rawNodes) ? rawNodes : [])
+    .filter(n => n && typeof n === 'object' && String(n.title || '').trim())
+    .slice(0, 8);
+  if (!items.length) throw new Error('Could not extract causal beats from model response.');
+
+  const stamp = Date.now().toString(36);
+  const ids = items.map((_, i) => `cz_${stamp}_${i}_${Math.random().toString(36).slice(2, 6)}`);
+  const idForKey = new Map();
+  items.forEach((n, i) => {
+    const key = String(n.key ?? `n${i + 1}`);
+    if (!idForKey.has(key)) idForKey.set(key, ids[i]);
+  });
+  const TYPES = new Set(['trigger', 'reaction', 'threat', 'climax', 'resolution']);
+  return items.map((n, i) => ({
+    id: ids[i],
+    title: String(n.title).trim().slice(0, 120),
+    chapter: chapterName,
+    type: TYPES.has(n.type) ? n.type : 'reaction',
+    consequences: [...new Set((Array.isArray(n.causes) ? n.causes : [])
+      .map(k => idForKey.get(String(k)))
+      .filter(id => id && id !== ids[i]))],
+  }));
 }

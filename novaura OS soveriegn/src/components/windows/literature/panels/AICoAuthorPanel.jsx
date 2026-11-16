@@ -1,17 +1,19 @@
-// AICoAuthorPanel.jsx — Universal AI Co-Author Studio with Model Selector & RAG Memory
-import React, { useState, useEffect, useRef } from 'react';
+// AICoAuthorPanel.jsx — Universal AI Co-Author Studio with Model Selector, Smart Codex Injection & Author Voice Fingerprinting
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Bot, X, MessageSquare, Wand2, GitFork, Brain, Send, Copy, Check,
-  CornerDownLeft, RefreshCw, BookmarkPlus, ArrowRight, Settings, Cpu
+  CornerDownLeft, RefreshCw, BookmarkPlus, ArrowRight, Cpu, Fingerprint, Users
 } from 'lucide-react';
 import {
   chatLiteratureCoAuthor, craftGuidedStory, generatePlotBranches, expandBranchIntoProse,
+  analyzeAuthorVoice,
   getActiveInferenceConfig, setActiveInferenceConfig, getAvailableInferenceRosters
 } from '../../../../services/literatureAiService.js';
 import {
   getAllMemories, rememberMemory, deleteMemory
 } from '../../../../services/sovereignRagService.js';
 import { storyTimeline } from '../engines/StoryTimeline.js';
+import ModelReasoningSubmenu from '../../../shared/ModelReasoningSubmenu.jsx';
 
 export default function AICoAuthorPanel({
   activeDoc,
@@ -32,7 +34,7 @@ export default function AICoAuthorPanel({
     {
       id: 'welcome',
       role: 'assistant',
-      content: 'I am your sovereign AI co-author. I am linked directly to your active manuscript, Story Bible Codex, and private RAG memory vault. Ask me to critique scene pacing, test dialogue rhythms, outline twists, or draft text to weave into your chapter.',
+      content: 'I am your sovereign AI co-author inside Literature Forge. I am linked directly to your active manuscript, Story Bible Codex (auto-prioritizing characters & lore present in your current scene), and private RAG memory vault. Ask me to critique scene pacing, test dialogue rhythms, outline twists, or draft prose.',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       usedMemories: []
     }
@@ -62,10 +64,18 @@ export default function AICoAuthorPanel({
   const [isGeneratingBranches, setIsGeneratingBranches] = useState(false);
   const [isExpandingBranch, setIsExpandingBranch] = useState(false);
 
-  // Memories State
+  // Memories & Author Voice State
   const [memoriesList, setMemoriesList] = useState([]);
   const [newMemoryText, setNewMemoryText] = useState('');
   const [newMemoryCat, setNewMemoryCat] = useState('lore');
+  const [isAnalyzingVoice, setIsAnalyzingVoice] = useState(false);
+  const [voiceProfile, setVoiceProfile] = useState(null);
+
+  // Detect active in-scene Codex entities
+  const matchedSceneEntities = useMemo(() => {
+    const matched = storyTimeline.getMatchedEntities(activeDocContent || '');
+    return [...matched.characters.map(c => c.name), ...matched.lore.map(l => l.name)];
+  }, [activeDocContent]);
 
   useEffect(() => {
     loadRosters();
@@ -90,7 +100,6 @@ export default function AICoAuthorPanel({
     if (val === 'auto') {
       newConfig = { provider: 'auto', model: '' };
     } else if (val.startsWith('local:') || val.startsWith('cloud:')) {
-      // "local:<provider>:<model>"; Ollama model names contain colons themselves (llama3:8b).
       const rest = val.slice(val.indexOf(':') + 1);
       const cut = rest.indexOf(':');
       newConfig = { provider: rest.slice(0, cut), model: rest.slice(cut + 1) };
@@ -123,7 +132,7 @@ export default function AICoAuthorPanel({
         messages: [...chatMessages, userMsg],
         documentContext: docText,
         selectionContext: selText,
-        codexContext: storyTimeline.bibleContext(),
+        codexContext: storyTimeline.bibleContext(3500, `${docText}\n${selText}\n${text}`),
         activeDocName: activeDoc?.name || 'Manuscript',
         useRag: chatUseRag,
         provider: modelConfig.provider,
@@ -183,6 +192,22 @@ export default function AICoAuthorPanel({
       setTimeout(() => setRememberedMsgId(null), 2500);
     } catch (err) {
       setAiError(err.message || 'Failed to save to memory.');
+    }
+  };
+
+  const handleAnalyzeAuthorVoice = async () => {
+    if (!activeDocContent || isAnalyzingVoice) return;
+    setIsAnalyzingVoice(true);
+    setAiError(null);
+    try {
+      // The service returns the fingerprint as plain text (also saved as a style memory).
+      const profile = await analyzeAuthorVoice({ sampleText: activeDocContent });
+      setVoiceProfile(String(profile || '').trim() || null);
+      await loadMemories();
+    } catch (err) {
+      setAiError(err.message || 'Failed to analyze author voice.');
+    } finally {
+      setIsAnalyzingVoice(false);
     }
   };
 
@@ -285,6 +310,7 @@ export default function AICoAuthorPanel({
           onChange={handleModelChange}
           style={{
             flex: 1,
+            minWidth: 0,
             padding: '2px 6px',
             backgroundColor: '#0f172a',
             border: '1px solid rgba(56,189,248,0.3)',
@@ -315,6 +341,7 @@ export default function AICoAuthorPanel({
             </optgroup>
           )}
         </select>
+        <ModelReasoningSubmenu scope="literature" label="Co-Author Reasoning" compact />
       </div>
 
       {/* Sub Tabs */}
@@ -458,6 +485,12 @@ export default function AICoAuthorPanel({
 
             {/* Bottom Controls */}
             <div style={{ padding: '0.6rem 0.8rem', borderTop: '1px solid rgba(255,255,255,0.06)', backgroundColor: 'rgba(2,6,23,0.9)', display: 'flex', flexDirection: 'column', gap: '0.4rem', flexShrink: 0 }}>
+              {matchedSceneEntities.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.6rem', color: '#38bdf8', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                  <Users size={10} />
+                  <span>Active in Scene: {matchedSceneEntities.slice(0, 4).join(', ')}{matchedSceneEntities.length > 4 ? ` +${matchedSceneEntities.length - 4}` : ''}</span>
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.62rem' }}>
                 <button
                   onClick={() => setChatIncludeDoc(!chatIncludeDoc)}
@@ -599,11 +632,29 @@ export default function AICoAuthorPanel({
           </div>
         )}
 
-        {/* TAB 4: MEMORIES */}
+        {/* TAB 4: MEMORIES & AUTHOR VOICE */}
         {panelTab === 'memories' && (
           <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-            <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>
-              Persistent RAG Memory: Facts, character rules, and style preferences stored on this PC in your local database for continuous narrative coherence.
+            {/* Author Voice Fingerprinting Card */}
+            <div style={{ padding: '0.75rem', backgroundColor: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#c084fc', fontWeight: 700, fontSize: '0.72rem' }}>
+                  <Fingerprint size={14} />
+                  <span>Author Voice Fingerprint</span>
+                </div>
+                <button
+                  onClick={handleAnalyzeAuthorVoice}
+                  disabled={isAnalyzingVoice || !activeDocContent}
+                  style={{ padding: '3px 8px', backgroundColor: '#7e22ce', border: 'none', borderRadius: '4px', color: '#fff', fontSize: '0.66rem', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {isAnalyzingVoice ? 'Sampling Prose...' : 'Analyze & Lock My Voice'}
+                </button>
+              </div>
+              <div style={{ fontSize: '0.66rem', color: '#cbd5e1', lineHeight: '1.35', whiteSpace: 'pre-wrap', maxHeight: '9rem', overflowY: 'auto' }}>
+                {voiceProfile
+                  ? `Saved to memory (used when memory is on):\n${voiceProfile}`
+                  : 'Samples your active manuscript to extract your sentence cadence, diction, and POV distance into RAG memory so all AI co-writing mirrors your prose style.'}
+              </div>
             </div>
 
             {/* Add Memory Box */}

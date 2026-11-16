@@ -1,7 +1,12 @@
 // Literature IDE: grammar rules and chapters shared over the mesh.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SpellCheckEngine, phraseRegex, htmlToPlainText } from '../../src/components/windows/literature/engines/SpellCheckEngine.js';
+import {
+  SpellCheckEngine,
+  phraseRegex,
+  htmlToPlainText,
+  computeReadabilityStats
+} from '../../src/components/windows/literature/engines/SpellCheckEngine.js';
 import { sanitizeMeshManuscript, SHARED_LIMITS } from '../../src/services/meshManuscripts.js';
 
 const DID = 'did:nova:' + 'ab'.repeat(32);
@@ -40,6 +45,36 @@ test('phraseRegex and htmlToPlainText', () => {
   assert.equal(htmlToPlainText('<p>a&nbsp;&amp;&nbsp;b</p>').trim(), 'a & b');
 });
 
+test('spelling typos preserve capitalization and punctuation-adjacent repetition tracks occurrence', () => {
+  const engine = new SpellCheckEngine();
+  const issues = engine.analyzeText(
+    '<p>Definately a strange signal occured in the shadow, shadow, shadow, shadow, shadow of the spire.</p>'
+  );
+  const defTypo = issues.find(i => i.type === 'spelling' && i.text === 'Definately');
+  assert.ok(defTypo);
+  assert.equal(defTypo.replacement, 'Definitely');
+
+  const occTypo = issues.find(i => i.type === 'spelling' && i.text === 'occured');
+  assert.ok(occTypo);
+  assert.equal(occTypo.replacement, 'occurred');
+
+  const reps = issues.filter(i => i.type === 'repetition' && i.text.toLowerCase() === 'shadow');
+  assert.equal(reps.length, 4);
+  assert.ok(reps[0].index > 0);
+  assert.deepEqual(reps.map(r => r.occurrence), [1, 2, 3, 4]);
+});
+
+test('computeReadabilityStats calculates Flesch Reading Ease, Grade Level, and Lexical Diversity', () => {
+  const stats = computeReadabilityStats(
+    '<p>The rain fell cold across the neon boulevard. Silas checked his encrypted terminal twice before stepping into the alley.</p>'
+  );
+  assert.equal(stats.wordCount, 19);
+  assert.equal(stats.sentenceCount, 2);
+  assert.ok(stats.fleschReadingEase > 0 && stats.fleschReadingEase <= 100);
+  assert.ok(stats.lexicalDiversity > 70);
+  assert.equal(stats.readingTimeMinutes, 1);
+});
+
 test('shared chapters are bound to their sender and capped', () => {
   const payload = { manuscript: { id: 'doc_1', name: 'x'.repeat(500), type: 'chapter', content: '<p>Hello there</p>' }, authorName: 'Pilot' };
   const doc = sanitizeMeshManuscript(payload, DID, { sanitize: passthrough });
@@ -59,9 +94,19 @@ test('shared chapters are bound to their sender and capped', () => {
   assert.equal(sanitizeMeshManuscript({ manuscript: { ...payload.manuscript, id: 'a/b.c' } }, DID, { sanitize: passthrough }).id, `mesh_${'ab'.repeat(8)}_abc`);
 });
 
-// ── Book compiler and remaster diff ────────────────────────────────────────
-import { htmlToBlocks, chapterTitle, buildEpubFiles, buildShunnDocxFiles, buildMarkdown, roundedWordCount } from '../../src/components/windows/literature/engines/BookCompiler.js';
+// ── Book compiler, DOCX binary unpacking, StoryTimeline & remaster diff ────
+import {
+  htmlToBlocks,
+  chapterTitle,
+  buildEpubFiles,
+  buildShunnDocxFiles,
+  buildMarkdown,
+  roundedWordCount,
+  parseDocxBytes
+} from '../../src/components/windows/literature/engines/BookCompiler.js';
+import { compressZip } from '../../src/services/zipService.js';
 import { diffText } from '../../src/components/windows/literature/engines/RemasterEngine.js';
+import { StoryTimeline } from '../../src/components/windows/literature/engines/StoryTimeline.js';
 
 const chapter = { name: 'Ch1.docx', content: '<h1>The Sea &amp; Me</h1><p>She ran <em>hard</em>.</p><p>* * *</p><p>3 &lt; 4<br>done</p><hr><script>x()</script><p></p>' };
 
@@ -87,7 +132,7 @@ test('EPUB starts with a stored mimetype and escapes text', () => {
   assert.doesNotMatch(ch, /script/);
 });
 
-test('Shunn manuscript: Courier 12, double spaced, header from page 2', () => {
+test('Shunn manuscript: Courier 12, double spaced, header from page 2, and round-trips through parseDocxBytes', async () => {
   const files = buildShunnDocxFiles({ title: 'Night Tide', author: 'Jane Writer', chapters: [chapter] });
   const styles = files.find(f => f.path === 'word/styles.xml').content;
   assert.match(styles, /w:ascii="Courier New"/);
@@ -99,6 +144,54 @@ test('Shunn manuscript: Courier 12, double spaced, header from page 2', () => {
   assert.match(files.find(f => f.path === 'word/header1.xml').content, /Writer \/ NIGHT \/ /);
   assert.equal(roundedWordCount(12345), 12300);
   assert.equal(roundedWordCount(80420), 80500);
+
+  // Round-trip the compiled .docx ZIP bytes back into clean HTML via parseDocxBytes
+  const zipBytes = await compressZip(files);
+  const unpacked = await parseDocxBytes(zipBytes);
+  assert.match(unpacked.html, /<em>hard<\/em>/);
+  assert.match(unpacked.plainText, /The Sea & Me/);
+});
+
+test('StoryTimeline supports World Lore, Beat Templates, matched scene entities, and global rename', () => {
+  const tl = new StoryTimeline();
+  const silas = tl.addCharacter({
+    name: 'Silas Vance',
+    aliases: ['The Cipher'],
+    archetype: 'Protagonist',
+    secret: 'Carries the master decryption key'
+  });
+  const spire = tl.addLoreEntry({
+    name: 'New Aethelgard',
+    category: 'Location',
+    description: 'Rain-slicked arcology',
+    rules: 'Gravity is 0.88G'
+  });
+  tl.addRelationship({
+    sourceId: silas.id,
+    targetId: silas.id,
+    type: 'Ally',
+    notes: 'Trusted operative'
+  });
+
+  const matched = tl.getMatchedEntities('The Cipher arrived in New Aethelgard at dusk.');
+  assert.equal(matched.characters.length, 1);
+  assert.equal(matched.characters[0].name, 'Silas Vance');
+  assert.equal(matched.lore.length, 1);
+  assert.equal(matched.lore[0].name, 'New Aethelgard');
+
+  const ctx = tl.bibleContext(2500, 'The Cipher arrived in New Aethelgard');
+  assert.match(ctx, /Silas Vance \(also The Cipher\) \[ACTIVE IN SCENE\]/);
+  assert.match(ctx, /secret: Carries the master decryption key/);
+  assert.match(ctx, /canon rule: Gravity is 0.88G/);
+
+  const beats = tl.applyBeatTemplate('save_the_cat', false);
+  assert.equal(beats.length, 15);
+  assert.equal(beats[0].title, '1. Opening Image');
+
+  const changes = tl.renameEntityInBible('Silas Vance', 'Kaelen Vance');
+  assert.ok(changes >= 1);
+  assert.equal(tl.characters[0].name, 'Kaelen Vance');
+  assert.ok(spire.id);
 });
 
 test('Markdown keeps emphasis and breaks', () => {

@@ -1,8 +1,8 @@
 import React from 'react';
 import {
   Files, BookOpen, Clock, SpellCheck, CheckCircle2, GitFork,
-  BarChart2, MessageSquare, Split, Eye, Layers, Settings, Sparkles,
-  Zap, ShieldCheck, Palette
+  BarChart2, Split, Eye, Layers, Sparkles,
+  Zap, ShieldCheck, Palette, LayoutGrid
 } from 'lucide-react';
 
 export default function ActivityBar({
@@ -20,11 +20,12 @@ export default function ActivityBar({
   factIssueCount = 0
 }) {
   const activities = [
-    { id: 'explorer', label: 'Manuscript Explorer', icon: Files, color: '#00f0ff' },
-    { id: 'codex', label: 'Story Bible & Codex', icon: BookOpen, color: '#38bdf8' },
+    { id: 'explorer', label: 'Manuscript Explorer & Binder', icon: Files, color: '#00f0ff' },
+    { id: 'corkboard', label: 'Corkboard & Beat Sheet Outliner', icon: LayoutGrid, color: '#fbbf24' },
+    { id: 'codex', label: 'Story Bible, Lore & Relationships', icon: BookOpen, color: '#38bdf8' },
     { id: 'timeline', label: 'Visual Timeline', icon: Clock, color: '#a855f7' },
     { id: 'causality', label: 'Plot Causality & Ripples', icon: Zap, color: '#f59e0b' },
-    { id: 'grammar', label: 'Grammar & Style Linter', icon: SpellCheck, color: '#10b981', badge: grammarIssueCount },
+    { id: 'grammar', label: 'Spelling, Style & Readability Linter', icon: SpellCheck, color: '#10b981', badge: grammarIssueCount },
     { id: 'factcheck', label: 'Fact & Canon Verifier', icon: CheckCircle2, color: '#38bdf8', badge: factIssueCount },
     { id: 'audit', label: 'Continuity & Workflow Auditor', icon: ShieldCheck, color: '#8b5cf6' },
     { id: 'remaster', label: 'Scene Remaster & Branch', icon: GitFork, color: '#ec4899' },
@@ -40,8 +41,8 @@ export default function ActivityBar({
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      padding: '0.6rem 0',
-      gap: '0.5rem',
+      padding: '0.5rem 0',
+      gap: '0.4rem',
       flexShrink: 0,
       zIndex: 30
     }}>
@@ -59,10 +60,10 @@ export default function ActivityBar({
                 setIsSidebarOpen(true);
               }
             }}
-            title={act.label}
+            title={act.badge > 0 ? `${act.label} (${act.badge})` : act.label}
             style={{
               width: '36px',
-              height: '36px',
+              height: '34px',
               borderRadius: '6px',
               border: 'none',
               background: isActive ? `${act.color}25` : 'none',
@@ -75,24 +76,33 @@ export default function ActivityBar({
               transition: 'all 0.15s ease'
             }}
           >
-            <Icon size={18} />
+            <Icon size={17} />
             {act.badge > 0 && (
               <span style={{
                 position: 'absolute',
-                top: '4px',
-                right: '4px',
-                width: '7px',
-                height: '7px',
-                borderRadius: '50%',
+                top: '2px',
+                right: '2px',
+                minWidth: '13px',
+                height: '13px',
+                padding: '0 3px',
+                borderRadius: '999px',
                 backgroundColor: act.color,
+                color: '#090d16',
+                fontSize: '0.55rem',
+                fontWeight: 800,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 boxShadow: `0 0 6px ${act.color}`
-              }} />
+              }}>
+                {act.badge > 99 ? '99+' : act.badge}
+              </span>
             )}
           </button>
         );
       })}
 
-      <div style={{ width: '28px', height: '1px', backgroundColor: 'rgba(255,255,255,0.08)', margin: '0.2rem 0' }} />
+      <div style={{ width: '28px', height: '1px', backgroundColor: 'rgba(255,255,255,0.08)', margin: '0.15rem 0' }} />
 
       {/* AI Co-Author Toggle */}
       <button
@@ -100,7 +110,7 @@ export default function ActivityBar({
         title="Toggle AI Co-Author Studio"
         style={{
           width: '36px',
-          height: '36px',
+          height: '34px',
           borderRadius: '6px',
           border: 'none',
           background: isAiPanelOpen ? 'rgba(0,240,255,0.2)' : 'none',
@@ -111,7 +121,7 @@ export default function ActivityBar({
           cursor: 'pointer'
         }}
       >
-        <Sparkles size={18} />
+        <Sparkles size={17} />
       </button>
 
       {/* Split View Toggle */}
@@ -120,7 +130,7 @@ export default function ActivityBar({
         title={isSplitView ? 'Close Dual Pane Split Screen' : 'Open Dual Pane Split Screen'}
         style={{
           width: '36px',
-          height: '36px',
+          height: '34px',
           borderRadius: '6px',
           border: 'none',
           background: isSplitView ? 'rgba(168,85,247,0.2)' : 'none',
@@ -131,17 +141,17 @@ export default function ActivityBar({
           cursor: 'pointer'
         }}
       >
-        <Split size={18} />
+        <Split size={17} />
       </button>
 
       {/* Bottom Controls */}
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
         <button
           onClick={() => setIsZenMode(!isZenMode)}
           title="Distraction-Free Typewriter Zen Mode"
           style={{
             width: '36px',
-            height: '36px',
+            height: '34px',
             borderRadius: '6px',
             border: 'none',
             background: isZenMode ? 'rgba(16,185,129,0.2)' : 'none',
@@ -152,7 +162,7 @@ export default function ActivityBar({
             cursor: 'pointer'
           }}
         >
-          <Eye size={18} />
+          <Eye size={17} />
         </button>
 
         <button
@@ -160,7 +170,7 @@ export default function ActivityBar({
           title="Toggle Primary Sidebar"
           style={{
             width: '36px',
-            height: '36px',
+            height: '34px',
             borderRadius: '6px',
             border: 'none',
             background: 'none',
@@ -171,7 +181,7 @@ export default function ActivityBar({
             cursor: 'pointer'
           }}
         >
-          <Layers size={18} />
+          <Layers size={17} />
         </button>
       </div>
     </div>
