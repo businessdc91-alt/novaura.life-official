@@ -1,0 +1,232 @@
+// edits.js — Every change a person makes to a document, as one undoable step.
+//
+// Each function takes a session { doc, history }, makes its change, pushes one step,
+// and returns { ok: true, layer? } or { ok: false, reason } (a reason the UI can show).
+// `meta` is { tab, label?, mergeKey?, mergeWindowMs? }.
+
+import {
+  getLayer, layerIndex, canEdit, insertLayer, removeLayerAt, moveLayer, assignLayer,
+  createLayer, cloneLayer, takeBuffers, putBuffers, touchLayer, surfaceOf,
+} from './document.js';
+import { compoundStep } from './history.js';
+import { applyPatch } from './pixelRecorder.js';
+
+const PROP_BYTES = 64;
+const refuse = reason => ({ ok: false, reason });
+const GONE = refuse('That layer no longer exists.');
+const bytesOf = buffers => [...buffers.values()].reduce((sum, s) => sum + s.bytes, 0);
+
+function push(s, step, meta, fallbackLabel) {
+  step.label = meta.label || step.label || fallbackLabel;
+  step.tab = meta.tab;
+  if (meta.mergeKey != null) step.mergeKey = meta.mergeKey;
+  if (meta.mergeWindowMs != null) step.mergeWindowMs = meta.mergeWindowMs;
+  s.history.push(step);
+  return step;
+}
+
+/** Not a history step: which layer, and whether its pixels or its mask, the tools act on. */
+export function setActiveLayer(s, id, target = 'layer') {
+  const layer = getLayer(s.doc, id);
+  if (!layer) return GONE;
+  if (target === 'mask' && !layer.mask) return refuse('This layer has no mask.');
+  s.doc.activeLayerId = id;
+  s.doc.activeTarget = target;
+  return { ok: true, layer };
+}
+
+function restoreActive(doc, id, target) {
+  doc.activeLayerId = id;
+  doc.activeTarget = target;
+}
+
+// Put a layer (and its buffers) into the stack as an undoable step.
+function insertStep(s, layer, index, buffers) {
+  const { doc } = s;
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  const apply = () => {
+    putBuffers(doc, buffers);
+    insertLayer(doc, layer, index);
+    restoreActive(doc, layer.id, 'layer');
+  };
+  const revert = () => {
+    removeLayerAt(doc, layerIndex(doc, layer.id));
+    takeBuffers(doc, layer);
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  return { bytes: PROP_BYTES, apply, revert };
+}
+
+const kindLabel = { pixel: 'layer', shape: 'shape layer', text: 'text layer', adjust: 'adjustment layer' };
+
+/** Add a new layer, by default just above the active layer, and make it active. */
+export function addLayer(s, kind, fields, meta, index) {
+  const { doc } = s;
+  const layer = createLayer(doc, kind, fields || {});
+  const at = index ?? (layerIndex(doc, doc.activeLayerId) + 1 || doc.layers.length);
+  const buffers = takeBuffers(doc, layer); // createLayer registered them; insertStep puts them back
+  push(s, insertStep(s, layer, at, buffers), meta, `New ${kindLabel[kind] || 'layer'}`);
+  return { ok: true, layer };
+}
+
+export function deleteLayer(s, id, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, id);
+  if (!layer) return GONE;
+  const allowed = canEdit(layer, 'delete');
+  if (!allowed.ok) return allowed;
+  if (doc.layers.length === 1) return refuse('A document needs at least one layer.');
+  const index = layerIndex(doc, id);
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  let buffers = new Map();
+  const apply = () => {
+    removeLayerAt(doc, layerIndex(doc, id));
+    buffers = takeBuffers(doc, layer);
+    if (doc.activeLayerId === id) restoreActive(doc, doc.layers[Math.max(0, index - 1)].id, 'layer');
+  };
+  const revert = () => {
+    putBuffers(doc, buffers);
+    insertLayer(doc, layer, index);
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES + bytesOf(buffers), apply, revert }, meta, 'Delete layer');
+  return { ok: true, layer };
+}
+
+/** Change a layer's place in the stack. Allowed on locked layers. */
+export function moveLayerTo(s, id, toIndex, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, id);
+  if (!layer) return GONE;
+  const from = layerIndex(doc, id);
+  const to = Math.max(0, Math.min(toIndex, doc.layers.length - 1));
+  if (from === to) return { ok: true, layer };
+  const apply = () => moveLayer(doc, layerIndex(doc, id), to);
+  const revert = () => moveLayer(doc, layerIndex(doc, id), from);
+  apply();
+  push(s, { bytes: PROP_BYTES, apply, revert }, meta, 'Move layer in stack');
+  return { ok: true, layer };
+}
+
+const KEY_ACTION = { visible: 'visibility', locked: 'unlock', name: 'rename', x: 'move', y: 'move' };
+
+function propsLabel(patch) {
+  const keys = Object.keys(patch);
+  if (keys.length === 1) {
+    const [k] = keys;
+    if (k === 'opacity') return 'Opacity';
+    if (k === 'blend') return 'Blend mode';
+    if (k === 'visible') return patch.visible ? 'Show layer' : 'Hide layer';
+    if (k === 'locked') return patch.locked ? 'Lock layer' : 'Unlock layer';
+    if (k === 'name') return 'Rename layer';
+  }
+  if (keys.every(k => k === 'x' || k === 'y')) return 'Move layer';
+  return 'Edit layer';
+}
+
+function propsStep(doc, id, patch, previous) {
+  const step = {
+    bytes: PROP_BYTES, patch, previous,
+    apply: () => { assignLayer(doc, id, patch); },
+    revert: () => { assignLayer(doc, id, previous); },
+    mergeWith(newer) {
+      const mergedPatch = { ...patch, ...newer.patch };
+      const mergedPrevious = { ...newer.previous, ...previous };
+      const merged = propsStep(doc, id, mergedPatch, mergedPrevious);
+      merged.label = step.label;
+      merged.tab = step.tab;
+      return merged;
+    },
+  };
+  return step;
+}
+
+/** Set layer fields. Locked layers accept only visible, locked and name. */
+export function setLayerProps(s, id, patch, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, id);
+  if (!layer) return GONE;
+  for (const key of Object.keys(patch)) {
+    const allowed = canEdit(layer, KEY_ACTION[key] || 'edit');
+    if (!allowed.ok) return allowed;
+  }
+  const changes = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !Object.is(layer[k], v)));
+  if (!Object.keys(changes).length) return { ok: true, layer };
+  const previous = assignLayer(doc, id, changes);
+  push(s, propsStep(doc, id, changes, previous), meta, propsLabel(changes));
+  return { ok: true, layer };
+}
+
+/** Copy a layer (pixels and mask included) just above itself. */
+export function duplicateLayer(s, id, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, id);
+  if (!layer) return GONE;
+  const copy = cloneLayer(doc, layer);
+  copy.name = `${layer.name} copy`;
+  const buffers = takeBuffers(doc, copy);
+  push(s, insertStep(s, copy, layerIndex(doc, id) + 1, buffers), meta, 'Duplicate layer');
+  return { ok: true, layer: copy };
+}
+
+/** Merge a layer into the one below it, giving one pixel layer. Needs the compositor (a canvas). */
+export async function mergeDown(s, id, meta) {
+  const { doc } = s;
+  const upper = getLayer(doc, id);
+  if (!upper) return GONE;
+  const index = layerIndex(doc, id);
+  const lower = doc.layers[index - 1];
+  if (!lower) return refuse('There is no layer below to merge into.');
+  for (const layer of [upper, lower]) {
+    const allowed = canEdit(layer, 'edit');
+    if (!allowed.ok) return allowed;
+  }
+  const { composeLayers } = await import('./compositor.js');
+  const surface = composeLayers(doc, [lower, upper]);
+  const merged = createLayer(doc, 'pixel', { name: lower.name, surface });
+  const mergedBuffers = takeBuffers(doc, merged);
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  let upperBuffers = new Map();
+  let lowerBuffers = new Map();
+  const apply = () => {
+    removeLayerAt(doc, layerIndex(doc, upper.id));
+    removeLayerAt(doc, layerIndex(doc, lower.id));
+    upperBuffers = takeBuffers(doc, upper);
+    lowerBuffers = takeBuffers(doc, lower);
+    putBuffers(doc, mergedBuffers);
+    insertLayer(doc, merged, index - 1);
+    restoreActive(doc, merged.id, 'layer');
+  };
+  const revert = () => {
+    removeLayerAt(doc, layerIndex(doc, merged.id));
+    takeBuffers(doc, merged);
+    putBuffers(doc, lowerBuffers);
+    putBuffers(doc, upperBuffers);
+    insertLayer(doc, lower, index - 1);
+    insertLayer(doc, upper, index);
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES + bytesOf(upperBuffers) + bytesOf(lowerBuffers), apply, revert }, meta, 'Merge down');
+  return { ok: true, layer: merged };
+}
+
+/** A step that re-applies or reverts a pixel patch on a layer (part 'layer') or its mask. Not pushed. */
+export function patchStep(s, layer, part, patch) {
+  const run = side => {
+    applyPatch(surfaceOf(s.doc, layer, part), patch, side);
+    touchLayer(s.doc, layer);
+  };
+  return { bytes: patch.bytes, apply: () => run('after'), revert: () => run('before') };
+}
+
+/** Push a finished pixel edit (already on the surface) as one step, after any extra steps. */
+export function commitPatch(s, layerId, part, patch, meta, extraSteps = []) {
+  const layer = getLayer(s.doc, layerId);
+  touchLayer(s.doc, layer);
+  const steps = [...extraSteps, ...(patch ? [patchStep(s, layer, part, patch)] : [])];
+  const step = steps.length === 1 ? steps[0] : compoundStep(steps, { label: meta.label, tab: meta.tab });
+  return push(s, step, meta, 'Paint');
+}
