@@ -152,6 +152,25 @@ try {
   await b.screenshot(join(OUT, 'c6_mask_deleted.png'));
   check('and the layer shows again', unmasked.join() === starPixel.join(), String(unmasked));
 
+  // ── Photo: adjustment layers ──
+  await clickOn('[data-tab="photo"]');
+  const beforeAdjust = await pixelAt(cx + 200, cy + 100);
+  await clickOn('[data-add-adjustment="invert"]');
+  await sleep(300);
+  const inverted = await pixelAt(cx + 200, cy + 100);
+  check('an Invert adjustment layer inverts the picture', inverted.slice(0, 3).join() === beforeAdjust.slice(0, 3).map(v => 255 - v).join(), `${beforeAdjust} → ${inverted}`);
+  check('it is a Photo step in the history', /Photo · Add Invert/.test(await lastStep()), await lastStep());
+  await clickOn('[data-add-adjustment="levels"]');
+  check('Levels shows its settings', await b.evaluate(`!!document.querySelector('[data-param="gamma"]')`));
+  await clickOn('[data-add-adjustment="curves"]');
+  check('Curves shows the curve editor', await b.evaluate(`!!document.querySelector('[data-curves-editor]')`));
+  await b.screenshot(join(OUT, 'c7_photo.png'));
+  await b.key('z', 'KeyZ', 90, 2);
+  await b.key('z', 'KeyZ', 90, 2);
+  await b.key('z', 'KeyZ', 90, 2);
+  await sleep(300);
+  check('undo removes the adjustments again', (await pixelAt(cx + 200, cy + 100)).join() === beforeAdjust.join());
+
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
 } catch (err) {

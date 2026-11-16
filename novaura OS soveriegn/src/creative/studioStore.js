@@ -9,6 +9,10 @@
 import { createDocument } from './document.js';
 import { createHistory } from './history.js';
 import { createCompositor } from './compositor.js';
+// Every kind of layer registers how it is drawn; load them all with the store.
+import './shapes.js';
+import './masks.js';
+import './adjustmentLayers.js';
 
 const NESTED = ['colours', 'brush', 'fill', 'gradient', 'eyedropper', 'shape'];
 

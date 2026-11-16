@@ -18,7 +18,7 @@ import HistoryPanel from './creative/HistoryPanel.jsx';
 import { makeOverlay } from './creative/canvasOverlay.js';
 import '../../creative/tools/shape.js';
 import '../../creative/tools/gradient.js';
-import LegacyPhotoTab from './creative/LegacyPhotoTab.jsx';
+import PhotoPanel from './creative/PhotoPanel.jsx';
 import LegacyMemeTab from './creative/LegacyMemeTab.jsx';
 
 const TABS = [
@@ -135,9 +135,9 @@ export default function CreativeStudioWindow() {
       </header>
 
       <div className="flex-1 min-h-0 flex">
-        {tab === 'paint' && (
+        {tab !== 'meme' && (
           <>
-            <PaintPanel store={store} />
+            {tab === 'paint' ? <PaintPanel store={store} /> : <PhotoPanel store={store} />}
             <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} />
             <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/50 flex flex-col min-h-0">
               <div className="flex-[3] min-h-0 flex flex-col"><LayersPanel store={store} /></div>
@@ -145,7 +145,6 @@ export default function CreativeStudioWindow() {
             </aside>
           </>
         )}
-        {tab === 'photo' && <div className="flex-1 overflow-y-auto p-5"><LegacyPhotoTab /></div>}
         {tab === 'meme' && <div className="flex-1 overflow-y-auto p-5"><LegacyMemeTab /></div>}
       </div>
 
