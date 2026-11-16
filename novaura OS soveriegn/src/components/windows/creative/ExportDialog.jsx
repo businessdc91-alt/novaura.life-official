@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 
 const EXPORT_FORMATS = [
   { id: 'psd', label: 'Photoshop (.psd)', note: 'Layers, masks, blend modes and adjustment layers.' },
+  { id: 'svg', label: 'SVG (.svg)', note: 'Named layers; shapes and text stay vectors; pictures are embedded.' },
 ];
 
 const safeName = name => String(name || 'Untitled').replace(/[\\/:*?"<>|]/g, '-').trim() || 'Untitled';
@@ -13,6 +14,10 @@ async function exportBlob(doc, format, options) {
   if (format === 'psd') {
     const { writePsdFile } = await import('../../../creative/io/psd.js');
     return { blob: new Blob([writePsdFile(doc, { exactLook: options.exactLook })], { type: 'image/vnd.adobe.photoshop' }), ext: 'psd' };
+  }
+  if (format === 'svg') {
+    const { writeSvg } = await import('../../../creative/io/svg.js');
+    return { blob: new Blob([await writeSvg(doc)], { type: 'image/svg+xml' }), ext: 'svg' };
   }
   throw new Error(`Exporting ${format} isn't available yet.`);
 }

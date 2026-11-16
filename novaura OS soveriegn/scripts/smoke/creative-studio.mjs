@@ -320,6 +320,11 @@ try {
   await clickOn('[data-exact-look]');
   await clickOn('[data-action="run-export"]');
   check('exporting a PSD finishes', await b.waitFor(`/Exported fixture-poster\\.psd/.test(document.querySelector('[role=status]')?.textContent || '')`, 20000));
+  await clickOn('[data-menu="file"]');
+  await clickOn('[data-action="file-export"]');
+  await clickOn('[data-format="svg"]');
+  await clickOn('[data-action="run-export"]');
+  check('exporting an SVG finishes', await b.waitFor(`/Exported fixture-poster\\.svg/.test(document.querySelector('[role=status]')?.textContent || '')`, 20000));
 
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));
