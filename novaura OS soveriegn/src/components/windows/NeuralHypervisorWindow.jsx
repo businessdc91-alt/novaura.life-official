@@ -11,6 +11,7 @@ import {
   getEndpointUrls, saveEndpointUrls
 } from '../../services/neuralHypervisorService.js';
 import { dualInference } from '../../services/dualInferenceService.js';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 export default function NeuralHypervisorWindow() {
   const { kernel } = useKernel();
@@ -304,13 +305,16 @@ export default function NeuralHypervisorWindow() {
                   Local GGUF, SafeTensors, and quantized weights available on physical host drives
                 </p>
               </div>
-              <button
-                onClick={() => setActiveTab('pull')}
-                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-lg shadow-purple-600/30"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Pull New Model Tag</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <ModelReasoningSubmenu scope="global" label="System Model Reasoning" />
+                <button
+                  onClick={() => setActiveTab('pull')}
+                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-lg shadow-purple-600/30"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Pull New Model Tag</span>
+                </button>
+              </div>
             </div>
 
             {allModels.length === 0 ? (

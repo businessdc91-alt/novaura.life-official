@@ -8,6 +8,7 @@ import { describeModelKey } from '../../../services/cybeni/models.js';
 import { DESIGN_SYSTEMS } from '../../../services/cybeniStudioEngine.js';
 import { ollamaCpuOnly, setOllamaCpuOnly } from '../../../services/localModels.js';
 import { cloudSpeechAllowed } from '../../../services/speechConsent.js';
+import ModelReasoningSubmenu from '../../shared/ModelReasoningSubmenu.jsx';
 
 const ROLE_LABELS = {
   architect: ['Architect & orchestrator', 'Plans, oversees each checkpoint, can redirect or take over, signs off'],
@@ -62,7 +63,7 @@ function RequirementsCheck({ result }) {
   );
 }
 
-function ModelPicker({ value, onChange, models }) {
+function ModelPicker({ value, onChange, models, scope, label }) {
   const groups = useMemo(() => {
     const g = new Map();
     for (const m of models) {
@@ -73,19 +74,24 @@ function ModelPicker({ value, onChange, models }) {
   }, [models]);
   const known = models.some(m => m.key === value);
   return (
-    <select
-      value={value || ''}
-      onChange={e => onChange(e.target.value)}
-      className="w-full bg-slate-950 border border-slate-700 rounded-md px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500"
-    >
-      <option value="">Choose a model…</option>
-      {groups.map(([group, items]) => (
-        <optgroup key={group} label={group}>
-          {items.map(m => <option key={m.key} value={m.key}>{m.loaded ? '● ' : ''}{m.label}</option>)}
-        </optgroup>
-      ))}
-      {value && !known && <option value={value}>{describeModelKey(value)} (not available now)</option>}
-    </select>
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5">
+        <select
+          value={value || ''}
+          onChange={e => onChange(e.target.value)}
+          className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-md px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500"
+        >
+          <option value="">Choose a model…</option>
+          {groups.map(([group, items]) => (
+            <optgroup key={group} label={group}>
+              {items.map(m => <option key={m.key} value={m.key}>{m.loaded ? '● ' : ''}{m.label}</option>)}
+            </optgroup>
+          ))}
+          {value && !known && <option value={value}>{describeModelKey(value)} (not available now)</option>}
+        </select>
+        {scope && <ModelReasoningSubmenu scope={scope} label={label} compact />}
+      </div>
+    </div>
   );
 }
 
@@ -201,7 +207,13 @@ export default function AgentPanel({
             <div key={role}>
               <div className={`text-[11px] font-semibold ${ROLE_COLORS[role]}`}>{label}</div>
               <div className="text-[10px] text-slate-500 mb-0.5">{hint}</div>
-              <ModelPicker value={roles[role]} onChange={(v) => set({ roles: { ...roles, [role]: v } })} models={models} />
+              <ModelPicker
+                value={roles[role]}
+                onChange={(v) => set({ roles: { ...roles, [role]: v } })}
+                models={models}
+                scope={`cybeni:${role}`}
+                label={`${label} Reasoning`}
+              />
             </div>
           ))}
           {sameReviewer && <div className="text-[10px] text-amber-300">The reviewer uses the same model as the developer, so reviews are self-checks rather than a true cross-check.</div>}

@@ -19,7 +19,14 @@
  */
 
 import { FRONTIER_2026_CATALOG, frontierCatalog } from './frontierModelCatalogService.js';
-import { probeLocalAi } from './nativeService.js';
+import { probeLocalAi, queryLocalAi } from './nativeService.js';
+import { cleanCompletion } from './localModels.js';
+import {
+  resolveReasoningParams,
+  ollamaThinkValue,
+  openAiReasoningEffort,
+  reasoningTokenBudget,
+} from './reasoningConfig.js';
 
 const STORAGE_KEY = 'novaura_dual_inference_config';
 
@@ -312,8 +319,10 @@ class DualInferenceService {
   async queryCoder(messages, options = {}) {
     const config = this._coder;
     return this._dispatchInference(config, messages, {
-      temperature: options.temperature || config.temperature,
-      max_tokens: options.max_tokens || 4096,
+      scope: 'dual:coder',
+      ...options,
+      temperature: options.temperature ?? config.temperature,
+      max_tokens: options.max_tokens ?? options.maxTokens ?? 4096,
     });
   }
 
@@ -323,8 +332,10 @@ class DualInferenceService {
   async queryNova(messages, options = {}) {
     const config = this._nova;
     return this._dispatchInference(config, messages, {
-      temperature: options.temperature || config.temperature,
-      max_tokens: options.max_tokens || 800,
+      scope: 'dual:nova',
+      ...options,
+      temperature: options.temperature ?? config.temperature,
+      max_tokens: options.max_tokens ?? options.maxTokens ?? 800,
     });
   }
 
@@ -334,32 +345,50 @@ class DualInferenceService {
   async queryAura(messages, options = {}) {
     const config = this._aura;
     return this._dispatchInference(config, messages, {
-      temperature: options.temperature || config.temperature,
-      max_tokens: options.max_tokens || 2048,
+      scope: 'dual:aura',
+      ...options,
+      temperature: options.temperature ?? config.temperature,
+      max_tokens: options.max_tokens ?? options.maxTokens ?? 2048,
     });
   }
 
   async _dispatchInference(config, messages, opts) {
+    const formattedMessages = Array.isArray(messages)
+      ? messages.map(m => (typeof m === 'string' ? { role: 'user', content: m } : { role: m.role, content: m.content }))
+      : [{ role: 'user', content: String(messages) }];
+    const resolved = resolveReasoningParams(opts);
+    const maxTokens = reasoningTokenBudget(opts.max_tokens, resolved, {
+      strictMaxTokens: opts.strictMaxTokens || Boolean(opts.jsonSchema && !resolved.think),
+    });
+
     if (config.backend === 'lmstudio') {
       try {
-        const formattedMessages = Array.isArray(messages)
-          ? messages.map(m => (typeof m === 'string' ? { role: 'user', content: m } : m))
-          : [{ role: 'user', content: String(messages) }];
+        const payload = {
+          model: config.model,
+          messages: formattedMessages,
+          temperature: opts.temperature,
+          max_tokens: maxTokens,
+          stream: false,
+          reasoning_effort: openAiReasoningEffort(resolved),
+          ...(opts.jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: opts.jsonSchema } } } : {}),
+        };
 
-        const res = await fetch(`${config.url}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: config.model,
-            messages: formattedMessages,
-            temperature: opts.temperature,
-            max_tokens: opts.max_tokens,
-          }),
-          signal: AbortSignal.timeout(30000),
-        });
-        if (!res.ok) throw new Error(`LM Studio HTTP ${res.status}`);
-        const data = await res.json();
-        return data.choices?.[0]?.message?.content || '';
+        const isDefaultLmUrl = config.url === 'http://localhost:1234/v1' || config.url === 'http://127.0.0.1:1234/v1';
+        let data;
+        if (isDefaultLmUrl) {
+          data = await queryLocalAi(1234, '/v1/chat/completions', 'POST', payload);
+          if (data?.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || 'LM Studio error');
+        } else {
+          const res = await fetch(`${config.url}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(30000),
+          });
+          if (!res.ok) throw new Error(`LM Studio HTTP ${res.status}`);
+          data = await res.json();
+        }
+        return cleanCompletion(data?.choices?.[0]?.message?.content || '');
       } catch (err) {
         if (opts.allowSwarmFallback) {
           console.info('[DualInference] Local LM Studio offline, falling back to Sovereign Swarm inference...');
@@ -371,21 +400,34 @@ class DualInferenceService {
 
     if (config.backend === 'ollama') {
       try {
-        const res = await fetch(`${config.url}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: config.model,
-            messages,
-            stream: false,
-            options: { temperature: opts.temperature },
-          }),
-          signal: AbortSignal.timeout(15000),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.message?.content || '';
+        const payload = {
+          model: config.model,
+          messages: formattedMessages,
+          stream: false,
+          think: ollamaThinkValue(config.model, resolved),
+          ...(opts.jsonSchema ? { format: opts.jsonSchema } : {}),
+          options: {
+            temperature: opts.temperature,
+            num_predict: maxTokens,
+          },
+        };
+
+        const isDefaultOllamaUrl = config.url === 'http://localhost:11434' || config.url === 'http://127.0.0.1:11434';
+        let data;
+        if (isDefaultOllamaUrl) {
+          data = await queryLocalAi(11434, '/api/chat', 'POST', payload);
+          if (data?.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message || 'Ollama error');
+        } else {
+          const res = await fetch(`${config.url}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+          data = await res.json();
         }
+        return cleanCompletion(data?.message?.content || '');
       } catch (err) {
         if (opts.allowSwarmFallback) {
           console.info('[DualInference] Local Ollama offline, falling back to Sovereign Swarm inference...');

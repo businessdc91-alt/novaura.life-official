@@ -4,6 +4,7 @@ pub mod llm;
 pub mod forge;
 pub mod mesh;
 pub mod preview;
+pub mod games;
 pub mod templates;
 mod password;
 pub mod profiles;
@@ -1848,6 +1849,8 @@ pub fn run() {
         .manage(mesh_manager.clone())
         // Cybeni previews run on their own origin, isolated from the OS UI (see preview.rs).
         .register_uri_scheme_protocol("cyprev", |_ctx, request| preview::handle(&request))
+        // Bundled web games (The Gilded Cage) get an origin of their own too (see games.rs).
+        .register_uri_scheme_protocol("cygame", |ctx, request| games::handle(ctx.app_handle(), &request))
         // Pop-out windows (src/services/popoutWindows.js) belong to the desktop:
         // closing the main window quits the app instead of leaving them orphaned.
         .on_window_event(|window, event| {
@@ -1918,6 +1921,7 @@ pub fn run() {
             llm::llm_start,
             llm::llm_stop,
             llm::llm_status,
+            llm::llm_list_control_vectors,
             engines::engine_install_comfyui,
             engines::engine_install_status,
             engines::engine_comfy_start,

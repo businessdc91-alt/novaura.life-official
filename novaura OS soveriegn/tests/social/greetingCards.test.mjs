@@ -41,13 +41,13 @@ test('the exported card escapes everything a person typed', () => {
 });
 
 test('every website template script parses, and none claims a form was delivered', () => {
-  assert.equal(MULTIPAGE_TEMPLATES.length, 7);
+  assert.equal(MULTIPAGE_TEMPLATES.length, 9);
   for (const t of MULTIPAGE_TEMPLATES) {
     assert.doesNotThrow(() => new Function(t.js), t.id);
     assert.doesNotMatch(t.js, /dispatched|broadcast across|cryptographically signed/i, t.id);
   }
-  // Typed text is escaped where the blog, forum and chat insert it as HTML.
-  for (const id of ['blog', 'forum', 'chatroom']) {
+  // Typed text is escaped where the blog, forum, chatroom, arcade, and storefront insert it as HTML.
+  for (const id of ['blog', 'forum', 'chatroom', 'arcade', 'storefront']) {
     const t = MULTIPAGE_TEMPLATES.find(x => x.id === id);
     assert.match(t.js, /function esc\(s\)/, id);
     assert.doesNotMatch(t.js, /' \+ (text|author) \+ '/, id);

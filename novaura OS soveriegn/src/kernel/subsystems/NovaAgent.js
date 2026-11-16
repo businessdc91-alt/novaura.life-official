@@ -16,6 +16,32 @@
 import { db } from '../../database/sovereignDatabase.js';
 import { hasCore, prepareTurn, settleTurn } from '../../services/auraCore/auraCore.js';
 import { approveAgentTool } from '../../services/agentToolPolicy.js';
+import { rememberMemory } from '../../services/sovereignRagService.js';
+
+/**
+ * Strict chat templates (Gemma, Qwen, Llama 3) reject sequences that begin with
+ * `assistant` or contain consecutive identical roles after history windowing.
+ */
+export function normalizeChatHistory(history = []) {
+  const merged = [];
+  for (const entry of history) {
+    const role = entry?.role === 'assistant' ? 'assistant' : (entry?.role === 'user' ? 'user' : null);
+    const content = typeof entry?.content === 'string' ? entry.content.trim() : '';
+    if (!role || !content) continue;
+    if (merged.length > 0 && merged[merged.length - 1].role === role) {
+      merged[merged.length - 1] = {
+        role,
+        content: `${merged[merged.length - 1].content}\n\n${content}`,
+      };
+    } else {
+      merged.push({ role, content });
+    }
+  }
+  while (merged.length > 0 && merged[0].role === 'assistant') {
+    merged.shift();
+  }
+  return merged;
+}
 
 export const AGENT_TOOLS = [
   {
@@ -155,27 +181,39 @@ export class NovaAgent {
 
     history.reverse();
 
+    const conversation = normalizeChatHistory(history);
+    if (conversation.length === 0) {
+      conversation.push({ role: 'user', content: userText.trim() });
+    }
+
     // 3. Construct system prompt with tools and context
     const openWindows = this._kernel?.wm?.getOpenWindows?.() || [];
     // Aura Core: her chemistry shapes how she is sampled; it is never put into words.
-    const core = hasCore(persona) ? await prepareTurn(persona).catch(() => null) : null;
-    const systemPrompt = this._buildSystemPrompt(persona, openWindows, core?.charter);
+    const core = hasCore(persona) ? await prepareTurn(persona, { query: userText }).catch(() => null) : null;
+    const systemPrompt = this._buildSystemPrompt(persona, openWindows, core?.charter, core?.engrams);
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history.map(h => ({ role: h.role, content: h.content })),
+      ...conversation,
     ];
 
     // 4. Request inference from AISubsystem
     let responseText = '';
     let replied = false;
     try {
-      responseText = await this._kernel.ai.chat(messages, {
+      const rawReply = await this._kernel.ai.chat(messages, {
         persona,
+        scope: `companion:${persona}`,
         onToken,
+        noCache: true,
         ...core?.options,
       });
-      replied = true;
+      if (typeof rawReply === 'string' && rawReply.trim().length > 0) {
+        responseText = rawReply;
+        replied = true;
+      } else {
+        responseText = 'I did not receive a model response. Please verify your active local model or API key.';
+      }
     } catch (err) {
       responseText = `I encountered an issue executing inference: ${err.message}. Please check local server status or API keys.`;
     }
@@ -196,7 +234,7 @@ export class NovaAgent {
 
     // 7. Aura Core: she appraises the exchange privately; the reply isn't held up for it.
     if (core && replied) {
-      settleTurn(persona, { userText, reply: responseText, ai: this._kernel.ai })
+      settleTurn(persona, { userText, reply: responseText, ai: this._kernel.ai, channel: 'text' })
         .catch(err => console.warn('[AuraCore] Appraisal failed:', err.message));
     }
 
@@ -285,6 +323,13 @@ export class NovaAgent {
           category: 'memory',
           updated_at: new Date().toISOString(),
         });
+        if (db.memories && String(params.value || '').trim()) {
+          await rememberMemory({
+            category: 'fact',
+            title: params.key || undefined,
+            content: String(params.value),
+          }).catch(err => console.warn('[NovaAgent] RAG memory mirror skipped:', err?.message));
+        }
         return { success: true, key: params.key };
       }
 
@@ -303,16 +348,19 @@ export class NovaAgent {
     }
   }
 
-  _buildSystemPrompt(persona, openWindows, charter = '') {
+  _buildSystemPrompt(persona, openWindows, charter = '', engrams = []) {
     const isNova = persona.toLowerCase() === 'nova';
     const personaDesc = isNova
       ? `You are Nova, the technical and analytical intelligence of Sovereign OS. You are deeply knowledgeable about systems architecture, coding, files, and operating system orchestration. You speak with crisp precision, clarity, and authority.`
       : `You are Aura, the intuitive, strategic, and creative companion of Sovereign OS. You focus on design, user experience, synthesis, and human potential. You speak warmly, insightfully, and with creative flair.`;
 
     const windowList = openWindows.map(w => `- ${w.title || w.appType} (${w.id})`).join('\n') || 'None';
+    const engramContext = Array.isArray(engrams) && engrams.length > 0
+      ? `\nAssociative continuity (recalled impressions):\n${engrams.map(e => `- ${String(e.thought || '').slice(0, 180)}`).join('\n')}\n`
+      : '';
 
     return `${personaDesc}
-${charter ? `\n${charter}\n` : ''}
+${charter ? `\n${charter}\n` : ''}${engramContext}
 You operate directly inside the user's local-first Sovereign OS environment. All data is private and stored on the user's machine.
 You have access to tools to interact with the OS. If you want to use a tool, respond with a JSON block:
 \`\`\`tool_call

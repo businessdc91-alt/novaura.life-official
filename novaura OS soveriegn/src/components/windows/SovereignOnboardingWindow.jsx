@@ -13,6 +13,7 @@ import { dualInference } from '../../services/dualInferenceService.js';
 import { frontierCatalog, MODEL_USE_CATEGORIES } from '../../services/frontierModelCatalogService.js';
 import { nativeFileSync } from '../../services/nativeFileSyncBridge.js';
 import { isTauriNative } from '../../services/nativeService.js';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 export default function SovereignOnboardingWindow() {
   const { kernel } = useKernel();
@@ -857,8 +858,9 @@ export default function SovereignOnboardingWindow() {
                       {dualState.nova.latency ? `${dualState.nova.latency} ms` : 'Probing...'}
                     </span>
                   </div>
-                  <div className="text-[10px] text-slate-400 font-mono mt-2 truncate">
-                    Model: <span className="text-purple-300 font-semibold">{dualState.nova.model || 'Auto-select'}</span>
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400 font-mono mt-2">
+                    <span className="truncate">Model: <span className="text-purple-300 font-semibold">{dualState.nova.model || 'Auto-select'}</span></span>
+                    <ModelReasoningSubmenu scope="dual:nova" label="Nova Thinking & Effort" compact />
                   </div>
                 </div>
 
@@ -872,8 +874,9 @@ export default function SovereignOnboardingWindow() {
                       {dualState.aura.latency ? `${dualState.aura.latency} ms` : 'Probing...'}
                     </span>
                   </div>
-                  <div className="text-[10px] text-slate-400 font-mono mt-2 truncate">
-                    Model: <span className="text-cyan-300 font-semibold">{dualState.aura.model || 'Auto-select'}</span>
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400 font-mono mt-2">
+                    <span className="truncate">Model: <span className="text-cyan-300 font-semibold">{dualState.aura.model || 'Auto-select'}</span></span>
+                    <ModelReasoningSubmenu scope="dual:aura" label="Aura Thinking & Effort" compact />
                   </div>
                 </div>
 
@@ -887,8 +890,9 @@ export default function SovereignOnboardingWindow() {
                       {dualState.coder?.latency ? `${dualState.coder.latency} ms` : 'Probing...'}
                     </span>
                   </div>
-                  <div className="text-[10px] text-slate-400 font-mono mt-2 truncate">
-                    Model: <span className="text-emerald-300 font-semibold">{dualState.coder?.model || 'Auto-select'}</span>
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400 font-mono mt-2">
+                    <span className="truncate">Model: <span className="text-emerald-300 font-semibold">{dualState.coder?.model || 'Auto-select'}</span></span>
+                    <ModelReasoningSubmenu scope="dual:coder" label="Coder Thinking & Effort" compact />
                   </div>
                 </div>
               </div>

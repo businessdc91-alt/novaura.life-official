@@ -11,8 +11,9 @@
  *  - Zero mock data
  */
 
-import { getProvider, providerChat } from '../../services/cloudProviders.js';
+import { PROVIDERS, getProvider, providerChat } from '../../services/cloudProviders.js';
 import { db } from '../../database/sovereignDatabase.js';
+import { hydrateReasoningConfigFromDb, resolveReasoningParams } from '../../services/reasoningConfig.js';
 
 const CACHE_TTL_MS = 10 * 60_000; // 10 minutes
 const MAX_CACHE_ENTRIES = 200;
@@ -46,8 +47,9 @@ export class AISubsystem {
   async init(kernel) {
     this._kernel = kernel;
 
-    // Load API keys from local secure vault
+    // Load API keys from local secure vault & reasoning defaults from settings
     await this.refreshKeys();
+    hydrateReasoningConfigFromDb().catch(() => {});
 
     // Listen for settings or key changes
     kernel.ipc.on('vault:keys_updated', () => this.refreshKeys());
@@ -99,16 +101,23 @@ export class AISubsystem {
       ? ['lmstudio', 'ollama', 'builtin']
       : ['ollama', 'lmstudio', 'builtin'];
 
+    // Include any user-configured BYOK cloud providers (Gemini, OpenAI, DeepSeek, etc.)
+    const configuredCloud = PROVIDERS
+      .map(p => p.id)
+      .filter(id => Boolean(this._cloudKey(id)));
+
+    const dedupe = (list) => Array.from(new Set(list));
+
     switch (persona.toLowerCase()) {
       case 'nova':
-        return [...localChain, 'byok', 'openrouter'];
+        return dedupe([...localChain, ...configuredCloud, 'byok', 'openrouter']);
       case 'aura':
         // Aura defaults to LM Studio for deep creative synthesis & high-context GGUF reasoning
-        return ['lmstudio', 'ollama', 'builtin', 'byok', 'openrouter', 'claude'];
+        return dedupe(['lmstudio', 'ollama', 'builtin', ...configuredCloud, 'byok', 'openrouter', 'claude']);
       case 'cybeni':
-        return [...localChain, 'byok', 'claude', 'openrouter'];
+        return dedupe([...localChain, 'claude', ...configuredCloud, 'byok', 'openrouter']);
       default:
-        return [...localChain, 'byok', 'openrouter'];
+        return dedupe([...localChain, ...configuredCloud, 'byok', 'openrouter']);
     }
   }
 
@@ -119,13 +128,21 @@ export class AISubsystem {
    */
   async chat(messages, options = {}) {
     const persona = options.persona || 'default';
+    const scope = options.scope || (persona !== 'default' ? `companion:${persona}` : 'global');
+    const resolvedReasoning = resolveReasoningParams({ ...options, scope });
+    const effectiveOptions = {
+      ...options,
+      scope,
+      think: resolvedReasoning.think,
+      reasoningEffort: resolvedReasoning.reasoningEffort,
+    };
     const chain = options.provider ? [options.provider] : this.getPersonaProviderChain(persona);
 
-    const sig = JSON.stringify({ messages, options: { ...options, onToken: null } });
+    const sig = JSON.stringify({ messages, options: { ...effectiveOptions, onToken: null, noCache: null } });
     const hash = await sha256(sig);
 
-    // Check cache
-    if (!options.onToken) {
+    // Check cache unless streaming or explicitly bypassed (live conversation / appraisal)
+    if (!options.onToken && !options.noCache) {
       const cached = this._cache.get(hash);
       if (cached && (Date.now() - cached.ts < CACHE_TTL_MS)) {
         return cached.text;
@@ -157,27 +174,46 @@ export class AISubsystem {
           const { builtinChat, builtinStatus } = await import('../../services/engines/builtinAi.js');
           // Only when it is set up; a fresh install with no model skips straight to the next provider.
           if (!(await builtinStatus()).installDir) throw new Error('The built-in AI is not set up.');
-          result = await builtinChat(effectiveMessages, options);
+          result = await builtinChat(effectiveMessages, effectiveOptions);
           if (options.onToken) options.onToken(result);
         } else if (provider === 'ollama' || provider === 'lmstudio' || provider === 'webgpu' || provider === 'local') {
-          // Route to LocalModelSubsystem
-          if (this._kernel?.localModel?.isReady || provider === 'webgpu') {
-            result = await this._kernel.localModel.chat(effectiveMessages, {
-              ...options,
-              backend: provider === 'local' ? undefined : provider,
+          // Route to LocalModelSubsystem (re-probe on demand if offline or started after boot)
+          const lm = this._kernel?.localModel;
+          if (!lm) {
+            throw new Error(`Local provider ${provider} is not initialized.`);
+          }
+          if (provider === 'webgpu') {
+            result = await lm.chat(effectiveMessages, {
+              ...effectiveOptions,
+              backend: 'webgpu',
             });
           } else {
-            throw new Error(`Local provider ${provider} is not currently running.`);
+            const staleMs = 10_000;
+            const hasModelsCheck = typeof lm.hasModelsFor === 'function';
+            const needsProbe = !lm.isReady || (provider !== 'local' && hasModelsCheck && !lm.hasModelsFor(provider));
+            if (needsProbe && typeof lm.probeAll === 'function' && (Date.now() - (lm.lastProbeAt || 0) > staleMs)) {
+              await lm.probeAll();
+            }
+            const backendAvailable = provider === 'local'
+              ? lm.isReady
+              : (hasModelsCheck ? lm.hasModelsFor(provider) : lm.isReady);
+            if (!backendAvailable && !options.model) {
+              throw new Error(`Local provider ${provider} is not currently running.`);
+            }
+            result = await lm.chat(effectiveMessages, {
+              ...effectiveOptions,
+              backend: provider === 'local' ? undefined : provider,
+            });
           }
         } else if (getProvider(provider)) {
-          result = await providerChat(provider, effectiveMessages, (name) => this._cloudKey(name), options);
+          result = await providerChat(provider, effectiveMessages, (name) => this._cloudKey(name), effectiveOptions);
           if (options.onToken) options.onToken(result);
         } else {
           continue;
         }
 
         if (result && typeof result === 'string') {
-          if (!options.onToken) {
+          if (!options.onToken && !options.noCache) {
             this._cache.set(hash, { text: result, ts: Date.now() });
           }
           return result;
@@ -198,8 +234,8 @@ export class AISubsystem {
   _cloudKey(name) {
     const value = this.getKey(name);
     if (value) return value;
-    if (name === 'gemini') return import.meta.env.VITE_GEMINI_API_KEY || '';
-    if (name === 'openrouter') return import.meta.env.VITE_OPENROUTER_API_KEY || '';
+    if (name === 'gemini') return import.meta.env?.VITE_GEMINI_API_KEY || '';
+    if (name === 'openrouter') return import.meta.env?.VITE_OPENROUTER_API_KEY || '';
     if (name === 'claude') return this.getKey('anthropic');
     return '';
   }

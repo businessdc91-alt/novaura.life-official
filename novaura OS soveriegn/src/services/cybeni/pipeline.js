@@ -462,7 +462,12 @@ export async function runPipeline(input, hooks) {
       `## Your task\n${task}`,
     ].filter(Boolean).join('\n\n');
     const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
-    const opts = { temperature: temperature ?? (role === 'designer' ? 0.6 : 0.25), maxTokens: maxTokens ?? (code ? 8192 : 2048), ...(jsonSchema ? { jsonSchema } : {}) };
+    const opts = {
+      scope: `cybeni:${role}`,
+      temperature: temperature ?? (role === 'designer' ? 0.6 : 0.25),
+      maxTokens: maxTokens ?? (code ? 8192 : 2048),
+      ...(jsonSchema ? { jsonSchema } : {}),
+    };
 
     let usedKey = modelKey;
     const send = async () => {

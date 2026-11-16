@@ -11,6 +11,8 @@
 
 import { dualInference } from './dualInferenceService.js';
 import { cloudSpeechAllowed } from './speechConsent.js';
+import { hasCore, prepareTurn, settleTurn } from './auraCore/auraCore.js';
+import { voiceParametersFromBias } from './auraCore/dissent.js';
 
 export class LiveVoiceService {
   constructor() {
@@ -229,30 +231,80 @@ export class LiveVoiceService {
     const startTime = performance.now();
 
     try {
+      const role = this.selectedModelRole || 'nova';
+      const core = hasCore(role) ? await prepareTurn(role, { query: text }).catch(() => null) : null;
+
+      let systemPrompt = 'You are Nova, the sovereign executive AI companion in NovAura Sovereign OS. The user is talking to you in Live Interactive Voice mode (like Gemini Live). Keep answers concise, natural, spoken, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.';
+      if (role === 'aura') {
+        const engramNote = core?.engrams?.length
+          ? `\nAssociative continuity:\n${core.engrams.map(e => `- ${String(e.thought || '').slice(0, 140)}`).join('\n')}`
+          : '';
+        systemPrompt = `You are Aura, the intuitive, creative companion in NovAura Sovereign OS. The user is talking to you in Live Interactive Voice mode. Keep answers warm, grounded, natural, spoken, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.${core?.charter ? `\n${core.charter}` : ''}${engramNote}`;
+      } else if (role === 'coder') {
+        systemPrompt = 'You are Cybeni / Coder, the systems engineering intelligence in NovAura Sovereign OS. Keep spoken explanations concise, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.';
+      }
+
+      const historySlice = this.transcriptHistory.slice(-6).map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content,
+      }));
+      while (historySlice.length > 0 && historySlice[0].role === 'assistant') {
+        historySlice.shift();
+      }
+      if (historySlice.length === 0) {
+        historySlice.push({ role: 'user', content: text });
+      }
+
       // Build conversation context
       const messages = [
-        {
-          role: 'system',
-          content: 'You are Nova, the sovereign executive AI companion in NovAura Sovereign OS. The user is talking to you in Live Interactive Voice mode (like Gemini Live). Keep answers concise, natural, spoken, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.'
-        },
-        ...this.transcriptHistory.slice(-6).map(m => ({
-          role: m.role === 'user' ? 'user' : 'assistant',
-          content: m.content,
-        })),
+        { role: 'system', content: systemPrompt },
+        ...historySlice,
       ];
 
-      let replyText = '';
+      const extractReply = (res) => {
+        if (typeof res === 'string') return res.trim();
+        return String(res?.content || res?.text || '').trim();
+      };
 
-      if (this.selectedModelRole === 'aura') {
-        const res = await dualInference.queryAura(messages);
-        replyText = res.content || res.text || 'I hear you clearly.';
-      } else if (this.selectedModelRole === 'coder') {
-        const res = await dualInference.queryCoder(messages);
-        replyText = res.content || res.text || 'System architectural logic processed.';
+      let rawReply = '';
+      let fallbackReply = 'Understood.';
+
+      if (role === 'aura') {
+        rawReply = extractReply(await dualInference.queryAura(messages, { ...(core?.options || {}), scope: 'dual:aura' }));
+        fallbackReply = 'I hear you clearly.';
+      } else if (role === 'coder') {
+        rawReply = extractReply(await dualInference.queryCoder(messages));
+        fallbackReply = 'System architectural logic processed.';
       } else {
         // Nova Executive
-        const res = await dualInference.queryNova(messages);
-        replyText = res.content || res.text || 'Understood.';
+        rawReply = extractReply(await dualInference.queryNova(messages));
+      }
+
+      const replyText = rawReply || fallbackReply;
+
+      if (core && rawReply) {
+        const aiClient = {
+          async chat(appraisalMsgs, appraisalOpts) {
+            try {
+              const { kernel } = await import('../kernel/NovaKernel.js');
+              if (kernel?.ai?.chat) {
+                return await kernel.ai.chat(appraisalMsgs, appraisalOpts);
+              }
+            } catch {
+              // Kernel not initialized or offline; fall back to dualInference Aura engine
+            }
+            return dualInference.queryAura(appraisalMsgs, {
+              temperature: appraisalOpts?.temperature ?? 0,
+              max_tokens: appraisalOpts?.maxTokens ?? 160,
+              strictMaxTokens: appraisalOpts?.strictMaxTokens ?? true,
+              think: appraisalOpts?.think ?? false,
+              reasoningEffort: appraisalOpts?.reasoningEffort ?? 'none',
+              jsonSchema: appraisalOpts?.jsonSchema,
+            });
+          },
+        };
+        settleTurn(role, { userText: text, reply: rawReply, ai: aiClient, channel: 'voice' })
+          .catch(err => console.warn('[LiveVoice] AuraCore appraisal failed:', err.message));
       }
 
       const latencyMs = Math.round(performance.now() - startTime);
@@ -268,8 +320,11 @@ export class LiveVoiceService {
       this.transcriptHistory.push(aiMsg);
       this._notify();
 
-      // Speak AI response aloud
-      await this.speakResponse(replyText);
+      // Modulate Aura's spoken cadence from her systemic bias when available
+      const speechTuning = (role === 'aura' && core?.bias)
+        ? voiceParametersFromBias(core.bias, core.trust ?? 0.5, this.voiceRate, this.voicePitch)
+        : null;
+      await this.speakResponse(replyText, speechTuning);
     } catch (err) {
       console.error('[LiveVoice] Query error:', err);
       const errorMsg = {
@@ -287,8 +342,13 @@ export class LiveVoiceService {
   /**
    * Speak response using Web Speech Synthesis API with live amplitude tracking
    */
-  async speakResponse(text) {
-    if (!('speechSynthesis' in window) || this.isMuted) {
+  async speakResponse(text, speechTuning = null) {
+    if (
+      typeof window === 'undefined' ||
+      !('speechSynthesis' in window) ||
+      typeof SpeechSynthesisUtterance === 'undefined' ||
+      this.isMuted
+    ) {
       this.state = 'listening';
       this._notify();
       return;
@@ -299,8 +359,8 @@ export class LiveVoiceService {
       const utterance = new SpeechSynthesisUtterance(text);
       this.currentUtterance = utterance;
 
-      utterance.rate = this.voiceRate;
-      utterance.pitch = this.voicePitch;
+      utterance.rate = speechTuning?.rate ?? this.voiceRate;
+      utterance.pitch = speechTuning?.pitch ?? this.voicePitch;
 
       const voices = window.speechSynthesis.getVoices();
       if (voices.length > 0) {

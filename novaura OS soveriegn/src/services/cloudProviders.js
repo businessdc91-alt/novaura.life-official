@@ -9,6 +9,14 @@
 // Each provider is one of four API shapes: anthropic, gemini, openai (the
 // OpenAI-compatible chat API most providers offer) and bedrock (Amazon's Converse API).
 
+import {
+  resolveReasoningParams,
+  anthropicEffort,
+  openAiReasoningEffort,
+  geminiThinkingConfig,
+  reasoningTokenBudget,
+} from './reasoningConfig.js';
+
 export const PROVIDERS = [
   {
     id: 'claude', label: 'Claude', vendor: 'Anthropic', kind: 'anthropic',
@@ -161,8 +169,10 @@ function stripSchema(schema) {
 const ADAPTERS = {
   async anthropic(provider, base, key, model, messages, o) {
     const { system, turns } = splitSystem(messages);
-    const outputConfig = { effort: o.effort || 'medium' };
+    const resolved = resolveReasoningParams(o);
+    const outputConfig = { effort: anthropicEffort(resolved) };
     if (o.jsonSchema) outputConfig.format = { type: 'json_schema', schema: o.jsonSchema };
+    const maxTokens = reasoningTokenBudget(o.maxTokens ?? 16000, resolved, { strictMaxTokens: Boolean(o.jsonSchema && !resolved.think) });
     // Current Claude models choose their own sampling, so temperature is not sent.
     // Server-side fallback re-runs a policy-declined request on a suitable model.
     const fallback = /^claude-(opus-5|fable)/.test(model);
@@ -177,7 +187,7 @@ const ADAPTERS = {
       },
       body: {
         model,
-        max_tokens: o.maxTokens ?? 16000,
+        max_tokens: maxTokens,
         output_config: outputConfig,
         ...(fallback ? { fallbacks: 'default' } : {}),
         ...(system ? { system } : {}),
@@ -192,42 +202,78 @@ const ADAPTERS = {
 
   async gemini(provider, base, key, model, messages, o) {
     const { system, turns } = splitSystem(messages);
-    const generationConfig = { temperature: o.temperature ?? 0.7, maxOutputTokens: o.maxTokens ?? 8192 };
+    const resolved = resolveReasoningParams(o);
+    const maxOutputTokens = reasoningTokenBudget(o.maxTokens ?? 8192, resolved, { strictMaxTokens: Boolean(o.jsonSchema && !resolved.think) });
+    const generationConfig = {
+      temperature: o.temperature ?? 0.7,
+      maxOutputTokens,
+      thinkingConfig: geminiThinkingConfig(resolved),
+    };
     if (o.jsonSchema) {
       generationConfig.responseMimeType = 'application/json';
       generationConfig.responseSchema = stripSchema(o.jsonSchema);
     }
-    const data = await request(provider, {
+    const callGemini = (cfg) => request(provider, {
       url: `${base}/models/${encodeURIComponent(model)}:generateContent`,
       headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
       body: {
         ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
         contents: turns.map(t => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.content }] })),
-        generationConfig,
+        generationConfig: cfg,
       },
     });
+    let data;
+    try {
+      data = await callGemini(generationConfig);
+    } catch (err) {
+      if (/\(400\)|thinking/i.test(String(err?.message || ''))) {
+        const { thinkingConfig: _drop, ...fallbackCfg } = generationConfig;
+        data = await callGemini(fallbackCfg);
+      } else {
+        throw err;
+      }
+    }
     const candidate = data.candidates?.[0];
     if (!candidate && data.promptFeedback?.blockReason) throw new Error(`Gemini blocked this request (${data.promptFeedback.blockReason}).`);
     return (candidate?.content?.parts || []).map(p => p.text || '').join('');
   },
 
   async openai(provider, base, key, model, messages, o) {
-    const body = { model, messages: messages.map(m => ({ role: m.role, content: m.content })) };
-    if (provider.completionTokens) body.max_completion_tokens = o.maxTokens ?? 8192;
-    else {
-      body.max_tokens = o.maxTokens ?? 8192;
-      body.temperature = o.temperature ?? 0.7;
-    }
-    if (o.jsonSchema) {
-      body.response_format = provider.jsonSchema
-        ? { type: 'json_schema', json_schema: { name: 'result', strict: false, schema: o.jsonSchema } }
-        : { type: 'json_object' };
-    }
-    const data = await request(provider, {
+    const resolved = resolveReasoningParams(o);
+    const maxBudget = reasoningTokenBudget(o.maxTokens ?? 8192, resolved, { strictMaxTokens: Boolean(o.jsonSchema && !resolved.think) });
+    const buildBody = (includeEffort) => {
+      const body = { model, messages: messages.map(m => ({ role: m.role, content: m.content })) };
+      if (provider.completionTokens) {
+        body.max_completion_tokens = maxBudget;
+      } else {
+        body.max_tokens = maxBudget;
+        body.temperature = o.temperature ?? 0.7;
+      }
+      if (includeEffort) {
+        body.reasoning_effort = openAiReasoningEffort(resolved);
+      }
+      if (o.jsonSchema) {
+        body.response_format = provider.jsonSchema
+          ? { type: 'json_schema', json_schema: { name: 'result', strict: false, schema: o.jsonSchema } }
+          : { type: 'json_object' };
+      }
+      return body;
+    };
+    const callOpenAi = (includeEffort) => request(provider, {
       url: `${base}/chat/completions`,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, ...(provider.extraHeaders || {}) },
-      body,
+      body: buildBody(includeEffort),
     });
+    let data;
+    try {
+      data = await callOpenAi(true);
+    } catch (err) {
+      if (/\(400\)|reasoning_effort|unknown|unrecognized|unsupported/i.test(String(err?.message || ''))) {
+        data = await callOpenAi(false);
+      } else {
+        throw err;
+      }
+    }
     const content = data.choices?.[0]?.message?.content;
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) return content.map(c => c.text || '').join('');

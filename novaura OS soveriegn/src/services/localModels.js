@@ -4,6 +4,12 @@
 
 import { probeLocalAi, queryLocalAi } from './nativeService.js';
 import { releaseComfyModels } from './engines/mediaRoom.js';
+import {
+  resolveReasoningParams,
+  ollamaThinkValue,
+  openAiReasoningEffort,
+  reasoningTokenBudget,
+} from './reasoningConfig.js';
 
 // LM Studio is the preferred runtime, so it is listed (and picked) first. The
 // built-in AI is llama.cpp run by Sovereign itself (engines/builtinAi.js); the
@@ -129,7 +135,7 @@ async function freeMediaMemory(model) {
 }
 
 // Reasoning models wrap their scratchpad in <think> tags; strip it from chat output.
-function cleanCompletion(text) {
+export function cleanCompletion(text) {
   return String(text || '')
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/^<think>[\s\S]*$/i, '')
@@ -140,24 +146,45 @@ function cleanCompletion(text) {
  * Run a chat completion on a local model.
  * messages: [{ role: 'system'|'user'|'assistant', content }]
  */
-export async function runLocalChat(ref, messages, { maxTokens = 400, temperature = 0.7, jsonSchema } = {}) {
+export async function runLocalChat(
+  ref,
+  messages,
+  {
+    maxTokens = 400,
+    temperature = 0.7,
+    jsonSchema,
+    think,
+    reasoningEffort,
+    effort,
+    scope,
+    strictMaxTokens = false,
+    onThinking,
+  } = {}
+) {
   const parsed = typeof ref === 'string' ? parseModelRef(ref) : ref;
   if (!parsed) throw new Error('No local model selected.');
   const cfg = LOCAL_RUNTIMES[parsed.runtime];
+  const resolved = resolveReasoningParams({ think, reasoningEffort, effort, scope });
+  const effectiveMaxTokens = reasoningTokenBudget(maxTokens, resolved, {
+    strictMaxTokens: strictMaxTokens || Boolean(jsonSchema && !resolved.think),
+  });
 
   if (parsed.runtime === 'ollama') {
-    const ask = (cpuOnly) => queryLocalAi(cfg.port, '/api/chat', 'POST', {
+    const thinkParam = ollamaThinkValue(parsed.model, resolved);
+    const ask = (cpuOnly, includeThink = true) => queryLocalAi(cfg.port, '/api/chat', 'POST', {
       model: parsed.model,
       messages,
       stream: false,
-      // Thinking models would otherwise spend the short reply budget thinking.
-      think: false,
+      ...(includeThink ? { think: thinkParam } : {}),
       // A JSON schema constrains the reply to valid JSON of that shape.
       ...(jsonSchema ? { format: jsonSchema } : {}),
       // num_gpu 0 keeps every layer in system RAM and runs on the CPU.
-      options: { temperature, num_predict: maxTokens, ...(cpuOnly ? { num_gpu: 0 } : {}) },
+      options: { temperature, num_predict: effectiveMaxTokens, ...(cpuOnly ? { num_gpu: 0 } : {}) },
     });
     let res = await ask(ollamaCpuOnly());
+    if (/does not support thinking|unknown field.*think/i.test(String(res?.error || ''))) {
+      res = await ask(ollamaCpuOnly(), false);
+    }
     // Out of VRAM because of image or music models: free those before blaming the GPU.
     if (!ollamaCpuOnly() && NO_ROOM_RE.test(String(res?.error || '')) && await freeMediaMemory(parsed.model)) {
       res = await ask(false);
@@ -171,26 +198,38 @@ export async function runLocalChat(ref, messages, { maxTokens = 400, temperature
       res = await ask(true);
     }
     if (res && typeof res === 'object' && typeof res.message?.content === 'string') {
+      if (res.message.thinking && typeof onThinking === 'function') {
+        onThinking(res.message.thinking);
+      }
       return cleanCompletion(res.message.content);
     }
     throw new Error(res?.error || `Ollama did not return a reply. Is "${parsed.model}" installed?`);
   }
 
-  const ask = () => queryLocalAi(cfg.port, '/v1/chat/completions', 'POST', {
+  const lmEffort = openAiReasoningEffort(resolved);
+  const ask = (includeEffort = true) => queryLocalAi(cfg.port, '/v1/chat/completions', 'POST', {
     model: parsed.model,
     messages,
     temperature,
-    max_tokens: maxTokens,
+    max_tokens: effectiveMaxTokens,
     stream: false,
-    // Same reason as think:false above; LM Studio ignores it for non-reasoning models.
-    reasoning_effort: 'none',
+    ...(includeEffort ? { reasoning_effort: lmEffort } : {}),
     ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: jsonSchema } } } : {}),
   });
-  let res = await ask();
-  if (typeof res?.choices?.[0]?.message?.content !== 'string' && NO_ROOM_RE.test(String(res?.error?.message || res?.error || '')) && await freeMediaMemory(parsed.model)) {
-    res = await ask();
+  let res = await ask(true);
+  if (
+    typeof res?.choices?.[0]?.message?.content !== 'string' &&
+    /reasoning_effort|unknown field|unrecognized/i.test(String(res?.error?.message || res?.error || ''))
+  ) {
+    res = await ask(false);
   }
-  const text = res?.choices?.[0]?.message?.content;
+  if (typeof res?.choices?.[0]?.message?.content !== 'string' && NO_ROOM_RE.test(String(res?.error?.message || res?.error || '')) && await freeMediaMemory(parsed.model)) {
+    res = await ask(true);
+  }
+  const msg = res?.choices?.[0]?.message;
+  const trace = msg?.reasoning_content || msg?.reasoning;
+  if (trace && typeof onThinking === 'function') onThinking(trace);
+  const text = msg?.content;
   if (typeof text === 'string') return cleanCompletion(text);
   const message = String(res?.error?.message || res?.error || `${cfg.label} did not return a reply. Is "${parsed.model}" loaded?`);
   if (/insufficient system resources|requires approximately/i.test(message)) {

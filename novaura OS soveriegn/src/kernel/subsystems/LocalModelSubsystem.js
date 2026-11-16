@@ -10,7 +10,14 @@
  * and zero mock data.
  */
 
-import { probeLocalAi, queryLocalAi } from '../../services/nativeService.js';
+import { probeLocalAi } from '../../services/nativeService.js';
+import { cleanCompletion, runLocalChat } from '../../services/localModels.js';
+import {
+  resolveReasoningParams,
+  ollamaThinkValue,
+  openAiReasoningEffort,
+  reasoningTokenBudget,
+} from '../../services/reasoningConfig.js';
 
 const STATE = {
   IDLE: 'idle',
@@ -32,10 +39,17 @@ export class LocalModelSubsystem {
     this._lmstudioUrl = DEFAULT_LMSTUDIO_URL;
     this._availableModels = [];
     this._selectedModel = null;
+    this._selectedModels = {
+      ollama: null,
+      lmstudio: null,
+      webgpu: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+    };
     this._webllmEngine = null;
     this._webllmProgress = 0;
     this._error = null;
     this._isProbing = false;
+    this._probePromise = null;
+    this._lastProbeAt = 0;
   }
 
   init(kernel) {
@@ -47,7 +61,13 @@ export class LocalModelSubsystem {
       if (savedConfig.backend) this._activeBackend = savedConfig.backend;
       if (savedConfig.ollamaUrl) this._ollamaUrl = savedConfig.ollamaUrl;
       if (savedConfig.lmstudioUrl) this._lmstudioUrl = savedConfig.lmstudioUrl;
-      if (savedConfig.selectedModel) this._selectedModel = savedConfig.selectedModel;
+      if (savedConfig.selectedModels && typeof savedConfig.selectedModels === 'object') {
+        Object.assign(this._selectedModels, savedConfig.selectedModels);
+      }
+      if (savedConfig.selectedModel) {
+        this._selectedModel = savedConfig.selectedModel;
+        this._selectedModels[this._activeBackend] = savedConfig.selectedModel;
+      }
     }
 
     // IPC event hooks
@@ -59,7 +79,13 @@ export class LocalModelSubsystem {
         if (value.ollamaUrl) this._ollamaUrl = value.ollamaUrl;
         if (value.lmstudioUrl) this._lmstudioUrl = value.lmstudioUrl;
         if (value.backend) this._activeBackend = value.backend;
-        if (value.selectedModel) this._selectedModel = value.selectedModel;
+        if (value.selectedModels && typeof value.selectedModels === 'object') {
+          Object.assign(this._selectedModels, value.selectedModels);
+        }
+        if (value.selectedModel) {
+          this._selectedModel = value.selectedModel;
+          this._selectedModels[this._activeBackend] = value.selectedModel;
+        }
         this.probeAll();
       }
     });
@@ -74,16 +100,34 @@ export class LocalModelSubsystem {
   get state() { return this._state; }
   get activeBackend() { return this._activeBackend; }
   get availableModels() { return this._availableModels; }
-  get selectedModel() { return this._selectedModel; }
+  get selectedModel() { return this._selectedModels[this._activeBackend] ?? this._selectedModel; }
   get isReady() { return this._state === STATE.READY; }
+  get lastProbeAt() { return this._lastProbeAt; }
   get isWebGPUAvailable() { return typeof navigator !== 'undefined' && !!navigator.gpu; }
+
+  hasModelsFor(backend) {
+    if (backend === 'webgpu') return this.isWebGPUAvailable;
+    return this._availableModels.some(m => m.backend === backend);
+  }
+
+  modelFor(backend, requestedModel = null) {
+    if (requestedModel) return requestedModel;
+    const backendModels = this._availableModels.filter(m => m.backend === backend);
+    const chosen = this._selectedModels[backend];
+    if (backendModels.length > 0) {
+      if (chosen && backendModels.some(m => m.id === chosen)) return chosen;
+      return backendModels[0].id;
+    }
+    return chosen || (backend === this._activeBackend ? this._selectedModel : null);
+  }
 
   getStatus() {
     return {
       state: this._state,
       backend: this._activeBackend,
       models: this._availableModels,
-      selectedModel: this._selectedModel,
+      selectedModel: this.selectedModel,
+      selectedModels: { ...this._selectedModels },
       isReady: this.isReady,
       ollamaUrl: this._ollamaUrl,
       lmstudioUrl: this._lmstudioUrl,
@@ -95,29 +139,40 @@ export class LocalModelSubsystem {
   // ─── Probing & Discovery ───────────────────────────────────────────────────
 
   async probeAll() {
-    if (this._isProbing) return;
+    if (this._probePromise) return this._probePromise;
+    this._probePromise = this._doProbeAll();
+    try {
+      return await this._probePromise;
+    } finally {
+      this._probePromise = null;
+      this._isProbing = false;
+      this._lastProbeAt = Date.now();
+    }
+  }
+
+  async _doProbeAll() {
     this._isProbing = true;
     this._state = STATE.CHECKING;
     this._error = null;
 
     let foundOllama = false;
     let foundLMStudio = false;
-    let models = [];
+    const models = [];
 
     // 1. Probe Ollama (:11434)
     try {
       const olProbe = await probeLocalAi(11434, '/api/tags');
       if (olProbe && olProbe.online) {
-        foundOllama = true;
-        const oModels = (olProbe.models || []).map(name => ({
-          id: name,
-          name: name,
-          backend: 'ollama',
-        }));
+        const oModels = (olProbe.models || [])
+          .filter(name => typeof name === 'string' && name.trim().length > 0 && !/embed/i.test(name))
+          .map(name => ({
+            id: name,
+            name: name,
+            backend: 'ollama',
+          }));
         if (oModels.length > 0) {
+          foundOllama = true;
           models.push(...oModels);
-        } else {
-          models.push({ id: 'gemma4:12b', name: 'gemma4:12b', backend: 'ollama' });
         }
       }
     } catch (err) {
@@ -128,13 +183,15 @@ export class LocalModelSubsystem {
     try {
       const lmProbe = await probeLocalAi(1234, '/v1/models');
       if (lmProbe && lmProbe.online) {
-        foundLMStudio = true;
-        const lmModels = (lmProbe.models || []).map(name => ({
-          id: name,
-          name: name,
-          backend: 'lmstudio',
-        }));
+        const lmModels = (lmProbe.models || [])
+          .filter(name => typeof name === 'string' && name.trim().length > 0 && !/embed/i.test(name))
+          .map(name => ({
+            id: name,
+            name: name,
+            backend: 'lmstudio',
+          }));
         if (lmModels.length > 0) {
+          foundLMStudio = true;
           models.push(...lmModels);
         }
       }
@@ -144,34 +201,46 @@ export class LocalModelSubsystem {
 
     this._availableModels = models;
 
+    // Reconcile per-backend selected model independently so backends never swap model IDs
+    const ollamaModels = models.filter(m => m.backend === 'ollama');
+    if (ollamaModels.length > 0) {
+      if (!ollamaModels.some(m => m.id === this._selectedModels.ollama)) {
+        this._selectedModels.ollama = ollamaModels[0].id;
+      }
+    } else {
+      this._selectedModels.ollama = null;
+    }
+
+    const lmModels = models.filter(m => m.backend === 'lmstudio');
+    if (lmModels.length > 0) {
+      if (!lmModels.some(m => m.id === this._selectedModels.lmstudio)) {
+        this._selectedModels.lmstudio = lmModels[0].id;
+      }
+    } else {
+      this._selectedModels.lmstudio = null;
+    }
+
     // Pick backend based on discovery & preference
     if (this._activeBackend === 'ollama' && foundOllama) {
       this._state = STATE.READY;
-      if (!this._selectedModel || !models.find(m => m.id === this._selectedModel)) {
-        this._selectedModel = models.find(m => m.backend === 'ollama')?.id || models[0]?.id;
-      }
     } else if (this._activeBackend === 'lmstudio' && foundLMStudio) {
       this._state = STATE.READY;
-      if (!this._selectedModel || !models.find(m => m.id === this._selectedModel)) {
-        this._selectedModel = models.find(m => m.backend === 'lmstudio')?.id || models[0]?.id;
-      }
     } else if (foundOllama) {
       this._activeBackend = 'ollama';
       this._state = STATE.READY;
-      this._selectedModel = models.find(m => m.backend === 'ollama')?.id || models[0]?.id;
     } else if (foundLMStudio) {
       this._activeBackend = 'lmstudio';
       this._state = STATE.READY;
-      this._selectedModel = models.find(m => m.backend === 'lmstudio')?.id || models[0]?.id;
     } else if (this.isWebGPUAvailable) {
       this._activeBackend = 'webgpu';
       this._state = STATE.READY;
-      this._selectedModel = 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
+      this._selectedModels.webgpu = this._selectedModels.webgpu || 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
     } else {
       this._state = STATE.OFFLINE;
       this._error = 'No local AI runner detected (Ollama/LM Studio offline and WebGPU unavailable).';
     }
 
+    this._selectedModel = this.selectedModel;
     this._isProbing = false;
     this._kernel?.ipc.emit('localmodel:status', this.getStatus());
     return this.getStatus();
@@ -179,13 +248,17 @@ export class LocalModelSubsystem {
 
   setBackend(backend) {
     this._activeBackend = backend;
-    const model = this._availableModels.find(m => m.backend === backend);
-    if (model) this._selectedModel = model.id;
+    this._selectedModel = this.modelFor(backend);
     this._kernel?.ipc.emit('localmodel:status', this.getStatus());
   }
 
   setModel(modelId) {
-    this._selectedModel = modelId;
+    const match = this._availableModels.find(m => m.id === modelId);
+    const targetBackend = match?.backend || this._activeBackend;
+    this._selectedModels[targetBackend] = modelId;
+    if (targetBackend === this._activeBackend) {
+      this._selectedModel = modelId;
+    }
     this._kernel?.ipc.emit('localmodel:status', this.getStatus());
   }
 
@@ -194,11 +267,11 @@ export class LocalModelSubsystem {
   /**
    * Run chat inference on the active local provider.
    * @param {Array<{role: string, content: string}>} messages
-   * @param {Object} options { temperature, maxTokens, model, stream, onToken }
+   * @param {Object} options { temperature, maxTokens, model, stream, onToken, jsonSchema }
    */
   async chat(messages, options = {}) {
     const backend = options.backend || this._activeBackend;
-    const model = options.model || this._selectedModel;
+    const model = this.modelFor(backend, options.model);
 
     if (backend === 'ollama') {
       return this._chatOllama(messages, model, options);
@@ -213,27 +286,48 @@ export class LocalModelSubsystem {
 
   // Ollama chat implementation
   async _chatOllama(messages, model, options = {}) {
+    const resolvedModel = model || this.modelFor('ollama');
+    if (!resolvedModel) {
+      throw new Error('No Ollama chat model available.');
+    }
+
+    const normalizedMessages = messages.map(m => ({ role: m.role, content: m.content }));
     const stream = !!options.onToken;
+    const scope = options.scope || options.persona;
+    const resolved = resolveReasoningParams({ ...options, scope });
+    const effectiveMaxTokens = reasoningTokenBudget(options.maxTokens ?? 2048, resolved, {
+      strictMaxTokens: options.strictMaxTokens || Boolean(options.jsonSchema && !resolved.think),
+    });
+
+    if (!stream && this._ollamaUrl === DEFAULT_OLLAMA_URL) {
+      return runLocalChat(
+        { runtime: 'ollama', model: resolvedModel },
+        normalizedMessages,
+        {
+          maxTokens: options.maxTokens ?? 2048,
+          temperature: options.temperature ?? 0.7,
+          jsonSchema: options.jsonSchema,
+          think: options.think,
+          reasoningEffort: options.reasoningEffort,
+          effort: options.effort,
+          scope,
+          strictMaxTokens: options.strictMaxTokens,
+          onThinking: options.onThinking,
+        }
+      );
+    }
+
     const payload = {
-      model: model || this._selectedModel || 'gemma:4b',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      model: resolvedModel,
+      messages: normalizedMessages,
       stream,
+      think: ollamaThinkValue(resolvedModel, resolved),
+      ...(options.jsonSchema ? { format: options.jsonSchema } : {}),
       options: {
         temperature: options.temperature ?? 0.7,
-        num_predict: options.maxTokens ?? 2048,
+        num_predict: effectiveMaxTokens,
       },
     };
-
-    if (!stream) {
-      try {
-        const resp = await queryLocalAi(11434, '/api/chat', 'POST', payload);
-        if (resp && resp.message) {
-          return resp.message.content || '';
-        }
-      } catch (e) {
-        console.warn('[LocalModelSubsystem] native queryLocalAi fallback:', e);
-      }
-    }
 
     let res = null;
     let lastErr = null;
@@ -263,7 +357,8 @@ export class LocalModelSubsystem {
 
     if (!stream) {
       const data = await res.json();
-      return data.message?.content || '';
+      if (data.message?.thinking) options.onThinking?.(data.message.thinking);
+      return cleanCompletion(data.message?.content || '');
     }
 
     // Stream reader
@@ -279,6 +374,8 @@ export class LocalModelSubsystem {
       for (const line of lines) {
         try {
           const parsed = JSON.parse(line);
+          const thinkingDelta = parsed.message?.thinking || '';
+          if (thinkingDelta) options.onThinking?.(thinkingDelta);
           const delta = parsed.message?.content || '';
           if (delta) {
             fullText += delta;
@@ -290,21 +387,49 @@ export class LocalModelSubsystem {
       }
     }
 
-    return fullText;
+    return cleanCompletion(fullText);
   }
 
   // LM Studio chat completions implementation (OpenAI standard)
   async _chatLMStudio(messages, model, options = {}) {
+    const resolvedModel = model || this.modelFor('lmstudio');
+    if (!resolvedModel) {
+      throw new Error('No LM Studio chat model available.');
+    }
+
+    const normalizedMessages = messages.map(m => ({ role: m.role, content: m.content }));
     const stream = !!options.onToken;
+    const scope = options.scope || options.persona;
+    const resolved = resolveReasoningParams({ ...options, scope });
+    const effectiveMaxTokens = reasoningTokenBudget(options.maxTokens ?? 2048, resolved, {
+      strictMaxTokens: options.strictMaxTokens || Boolean(options.jsonSchema && !resolved.think),
+    });
+
+    if (!stream && this._lmstudioUrl === DEFAULT_LMSTUDIO_URL) {
+      return runLocalChat(
+        { runtime: 'lmstudio', model: resolvedModel },
+        normalizedMessages,
+        {
+          maxTokens: options.maxTokens ?? 2048,
+          temperature: options.temperature ?? 0.7,
+          jsonSchema: options.jsonSchema,
+          think: options.think,
+          reasoningEffort: options.reasoningEffort,
+          effort: options.effort,
+          scope,
+          strictMaxTokens: options.strictMaxTokens,
+          onThinking: options.onThinking,
+        }
+      );
+    }
+
     const payload = {
-      model: model || 'local-model',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      model: resolvedModel,
+      messages: normalizedMessages,
       stream,
       temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 2048,
-      // Thinking models (Qwen 3.x, Gemma 4) otherwise spend minutes thinking, and a short budget
-      // comes back empty; LM Studio ignores this for models that don't think. Same as runLocalChat.
-      reasoning_effort: 'none',
+      max_tokens: effectiveMaxTokens,
+      reasoning_effort: openAiReasoningEffort(resolved),
       ...(options.jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: options.jsonSchema } } } : {}),
     };
 
@@ -321,7 +446,9 @@ export class LocalModelSubsystem {
 
     if (!stream) {
       const data = await res.json();
-      return data.choices?.[0]?.message?.content || '';
+      const trace = data.choices?.[0]?.message?.reasoning_content || data.choices?.[0]?.message?.reasoning;
+      if (trace) options.onThinking?.(trace);
+      return cleanCompletion(data.choices?.[0]?.message?.content || '');
     }
 
     // SSE Stream reader
@@ -341,6 +468,8 @@ export class LocalModelSubsystem {
         if (dataStr === '[DONE]') break;
         try {
           const parsed = JSON.parse(dataStr);
+          const thinkingDelta = parsed.choices?.[0]?.delta?.reasoning_content || parsed.choices?.[0]?.delta?.reasoning || '';
+          if (thinkingDelta) options.onThinking?.(thinkingDelta);
           const delta = parsed.choices?.[0]?.delta?.content || '';
           if (delta) {
             fullText += delta;
@@ -352,7 +481,7 @@ export class LocalModelSubsystem {
       }
     }
 
-    return fullText;
+    return cleanCompletion(fullText);
   }
 
   // WebGPU WebLLM fallback implementation

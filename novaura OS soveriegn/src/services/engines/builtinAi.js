@@ -153,13 +153,73 @@ export async function loadBuiltinModel(modelId) {
   throw new Error(`${modelId} is taking too long to load.`);
 }
 
+const CV_BINDINGS_KEY = 'aura_core:control_vectors';
+
+export async function listControlVectors() {
+  if (!isTauri()) return [];
+  const cfg = await getBuiltinConfig();
+  if (!cfg.installDir) return [];
+  return invoke('llm_list_control_vectors', { installDir: cfg.installDir }).catch(() => []);
+}
+
+export async function getControlVectorBindings() {
+  const saved = await db.getSetting(CV_BINDINGS_KEY, null).catch(() => null);
+  return saved && typeof saved === 'object' ? saved : {};
+}
+
+export async function saveControlVectorBindings(bindings) {
+  await db.setSetting(CV_BINDINGS_KEY, bindings && typeof bindings === 'object' ? bindings : {});
+  emit();
+}
+
+export function computeControlVectorScales({ chemistry, bias, bindings = {}, availableVectors = [] } = {}) {
+  const available = new Set(availableVectors.map(v => v.name));
+  const oxDelta = ((chemistry?.oxytocin ?? 25) - 25) / 50;
+  const crDelta = ((bias?.creativity ?? 1) - 1);
+  const coDelta = ((chemistry?.cortisol ?? 15) - 15) / 50;
+  const foDelta = ((chemistry?.adrenaline ?? 5) - 5) / 40 - ((chemistry?.energy ?? 100) < 35 ? 0.35 : 0);
+  const channels = {
+    warmth: oxDelta,
+    creativity: crDelta,
+    caution: coDelta,
+    focus: foDelta,
+  };
+  const active = [];
+  for (const [channel, spec] of Object.entries(bindings)) {
+    const file = spec?.file;
+    if (!file || !available.has(file)) continue;
+    const gain = Number.isFinite(Number(spec.gain)) ? Number(spec.gain) : 0.75;
+    const raw = (channels[channel] ?? 0) * gain;
+    const scale = Math.round(Math.max(-2.5, Math.min(2.5, raw)) * 1000) / 1000;
+    if (Math.abs(scale) >= 0.01) active.push({ name: file, scale, channel });
+  }
+  return active;
+}
+
 let starting = null;
 /** Start the server (if needed), load the default model, and resolve once it answers. */
-export function startBuiltinAi() {
+export function startBuiltinAi({ controlVectors = null } = {}) {
   starting ||= (async () => {
     const cfg = await getBuiltinConfig();
     if (!cfg.installDir) throw new Error('Set up the built-in AI first.');
-    await invoke('llm_start', { installDir: cfg.installDir, cpuOnly: Boolean(cfg.cpuOnly) });
+    let activeVectors = controlVectors;
+    if (!activeVectors) {
+      const [avail, bindings, coreSaved] = await Promise.all([
+        listControlVectors(),
+        getControlVectorBindings(),
+        db.getSetting('aura_core:aura', null).catch(() => null),
+      ]);
+      activeVectors = computeControlVectorScales({
+        chemistry: coreSaved?.chemistry,
+        bindings,
+        availableVectors: avail,
+      }).map(({ name, scale }) => ({ name, scale }));
+    }
+    await invoke('llm_start', {
+      installDir: cfg.installDir,
+      cpuOnly: Boolean(cfg.cpuOnly),
+      ...(activeVectors?.length ? { controlVectors: activeVectors } : {}),
+    });
     emit();
     // The router itself is up within seconds.
     for (let i = 0; i < 60; i++) {
@@ -184,6 +244,21 @@ export async function stopBuiltinAi() {
   emit();
 }
 
+export async function applyControlVectorsToServer({ chemistry, bias } = {}) {
+  const [avail, bindings, st] = await Promise.all([
+    listControlVectors(),
+    getControlVectorBindings(),
+    builtinStatus(),
+  ]);
+  const computed = computeControlVectorScales({ chemistry, bias, bindings, availableVectors: avail });
+  const args = computed.map(({ name, scale }) => ({ name, scale }));
+  if (st.running) {
+    await stopBuiltinAi();
+    await startBuiltinAi({ controlVectors: args });
+  }
+  return computed;
+}
+
 /** Make a model the default and load it (if the server is running). */
 export async function selectBuiltinModel(modelId) {
   await setBuiltinConfig({ modelId });
@@ -203,13 +278,26 @@ export async function removeBuiltinModel(modelId) {
  * Chat with the built-in AI (the kernel's fallback after LM Studio and Ollama).
  * Starts it first when it is set up but stopped.
  */
-export async function builtinChat(messages, { maxTokens = 2048, temperature = 0.7, jsonSchema } = {}) {
+export async function builtinChat(
+  messages,
+  { maxTokens = 2048, temperature = 0.7, jsonSchema, think, reasoningEffort, effort, scope, strictMaxTokens, onThinking } = {}
+) {
   let st = await builtinStatus();
   if (!st.installDir) throw new Error('The built-in AI is not set up.');
   if (!st.running) st = await startBuiltinAi();
   const modelId = await defaultModelId();
   if (!modelId) throw new Error('The built-in AI has no model downloaded yet.');
-  return runLocalChat(`novaura:${modelId}`, messages, { maxTokens, temperature, jsonSchema });
+  return runLocalChat(`novaura:${modelId}`, messages, {
+    maxTokens,
+    temperature,
+    jsonSchema,
+    think,
+    reasoningEffort,
+    effort,
+    scope,
+    strictMaxTokens,
+    onThinking,
+  });
 }
 
 const SPEED_KEY = 'builtin_ai_speed_tests';

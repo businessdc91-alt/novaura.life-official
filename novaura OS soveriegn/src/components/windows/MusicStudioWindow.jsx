@@ -10,6 +10,7 @@ import AlbumsPanel from './music/AlbumsPanel.jsx';
 import EditPanel from './music/EditPanel.jsx';
 import EngineSetup from './engines/EngineSetup.jsx';
 import { PlayerBar } from './music/shared.jsx';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 const NAV = [
   ['create', 'Create', Sparkles],
@@ -169,10 +170,13 @@ export default function MusicStudioWindow({ props: windowProps } = {}) {
           <div onClick={e => e.stopPropagation()} className="w-96 p-4 rounded-xl bg-zinc-900 border border-white/10 space-y-3 text-[12px]">
             <div className="flex items-center font-semibold text-sm">Music Studio settings<button onClick={() => setShowSettings(false)} className="ml-auto text-white/40"><X className="w-4 h-4" /></button></div>
             <label className="block text-white/60">Model for lyrics, ideas and cover concepts
-              <select value={settings.textModel} onChange={e => saveSetting({ textModel: e.target.value })} className="mt-1 w-full bg-black/40 border border-white/10 rounded px-2 py-1.5 text-white">
-                <option value="">Automatic (same as Cybeni's architect)</option>
-                {textModels.map(m => <option key={m.key} value={m.key}>{m.loaded ? '● ' : ''}{m.label} · {m.group}</option>)}
-              </select>
+              <div className="mt-1 flex items-center gap-1.5">
+                <select value={settings.textModel} onChange={e => saveSetting({ textModel: e.target.value })} className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded px-2 py-1.5 text-white">
+                  <option value="">Automatic (same as Cybeni's architect)</option>
+                  {textModels.map(m => <option key={m.key} value={m.key}>{m.loaded ? '● ' : ''}{m.label} · {m.group}</option>)}
+                </select>
+                <ModelReasoningSubmenu scope="music" label="Music Lyrics Reasoning" compact />
+              </div>
               <span className="block text-[11px] text-white/40 mt-1">A model on the CPU (for example Ollama in CPU mode) leaves the GPU free for music generation.</span>
               {settings.textModel && <span className="block text-[11px] text-white/40">Using {describeModelKey(settings.textModel)}</span>}
             </label>

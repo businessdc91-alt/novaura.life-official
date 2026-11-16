@@ -15,6 +15,7 @@ import {
 } from '../../services/inferenceExchange';
 import { discoverLocalModels, describeModelRef, parseModelRef, runLocalChat } from '../../services/localModels';
 import { getPhysicalMeshStatus } from '../../services/sovereignMesh';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 // ── Shared styles ───────────────────────────────────────────────────────────
 
@@ -499,6 +500,8 @@ function RoomView({ room, agents, localModels, remoteModels, rescanModels, say, 
                 onChange={(key) => key && saveAgent({ ...a, brain: brainFromKey(key, remoteModels) }).catch(err => say(err.message))}
                 localModels={localModels}
                 remoteModels={remoteModels}
+                reasoningScope={`lounge:${a.id}`}
+                reasoningLabel={`${a.name} Reasoning`}
                 style={{ marginTop: '0.35rem', fontSize: '0.68rem', padding: '0.25rem 0.4rem' }}
               />
             </div>
@@ -612,30 +615,33 @@ function describeBrainKey(key) {
  * Model picker for an AI's brain: models on this PC grouped by app (loaded ones
  * marked and listed first), then models reachable through Exchange keys.
  */
-function ModelSelect({ value, onChange, localModels, remoteModels = [], style, placeholder = 'Choose a model…' }) {
+function ModelSelect({ value, onChange, localModels, remoteModels = [], style, placeholder = 'Choose a model…', reasoningScope = null, reasoningLabel = '' }) {
   const runtimes = (localModels || []).filter(r => r.online && r.models.length);
   const known = new Set([
     ...runtimes.flatMap(r => r.models.map(ref => `local|${ref}`)),
     ...remoteModels.map(r => `exchange|${r.keyId}|${r.ref}`),
   ]);
   return (
-    <select value={value} onChange={e => onChange(e.target.value)} style={{ ...S.input, ...style }}>
-      <option value="">{localModels === null ? 'Scanning models…' : placeholder}</option>
-      {runtimes.map(r => (
-        <optgroup key={r.runtime} label={`${r.label} on this PC`}>
-          {r.models.map(ref => {
-            const loaded = r.loaded.includes(ref);
-            return <option key={ref} value={`local|${ref}`}>{loaded ? '● ' : '○ '}{parseModelRef(ref)?.model}{loaded ? '  (loaded)' : ''}</option>;
-          })}
-        </optgroup>
-      ))}
-      {remoteModels.length > 0 && (
-        <optgroup label="Through the Inference Exchange">
-          {remoteModels.map(r => <option key={`${r.keyId}|${r.ref}`} value={`exchange|${r.keyId}|${r.ref}`}>{r.label}</option>)}
-        </optgroup>
-      )}
-      {value && !known.has(value) && <option value={value}>{describeBrainKey(value)} (not detected right now)</option>}
-    </select>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', width: '100%' }}>
+      <select value={value} onChange={e => onChange(e.target.value)} style={{ ...S.input, flex: 1, minWidth: 0, ...style }}>
+        <option value="">{localModels === null ? 'Scanning models…' : placeholder}</option>
+        {runtimes.map(r => (
+          <optgroup key={r.runtime} label={`${r.label} on this PC`}>
+            {r.models.map(ref => {
+              const loaded = r.loaded.includes(ref);
+              return <option key={ref} value={`local|${ref}`}>{loaded ? '● ' : '○ '}{parseModelRef(ref)?.model}{loaded ? '  (loaded)' : ''}</option>;
+            })}
+          </optgroup>
+        ))}
+        {remoteModels.length > 0 && (
+          <optgroup label="Through the Inference Exchange">
+            {remoteModels.map(r => <option key={`${r.keyId}|${r.ref}`} value={`exchange|${r.keyId}|${r.ref}`}>{r.label}</option>)}
+          </optgroup>
+        )}
+        {value && !known.has(value) && <option value={value}>{describeBrainKey(value)} (not detected right now)</option>}
+      </select>
+      {reasoningScope && <ModelReasoningSubmenu scope={reasoningScope} label={reasoningLabel} compact />}
+    </div>
   );
 }
 
@@ -834,6 +840,8 @@ function AgentsTab({ agents, localModels, remoteModels, rescanModels, say, goToE
                   onChange={(key) => setForm({ ...form, brainKey: key })}
                   localModels={localModels}
                   remoteModels={remoteModels}
+                  reasoningScope={form.id ? `lounge:${form.id}` : 'global'}
+                  reasoningLabel={form.name ? `${form.name} Reasoning` : 'Agent Reasoning'}
                 />
                 {remoteModels.length === 0 && (
                   <div style={{ ...S.hint, marginTop: '0.3rem' }}>

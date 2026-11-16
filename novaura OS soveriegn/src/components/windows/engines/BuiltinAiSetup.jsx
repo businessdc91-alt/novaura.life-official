@@ -9,6 +9,7 @@ import {
   startBuiltinAi, stopBuiltinAi, selectBuiltinModel, removeBuiltinModel, builtinChat,
   searchHuggingFace, huggingFaceRepo, downloadFromHuggingFace, openModelsFolder, DEFAULT_MODEL,
 } from '../../../services/engines/builtinAi.js';
+import ModelReasoningSubmenu from '../../shared/ModelReasoningSubmenu.jsx';
 
 const gb = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
 const STATUS = { loaded: 'In memory', loading: 'Loading…', available: 'Ready', unloaded: 'Ready', downloading: 'Downloading', sleeping: 'Ready' };
@@ -258,13 +259,16 @@ export default function BuiltinAiSetup({ request = null }) {
 
   return (
     <div className="p-3 rounded-xl border border-cyan-500/30 bg-gradient-to-br from-slate-900/80 to-cyan-950/20 text-slate-200 space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <Sparkles className="w-4 h-4 text-cyan-300" />
         <span className="font-semibold text-sm">Built-in AI</span>
         <span className="text-[11px] text-slate-400">No other apps needed</span>
-        <span className={`ml-auto text-[11px] px-2 py-0.5 rounded-full border ${running ? 'border-emerald-500/50 text-emerald-300' : setUp ? 'border-slate-600 text-slate-400' : 'border-amber-500/50 text-amber-300'}`}>
-          {busy === 'start' ? 'Starting' : running ? (loaded ? `Running ${loaded.id}` : 'Running') : setUp ? 'Stopped' : downloading ? 'Setting up' : 'Not set up'}
-        </span>
+        <div className="ml-auto flex items-center gap-2">
+          <ModelReasoningSubmenu scope="builtin" label="Built-in AI Reasoning" compact />
+          <span className={`text-[11px] px-2 py-0.5 rounded-full border ${running ? 'border-emerald-500/50 text-emerald-300' : setUp ? 'border-slate-600 text-slate-400' : 'border-amber-500/50 text-amber-300'}`}>
+            {busy === 'start' ? 'Starting' : running ? (loaded ? `Running ${loaded.id}` : 'Running') : setUp ? 'Stopped' : downloading ? 'Setting up' : 'Not set up'}
+          </span>
+        </div>
       </div>
 
       {error && (

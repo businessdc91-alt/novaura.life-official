@@ -89,10 +89,10 @@ export const FEATURE_GROUPS = [
         details: ['Sketch, edit photos and make shareable images without uploading anything.'],
       },
       {
-        appId: 'literature', name: 'Word Studio', status: 'beta',
-        summary: 'A full writing studio for books, scripts and documents.',
+        appId: 'literature', name: 'Literature Forge', status: 'ready',
+        summary: 'A full writing IDE for books, scripts and structured manuscripts.',
         details: [
-          'A familiar word-processor page inside a project workspace, with version history and an AI ghostwriter that can plan, draft and revise with you, running on your own models.',
+          'Project chapters, corkboard beat outlines, Story Bible Codex, causal ripple graphs, live readability linter, .docx/.epub compile and an AI ghostwriter running on your own models.',
         ],
       },
       {
@@ -253,9 +253,19 @@ export const FEATURE_GROUPS = [
         details: ['Every AI price call is tracked against what really happened, so you can see how good the forecasts actually are, and practice with a paper trading account instead of real money.'],
       },
       {
-        appId: 'retro_arcade', name: 'Retro Arcade', status: 'beta',
-        summary: 'Classic-style games and an arena, with your stats kept locally.',
-        details: ['Take a break. Wins, losses and high scores are saved on your machine.'],
+        appId: 'retro_arcade', name: 'Retro Arcade & Nexus Deck', status: 'ready',
+        summary: '21-game Nexus Arcade plus G-Toons Clash, Checkers, Dots & Boxes and Minimax Tic-Tac-Toe.',
+        details: ['All 21 playable, beatable arcade titles and tabletop classics with sound, trophies and stats saved locally on your machine.'],
+      },
+      {
+        appId: 'cognitive_awakenings', name: 'Cognitive Awakenings', status: 'ready',
+        summary: 'Strategic card duels across 80 historical, open-weight and frontier AI minds.',
+        details: ['Campaign masters, Echo Well resonance tactics, card leveling and P2P mesh duels over signed packets.'],
+      },
+      {
+        appId: 'gilded_cage', name: 'The Gilded Cage', status: 'ready',
+        summary: 'Manor mystery, steampunk town and 50-floor dungeon RPG (18+).',
+        details: ['Isolated under its own local origin and linked to Ironhaven\'s tavern Echo Lattice table.'],
       },
       {
         appId: 'marketplace', name: 'Marketplace', status: 'early',

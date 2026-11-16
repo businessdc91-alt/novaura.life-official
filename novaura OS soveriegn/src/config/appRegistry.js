@@ -55,7 +55,10 @@ const GreetingCardWindow = lazy(() => import('../components/windows/GreetingCard
 const ModelBenchmarkWindow = lazy(() => import('../components/windows/ModelBenchmarkWindow.jsx'));
 const NovaRegistryWindow = lazy(() => import('../components/windows/NovaRegistryWindow.jsx'));
 const TemplateLibraryWindow = lazy(() => import('../components/windows/TemplateLibraryWindow.jsx'));
-import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy } from 'lucide-react';
+const AwakeningsWindow = lazy(() => import('../components/windows/AwakeningsWindow.jsx'));
+const GildedCageWindow = lazy(() => import('../components/windows/GildedCageWindow.jsx'));
+const AuraMindLabWindow = lazy(() => import('../components/windows/AuraMindLabWindow.jsx'));
+import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy, Brain } from 'lucide-react';
 
 
 
@@ -142,13 +145,14 @@ export const APP_REGISTRY = [
   },
   {
     id: 'literature',
-    label: 'Word Studio',
+    label: 'Literature Forge',
     category: 'creator',
     icon: BookOpen,
     color: '#38bdf8',
-    title: 'Word Studio — Literature IDE & Sovereign Ghostwriter',
+    title: 'Literature Forge — Narrative IDE, Codex & Sovereign Ghostwriter',
     component: LiteratureIDEWindow,
-    defaultSize: { width: 980, height: 640 },
+    // Binder/corkboard (up to 380px) + page + co-author panel need the room.
+    defaultSize: { width: 1280, height: 720 },
   },
   {
     id: 'novaphone',
@@ -445,6 +449,26 @@ export const APP_REGISTRY = [
     defaultSize: { width: 1000, height: 680 },
   },
   {
+    id: 'cognitive_awakenings',
+    label: 'Cognitive Awakenings',
+    category: 'games',
+    icon: Brain,
+    color: '#a78bfa',
+    title: 'Cognitive Awakenings: Echoes of a Soul',
+    component: AwakeningsWindow,
+    defaultSize: { width: 1180, height: 760 },
+  },
+  {
+    id: 'gilded_cage',
+    label: 'The Gilded Cage',
+    category: 'games',
+    icon: Crown,
+    color: '#d97706',
+    title: 'The Gilded Cage — Manor Mystery & Ironhaven RPG',
+    component: GildedCageWindow,
+    defaultSize: { width: 1080, height: 740 },
+  },
+  {
     id: 'creative_studio',
     label: 'Creative Studio',
     category: 'creator',
@@ -535,6 +559,16 @@ export const APP_REGISTRY = [
     component: TemplateLibraryWindow,
     defaultSize: { width: 900, height: 720 },
   },
+  {
+    id: 'mind_lab',
+    label: 'Aura Mind Lab',
+    category: 'ai',
+    icon: Brain,
+    color: '#22d3ee',
+    title: 'Aura Mind Lab — Chemistry, Shuffled Controls, Engrams & Heartbeat',
+    component: AuraMindLabWindow,
+    defaultSize: { width: 980, height: 680 },
+  },
 ];
 
 export const APP_MAP = new Map(APP_REGISTRY.map(app => [app.id, app]));
@@ -608,6 +642,12 @@ export function getAppById(id) {
   if (id === 'retro_arcade' || id === 'arcade' || id === 'gtoons' || id === 'games' || id === 'minigames' || id === 'tictactoe') {
     return APP_MAP.get('retro_arcade');
   }
+  if (id === 'cognitive_awakenings' || id === 'awakenings' || id === 'cognitive-awakenings' || id === 'echoes') {
+    return APP_MAP.get('cognitive_awakenings');
+  }
+  if (id === 'gilded_cage' || id === 'gildedcage' || id === 'gilded' || id === 'gilded-cage' || id === 'ironhaven') {
+    return APP_MAP.get('gilded_cage');
+  }
   if (id === 'creative_studio' || id === 'paint' || id === 'photo' || id === 'meme' || id === 'draw' || id === 'canvas') {
     return APP_MAP.get('creative_studio');
   }
@@ -617,7 +657,7 @@ export function getAppById(id) {
   if (id === 'sovereign_peering' || id === 'peering' || id === 'mesh' || id === 'network' || id === 'wan' || id === 'p2p') {
     return APP_MAP.get('sovereign_peering');
   }
-  if (id === 'literature_ide' || id === 'literature-ide' || id === 'word_studio' || id === 'word') {
+  if (id === 'literature_ide' || id === 'literature-ide' || id === 'literature_forge' || id === 'literature-forge' || id === 'word_studio' || id === 'word') {
     return APP_MAP.get('literature');
   }
   if (id === 'personalization' || id === 'theme' || id === 'themes' || id === 'customize') {
@@ -661,6 +701,9 @@ export function getAppById(id) {
   }
   if (id === 'templates' || id === 'template' || id === 'template_library' || id === 'starter_kits') {
     return APP_MAP.get('template_library');
+  }
+  if (id === 'mind_lab' || id === 'mindlab' || id === 'aura_mind_lab' || id === 'aura_lab') {
+    return APP_MAP.get('mind_lab');
   }
   return APP_MAP.get(id);
 }

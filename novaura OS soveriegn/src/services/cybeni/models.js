@@ -78,10 +78,24 @@ const EXCHANGE_TIMEOUT_MS = 45 * 60 * 1000;
  * Always keep the system message: without one, LM Studio and Ollama fall back to
  * the model's own preset system prompt, which may be a roleplay persona.
  */
-export async function runModel(key, messages, { maxTokens = 4096, temperature = 0.3, jsonSchema } = {}) {
+export async function runModel(
+  key,
+  messages,
+  { maxTokens = 4096, temperature = 0.3, jsonSchema, think, reasoningEffort, effort, scope, strictMaxTokens } = {}
+) {
   const k = String(key || '');
+  const opts = {
+    maxTokens,
+    temperature,
+    jsonSchema,
+    ...(typeof think === 'boolean' ? { think } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(effort ? { effort } : {}),
+    ...(scope ? { scope } : {}),
+    ...(strictMaxTokens ? { strictMaxTokens } : {}),
+  };
   if (k.startsWith('local|')) {
-    return runLocalChat(k.slice(6), messages, { maxTokens, temperature, jsonSchema });
+    return runLocalChat(k.slice(6), messages, opts);
   }
   if (k.startsWith('exchange|')) {
     const [, keyId, ...rest] = k.split('|');
@@ -90,7 +104,7 @@ export async function runModel(key, messages, { maxTokens = 4096, temperature = 
   if (k.startsWith('cloud|')) {
     if (!kernel?.ai?.chat) throw new Error('The AI subsystem is not ready yet.');
     const [, provider, ...model] = k.split('|');
-    return kernel.ai.chat(messages, { provider, model: model.join('|') || undefined, maxTokens, temperature, jsonSchema, useRag: false });
+    return kernel.ai.chat(messages, { provider, model: model.join('|') || undefined, useRag: false, ...opts });
   }
   throw new Error('No model chosen for this step.');
 }

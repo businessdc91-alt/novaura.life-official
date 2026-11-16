@@ -1,5 +1,6 @@
 import CloudKeysPanel from './settings/CloudKeysPanel.jsx';
 import BackupPanel from './settings/BackupPanel.jsx';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 import React, { useState, useEffect } from 'react';
 import {
   Settings, Key, Cpu, HardDrive, ShieldCheck, Download,
@@ -773,19 +774,22 @@ ${betaForm.description || 'No steps provided.'}
 
             {/* Local Model Status */}
             <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-cyan-400" />
                   <span className="text-xs font-semibold text-slate-200">Local AI Server (Ollama / LM Studio)</span>
                 </div>
-                <button
-                  onClick={handleProbeLocalAI}
-                  disabled={probingLocal}
-                  className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs transition-colors"
-                >
-                  <RefreshCw className={`w-3 h-3 ${probingLocal ? 'animate-spin' : ''}`} />
-                  <span>Probe Local Models</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <ModelReasoningSubmenu scope="global" label="OS Default Model Reasoning" />
+                  <button
+                    onClick={handleProbeLocalAI}
+                    disabled={probingLocal}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs transition-colors"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${probingLocal ? 'animate-spin' : ''}`} />
+                    <span>Probe Local Models</span>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 text-xs">
@@ -802,15 +806,28 @@ ${betaForm.description || 'No steps provided.'}
               </div>
 
               {localStatus?.models?.length > 0 && (
-                <div>
-                  <span className="text-[11px] text-slate-400 mb-1 block">Detected Local Models:</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {localStatus.models.map(m => (
-                      <span key={m.id} className="text-[11px] px-2 py-0.5 bg-slate-800 rounded border border-slate-700 text-slate-300">
-                        {m.name} ({m.backend})
-                      </span>
-                    ))}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400">Active OS Local Model:</span>
+                    <ModelReasoningSubmenu scope="global" label="Thinking & Reasoning Effort" compact />
                   </div>
+                  <select
+                    value={localStatus?.selectedModel || ''}
+                    onChange={(e) => {
+                      const chosen = localStatus.models.find(m => m.id === e.target.value);
+                      if (!chosen) return;
+                      kernel?.localModel?.setBackend?.(chosen.backend);
+                      kernel?.localModel?.setModel?.(chosen.id);
+                      setLocalStatus(prev => ({ ...(prev || {}), backend: chosen.backend, selectedModel: chosen.id }));
+                    }}
+                    className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                  >
+                    {localStatus.models.map(m => (
+                      <option key={`${m.backend}:${m.id}`} value={m.id}>
+                        {m.name} ({m.backend})
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
             </div>

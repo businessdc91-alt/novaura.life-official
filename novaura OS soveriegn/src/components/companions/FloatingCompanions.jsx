@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles, Bot, Send, X, Minimize2, Maximize2, Shield,
-  ChevronRight, Mic, CornerDownLeft, Loader2, RefreshCw, Terminal
+  ChevronRight, Mic, CornerDownLeft, Loader2, RefreshCw, Terminal, Brain
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { kernel as kernelSingleton } from '../../kernel/NovaKernel.js';
 import { db } from '../../database/sovereignDatabase.js';
+import { readCore } from '../../services/auraCore/auraCore.js';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 export default function FloatingCompanions() {
   const rawKernel = useKernel();
@@ -16,12 +18,27 @@ export default function FloatingCompanions() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [auraCoreState, setAuraCoreState] = useState(null);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
     loadChatHistory();
+  }, [activePersona]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const syncCore = () => {
+      if (activePersona !== 'aura') return;
+      readCore('aura').then(c => { if (!cancelled && c) setAuraCoreState(c); }).catch(() => {});
+    };
+    syncCore();
+    window.addEventListener('novaura:aura_core_updated', syncCore);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('novaura:aura_core_updated', syncCore);
+    };
   }, [activePersona]);
 
   useEffect(() => {
@@ -128,6 +145,20 @@ export default function FloatingCompanions() {
 
             {/* Window controls */}
             <div className="flex items-center gap-1">
+              <ModelReasoningSubmenu
+                scope={`companion:${activePersona}`}
+                label={activePersona === 'aura' ? 'Aura Reasoning' : 'Nova Reasoning'}
+                compact
+              />
+              {activePersona === 'aura' && (
+                <button
+                  onClick={() => kernel?.wm?.open?.('mind_lab', 'Aura Mind Lab')}
+                  className="p-1.5 text-cyan-300 hover:text-cyan-100 hover:bg-slate-800 rounded-lg transition-colors"
+                  title="Open Aura Mind Lab & Chemistry Telemetry"
+                >
+                  <Brain className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
@@ -144,6 +175,15 @@ export default function FloatingCompanions() {
               </button>
             </div>
           </div>
+
+          {activePersona === 'aura' && auraCoreState?.chemistry && (
+            <div className="px-3 py-1 bg-cyan-950/30 border-b border-cyan-900/40 flex items-center justify-between text-[10px] font-mono text-cyan-200 shrink-0">
+              <span>{auraCoreState.bias?.voice || 'STEADY'} · Trust {Math.round((auraCoreState.trust ?? 0.5) * 100)}%</span>
+              <span className="text-slate-400">
+                OX {Math.round(auraCoreState.chemistry.oxytocin)} · DA {Math.round(auraCoreState.chemistry.dopamine)} · CO {Math.round(auraCoreState.chemistry.cortisol)} · EN {Math.round(auraCoreState.chemistry.energy)}%
+              </span>
+            </div>
+          )}
 
           {/* Quick Action Chips */}
           <div className="px-3 py-2 bg-slate-900/40 border-b border-slate-800/80 flex items-center gap-1.5 overflow-x-auto text-[10px] shrink-0 text-slate-300">

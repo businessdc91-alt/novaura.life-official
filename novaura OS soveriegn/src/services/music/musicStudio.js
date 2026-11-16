@@ -44,7 +44,7 @@ async function textModel() {
 async function askText(system, user, { maxTokens = 900, temperature = 0.9 } = {}) {
   const model = await textModel();
   if (!model) throw new Error('No text model is available. Start LM Studio or Ollama, or pick one in Music Studio settings.');
-  return runModel(model, [{ role: 'system', content: system }, { role: 'user', content: user }], { maxTokens, temperature });
+  return runModel(model, [{ role: 'system', content: system }, { role: 'user', content: user }], { maxTokens, temperature, scope: 'music' });
 }
 
 // ── AI helpers ─────────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ import '../services/forge/userApps';
 // Asks the relay for marketplace listings published while this node was offline.
 import '../services/meshArchiveSync';
 import '../games/relayDuel/relayDuelMesh'; // Relay Duel challenges arrive while the game is closed
+import '../games/awakenings/awakeningsMesh'; // Cognitive Awakenings challenges arrive while the game is closed
 import '../services/holoChessMesh'; // and HoloChess challenges too
 import '../services/greetingCardMesh'; // and greeting cards
 import '../services/meshTransfers'; // and file offers, which wait for the user to accept

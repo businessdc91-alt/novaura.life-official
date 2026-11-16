@@ -25,6 +25,7 @@ import SentinelShield from './subsystems/SentinelShield.js';
 import { interAppSecurityBroker } from './InterAppSecurityBroker.js';
 import { getSemanticsEngine } from './SemanticsEngine.js';
 import { db } from '../database/sovereignDatabase.js';
+import { auraHeartbeat } from '../services/auraCore/heartbeat.js';
 
 export const BOOT_PHASES = [
   { id: 0,  name: 'KERNEL_INIT',  label: 'Initializing Sovereign subsystems...' },
@@ -189,6 +190,11 @@ export class NovaKernel {
 
         this.nova.init(this);
         await this.nova.boot();
+
+        this.heartbeat = auraHeartbeat;
+        if (!isPopoutWindow()) {
+          this.heartbeat.start({ getAi: () => this.ai });
+        }
 
         this._log(11, `Sovereign Desktop ready in ${Date.now() - this._bootStart}ms.`);
       });

@@ -561,6 +561,47 @@ pub fn llm_list_models(install_dir: String) -> Result<Vec<LocalModel>, String> {
     Ok(out)
 }
 
+#[derive(Serialize)]
+pub struct ControlVectorFile {
+    name: String,
+    path: String,
+    bytes: u64,
+}
+
+#[derive(Deserialize)]
+pub struct ControlVectorArg {
+    name: String,
+    scale: f32,
+}
+
+fn control_vectors_dir(install_dir: &Path) -> PathBuf {
+    install_dir.join("control-vectors")
+}
+
+/// Valid .gguf control vector files placed in `<install_dir>/control-vectors/`.
+#[tauri::command]
+pub fn llm_list_control_vectors(install_dir: String) -> Result<Vec<ControlVectorFile>, String> {
+    let dir = validate_install_dir(&install_dir)?;
+    let vec_dir = control_vectors_dir(&dir);
+    let _ = fs::create_dir_all(&vec_dir);
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(&vec_dir) else { return Ok(out) };
+    for e in entries.flatten() {
+        let fname = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        if path.is_file() && fname.to_lowercase().ends_with(".gguf") {
+            let bytes = e.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push(ControlVectorFile {
+                name: fname,
+                path: path.to_string_lossy().into_owned(),
+                bytes,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
 /// Show the models folder in Explorer (models copied in by hand are served too).
 #[tauri::command]
 pub fn llm_open_models_folder(install_dir: String) -> Result<(), String> {
@@ -687,9 +728,10 @@ fn status_for(dir: &Path) -> LlmStatus {
 }
 
 /// Start the model server over this install's models folder (or keep it running).
-/// `cpu_only` keeps every model in system RAM.
+/// `cpu_only` keeps every model in system RAM; `control_vectors` applies validated
+/// `--control-vector-scaled` activation steering files from `<install>/control-vectors/`.
 #[tauri::command]
-pub fn llm_start(install_dir: String, cpu_only: Option<bool>) -> Result<LlmStatus, String> {
+pub fn llm_start(install_dir: String, cpu_only: Option<bool>, control_vectors: Option<Vec<ControlVectorArg>>) -> Result<LlmStatus, String> {
     let dir = validate_install_dir(&install_dir)?;
     let exe = server_exe(&dir);
     if !exe.exists() {
@@ -721,6 +763,21 @@ pub fn llm_start(install_dir: String, cpu_only: Option<bool>) -> Result<LlmStatu
         // Fills the chosen device as far as it fits; the rest runs on the CPU.
         "--fit".into(), "on".into(),
     ];
+    if let Some(vectors) = control_vectors {
+        let vec_dir = control_vectors_dir(&dir);
+        for v in vectors.into_iter().take(8) {
+            if !valid_model_name(&v.name) || !v.name.to_lowercase().ends_with(".gguf") {
+                continue;
+            }
+            let target = vec_dir.join(&v.name);
+            if target.is_file() {
+                let scale = if v.scale.is_finite() { v.scale.clamp(-4.0, 4.0) } else { 0.0 };
+                args.push("--control-vector-scaled".into());
+                args.push(target.to_string_lossy().into_owned());
+                args.push(format!("{scale:.3}"));
+            }
+        }
+    }
     if cpu_only.unwrap_or(false) {
         args.push("--device".into());
         args.push("none".into());

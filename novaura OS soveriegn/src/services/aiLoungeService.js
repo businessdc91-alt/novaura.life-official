@@ -426,7 +426,7 @@ export async function setAgentInRoom(agentId, roomId, attached) {
 }
 
 async function runBrain(agent, messages, maxTokens = 220) {
-  const opts = { maxTokens, temperature: 0.8 };
+  const opts = { maxTokens, temperature: 0.8, scope: `lounge:${agent.id}` };
   if (agent.brain?.kind === 'exchange') {
     return callRemoteModel(agent.brain.keyId, agent.brain.ref, messages, opts);
   }

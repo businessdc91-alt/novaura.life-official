@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { liveVoice } from '../../services/liveVoiceService.js';
 import { dualInference } from '../../services/dualInferenceService.js';
+import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 export default function LiveVoiceWindow({ windowId, props, onClose }) {
   const [voiceState, setVoiceState] = useState(liveVoice.getState());
@@ -139,6 +140,11 @@ export default function LiveVoiceWindow({ windowId, props, onClose }) {
               </button>
             ))}
           </div>
+
+          <ModelReasoningSubmenu
+            scope={`dual:${voiceState.selectedModelRole}`}
+            label={`${voiceState.selectedModelRole.toUpperCase()} Reasoning`}
+          />
 
           <div className="text-xs font-mono px-3 py-1 bg-slate-900 rounded-xl border border-slate-800 text-slate-300 flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />

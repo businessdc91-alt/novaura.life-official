@@ -39,14 +39,52 @@ export function appraisalMessages(userText, reply) {
   ];
 }
 
+/** Clean reasoning blocks and scan balanced JSON objects until one parses. */
+function extractJsonObject(text) {
+  if (typeof text !== 'string') return null;
+  const cleaned = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/^<think>[\s\S]*$/i, '');
+  let fallback = null;
+  for (let start = cleaned.indexOf('{'); start !== -1; start = cleaned.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (escape) { escape = false; continue; }
+      if (ch === '\\' && inString) { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            const candidate = JSON.parse(cleaned.slice(start, i + 1));
+            if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+              if (APPRAISAL_KEYS.every(k => k in candidate)) return candidate;
+              fallback ??= candidate;
+            }
+          } catch { /* try next balanced block */ }
+          break;
+        }
+      }
+    }
+  }
+  return fallback;
+}
+
+const finiteRating = (v) => (
+  v !== null && v !== undefined && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v))
+);
+
 /** The ratings from a model's answer, or null if it didn't give all six. Accepts 0-10 and 0-100 scales. */
 export function parseAppraisal(text) {
-  const match = typeof text === 'string' ? text.match(/\{[\s\S]*\}/) : null;
-  if (!match) return null;
-  let raw;
-  try { raw = JSON.parse(match[0]); } catch { return null; }
-  const values = APPRAISAL_KEYS.map(k => Number(raw?.[k]));
-  if (!values.every(Number.isFinite)) return null;
+  const raw = extractJsonObject(text);
+  if (!raw) return null;
+  if (!APPRAISAL_KEYS.every(k => finiteRating(raw[k]))) return null;
+  const values = APPRAISAL_KEYS.map(k => Number(raw[k]));
   const top = Math.max(...values);
   const scale = top > 10 ? 100 : top > 1 ? 10 : 1;
   return Object.fromEntries(APPRAISAL_KEYS.map((k, i) => [k, clamp01(values[i] / scale)]));
