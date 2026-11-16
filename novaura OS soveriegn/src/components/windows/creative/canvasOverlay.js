@@ -7,6 +7,7 @@ import { renderShape } from '../../../creative/shapes.js';
 import { handlesFor } from '../../../creative/transformHandles.js';
 import { shapePreview } from '../../../creative/tools/shape.js';
 import { gradientPreview } from '../../../creative/tools/gradient.js';
+import { textBox } from '../../../creative/text.js';
 
 const ACCENT = '#22d3ee';
 
@@ -57,7 +58,18 @@ export function makeOverlay(store) {
       ctx.stroke();
       ctx.restore();
     }
-    if (store.getState().tool !== 'shape') return;
+    const { tool } = store.getState();
+    const selected = getLayer(session.doc, session.doc.activeLayerId);
+    if (selected?.kind === 'text' && selected.visible && (tool === 'text' || tool === 'move')) {
+      const box = textBox(selected);
+      ctx.save();
+      ctx.lineWidth = 1 / z;
+      ctx.strokeStyle = ACCENT;
+      ctx.setLineDash([4 / z, 3 / z]);
+      ctx.strokeRect(box.x, box.y, Math.max(box.w, 4 / z), box.h);
+      ctx.restore();
+    }
+    if (tool !== 'shape') return;
     const layer = getLayer(session.doc, session.doc.activeLayerId);
     if (!layer || layer.kind !== 'shape' || !layer.visible) return;
     const handles = handlesFor(layer, { rotateOffset: 24 / z });

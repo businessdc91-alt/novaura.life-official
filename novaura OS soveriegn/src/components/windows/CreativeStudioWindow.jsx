@@ -18,6 +18,7 @@ import HistoryPanel from './creative/HistoryPanel.jsx';
 import { makeOverlay } from './creative/canvasOverlay.js';
 import '../../creative/tools/shape.js';
 import '../../creative/tools/gradient.js';
+import '../../creative/tools/text.js';
 import PhotoPanel from './creative/PhotoPanel.jsx';
 import LegacyMemeTab from './creative/LegacyMemeTab.jsx';
 

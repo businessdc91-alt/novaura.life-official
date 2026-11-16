@@ -11,6 +11,7 @@ import { createHistory } from './history.js';
 import { createCompositor } from './compositor.js';
 // Every kind of layer registers how it is drawn; load them all with the store.
 import './shapes.js';
+import './text.js';
 import './masks.js';
 import './adjustmentLayers.js';
 
@@ -31,6 +32,7 @@ export function createStudioStore({ historyBytes = Infinity } = {}) {
     shape: { kind: 'rect', stroke: false, strokeWidth: 4 },
     maskView: null,
     busy: null, // { label, progress, cancel } while a long job (a filter) runs
+    textFocus: null, // a text layer id whose text box should take focus
   };
 
   function set(patch) {

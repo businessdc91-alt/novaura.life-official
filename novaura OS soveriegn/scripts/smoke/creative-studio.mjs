@@ -152,6 +152,22 @@ try {
   await b.screenshot(join(OUT, 'c6_mask_deleted.png'));
   check('and the layer shows again', unmasked.join() === starPixel.join(), String(unmasked));
 
+  // ── Text ──
+  await b.key('t', 'KeyT', 84);
+  await sleep(150);
+  await b.click(cx + 100, cy + 80);
+  await sleep(300);
+  check('a click with T adds a text layer and focuses its text box', await b.evaluate(`document.activeElement?.matches('[data-text-input]')`));
+  await b.send('Input.insertText', { text: 'Hello Sovereign' });
+  await sleep(400);
+  check('typing renames the layer after its words', (await layerNames())[0] === 'Hello Sovereign', (await layerNames()).join());
+  check('typing in the text box is one history step', /Paint · Edit text/.test(await lastStep()), await lastStep());
+  await b.key('z', 'KeyZ', 90, 2);
+  await sleep(200);
+  check('Ctrl+Z inside the text box edits the text, not the picture history', /Paint · Edit text/.test(await lastStep()));
+  await b.screenshot(join(OUT, 'c8_text.png'));
+  await b.click(cx - 200, cy + 150);
+
   // ── Photo: adjustment layers ──
   await clickOn('[data-tab="photo"]');
   const beforeAdjust = await pixelAt(cx + 200, cy + 100);
