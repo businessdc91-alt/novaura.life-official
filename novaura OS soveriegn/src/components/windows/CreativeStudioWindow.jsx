@@ -29,6 +29,7 @@ import { loadBudgets } from '../../creative/memory.js';
 import FileMenu from './creative/FileMenu.jsx';
 import ExportDialog from './creative/ExportDialog.jsx';
 import { openFileBlob, saveProject, downloadProject, openVaultFile } from '../../creative/io/projectFiles.js';
+import { classifyDrop, openImageFile, placeImage, scaledNotice } from '../../creative/io/raster.js';
 import { startRecovery, listRecovery, takeRecovery, clearRecovery } from '../../creative/io/recovery.js';
 import RecoveryPrompt from './creative/RecoveryPrompt.jsx';
 import OpenReport from './creative/OpenReport.jsx';
@@ -144,6 +145,23 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
   const openFile = useCallback(async (file) => {
     try { replacePristine(await openFileBlob(store, file, file.name)); } catch (err) { store.notify(err.message); }
   }, [store, replacePristine]);
+  // Files dropped on the tabs open; images dropped on the canvas are placed as layers.
+  const dropFiles = useCallback(async (target, files) => {
+    for (const { file, action } of classifyDrop(target, files)) {
+      if (action === 'reject') { store.notify(`"${file.name}" isn't something Creative Studio can open.`); continue; }
+      const session = store.active();
+      if (action === 'open' || !session) { await openFile(file); continue; }
+      try {
+        const opened = await openImageFile(file, file.name);
+        const r = placeImage(session, opened, file.name, { tab: store.getState().tab });
+        if (!r.ok) store.notify(r.reason);
+        const note = scaledNotice(opened);
+        if (note) store.notify(note);
+      } catch (err) {
+        store.notify(err.message);
+      }
+    }
+  }, [store, openFile]);
   const lastOpenId = useRef(null);
   const openFromFiles = useCallback(async (fileId, openId) => {
     if (openId && lastOpenId.current === openId) return; // the same handoff, arriving as props and as an event
@@ -263,14 +281,14 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
         </div>
       </header>
 
-      <DocumentTabs store={store} onNew={() => setNewDocOpen(true)} onClose={requestClose} />
+      <DocumentTabs store={store} onNew={() => setNewDocOpen(true)} onClose={requestClose} onDropFiles={dropFiles} />
 
       <div className="flex-1 min-h-0 flex">
         {tab === 'paint' && <PaintPanel store={store} />}
         {tab === 'photo' && <PhotoPanel store={store} />}
         {tab === 'meme' && <MemePanel store={store} />}
         {hasDocument ? (
-          <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} onZoom={setZoom} />
+          <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} onZoom={setZoom} onDropFiles={dropFiles} />
         ) : (
           <div className="flex-1 flex items-center justify-center bg-[#0b0f19]">
             <div className="text-center space-y-3">

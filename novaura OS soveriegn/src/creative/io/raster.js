@@ -87,3 +87,37 @@ export function scaledNotice(opened) {
   if (!opened.scaledFrom) return null;
   return `Opened at ${opened.width}×${opened.height} — the original ${opened.scaledFrom.width}×${opened.scaledFrom.height} is over the 16384 px limit.`;
 }
+
+// ── Exporting flat images ─────────────────────────────────────────────────────
+
+/** The flattened picture as PNG, JPG (on white) or WebP, optionally scaled 2× or 3×. */
+export async function exportRaster(doc, { type = 'image/png', quality = 0.92, scale = 1 } = {}) {
+  const w = Math.round(doc.width * scale);
+  const h = Math.round(doc.height * scale);
+  if (w > MAX_SIDE || h > MAX_SIDE) throw new Error('That scale would make the image larger than 16384 px.');
+  const { flatten } = await import('../compositor.js');
+  const flat = flatten(doc);
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  if (type === 'image/jpeg') { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); } // JPG has no transparency
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(flat.canvas, 0, 0, w, h);
+  return canvas.convertToBlob(type === 'image/png' ? { type } : { type, quality });
+}
+
+// ── Dropping files on the studio ──────────────────────────────────────────────
+
+const PROJECT_OR_PSD = /\.(psd|novaart)$/i;
+const IMAGE_FILE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+
+/**
+ * Where dropped files go: PSDs and projects always open as documents; images open
+ * when dropped on the tabs and are placed as layers when dropped on the canvas.
+ */
+export function classifyDrop(target, files) {
+  return [...files].map((file) => {
+    if (PROJECT_OR_PSD.test(file.name)) return { file, action: 'open' };
+    if (IMAGE_FILE.test(file.name) || /^image\//.test(file.type || '')) return { file, action: target === 'canvas' ? 'place' : 'open' };
+    return { file, action: 'reject' };
+  });
+}

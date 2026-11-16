@@ -4,11 +4,16 @@ import React from 'react';
 import { Plus, X } from 'lucide-react';
 import { useStudio } from './useStudio.js';
 
-export default function DocumentTabs({ store, onNew, onClose }) {
+export default function DocumentTabs({ store, onNew, onClose, onDropFiles = null }) {
   useStudio(store, s => s.version);
   const { sessions, activeId } = store.getState();
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
   return (
-    <div className="flex items-end gap-0.5 px-2 pt-1.5 border-b border-slate-800 bg-slate-900/40 overflow-x-auto shrink-0">
+    <div
+      className="flex items-end gap-0.5 px-2 pt-1.5 border-b border-slate-800 bg-slate-900/40 overflow-x-auto shrink-0" data-drop-target="tabs"
+      onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); onDropFiles?.('tabs', e.dataTransfer.files); }}
+    >
       <div role="tablist" aria-label="Open documents" className="flex items-end gap-0.5">
         {sessions.map(s => (
           <div

@@ -193,6 +193,7 @@ try {
   await clickOn('[data-filter="addNoise"]');
   await clickOn('[data-action="apply-filter"]');
   check('a filter finishes on the workers', await b.waitFor(`!document.querySelector('[data-busy]') && /Photo · Add Noise/.test([...document.querySelectorAll('[data-step-index]')].pop()?.textContent || '')`, 20000), await lastStep());
+  await sleep(400); // let the next frame draw the filtered layer
   check('and changes the picture', (await pixelAt(cx + 200, cy + 100)).join() !== beforeAdjust.join());
   await b.key('z', 'KeyZ', 90, 2);
   await sleep(300);
@@ -325,6 +326,29 @@ try {
   await clickOn('[data-format="svg"]');
   await clickOn('[data-action="run-export"]');
   check('exporting an SVG finishes', await b.waitFor(`/Exported fixture-poster\\.svg/.test(document.querySelector('[role=status]')?.textContent || '')`, 20000));
+  await clickOn('[data-menu="file"]');
+  await clickOn('[data-action="file-export"]');
+  await clickOn('[data-format="jpg"]');
+  await clickOn('[data-export-scale="2"]');
+  await clickOn('[data-action="run-export"]');
+  check('exporting a 2× JPG finishes', await b.waitFor(`/Exported fixture-poster\\.jpg/.test(document.querySelector('[role=status]')?.textContent || '')`, 20000));
+
+  // ── Dropping files ──
+  const { encodePng } = await import('../../src/creative/io/png.js');
+  const tilePath = join(OUT, 'dropped-tile.png');
+  writeFileSync(tilePath, await encodePng(swatch(40, 30, [200, 40, 160, 255])));
+  const notesPath = join(OUT, 'notes.txt');
+  writeFileSync(notesPath, 'not a picture');
+  const canvasBox = await centre('[data-drop-target="canvas"]');
+  const drop = async (files) => {
+    const data = { items: [], files, dragOperationsMask: 1 };
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await b.send('Input.dispatchDragEvent', { type, x: canvasBox.x, y: canvasBox.y, data });
+    await sleep(700);
+  };
+  await drop([tilePath]);
+  check('an image dropped on the canvas is placed as a layer', (await layerNames())[0] === 'dropped-tile', (await layerNames()).join());
+  await drop([notesPath]);
+  check('a file that is not an image is refused by name', /"notes\.txt" isn't something Creative Studio can open/.test(await b.evaluate(`document.querySelector('[role=status]')?.textContent || ''`)));
 
   const fresh = b.errors.slice(baseline);
   check('no page errors after opening the studio', fresh.length === 0, fresh.slice(0, 4).join(' | '));

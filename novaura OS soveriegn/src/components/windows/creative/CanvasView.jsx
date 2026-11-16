@@ -24,7 +24,7 @@ function checker(ctx) {
   return ctx.createPattern(checkerTile, 'repeat');
 }
 
-export default function CanvasView({ store, rootRef, overlay = null, isActive = null, onZoom = null }) {
+export default function CanvasView({ store, rootRef, overlay = null, isActive = null, onZoom = null, onDropFiles = null }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const viewRef = useRef({ zoom: 1, panX: 0, panY: 0 });
@@ -199,8 +199,13 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
 
   const cursor = spaceDown ? 'grab' : (TOOLS[tool]?.cursor || 'default');
 
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
   return (
-    <div ref={wrapRef} className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#0b0f19]">
+    <div
+      ref={wrapRef} className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#0b0f19]" data-drop-target="canvas"
+      onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); onDropFiles?.('canvas', e.dataTransfer.files); }}
+    >
       <canvas
         ref={canvasRef}
         data-creative-canvas=""
