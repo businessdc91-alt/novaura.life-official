@@ -1,0 +1,15 @@
+# Runs the unit tests of the app's Tauri-free modules. A test binary that links Tauri
+# cannot start on Windows (STATUS_ENTRYPOINT_NOT_FOUND), so these modules are compiled
+# here on their own. Run with: npm run tauri:test
+[package]
+name = "novaura-pure-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1.0", features = ["derive"] }

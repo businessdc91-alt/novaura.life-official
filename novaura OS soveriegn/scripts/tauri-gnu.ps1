@@ -8,6 +8,7 @@
 
   Usage:
     powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode check
+    powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode test [-TestFilter native_build]
     powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode dev
     powershell -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode build [-Bundles nsis|msi|none] [-DebugBuild] [-KeepVersion]
 
@@ -15,8 +16,12 @@
   and only the newest installer is kept, so an old installer can't be run by mistake.
 #>
 param(
-  [ValidateSet('check', 'dev', 'build')]
+  [ValidateSet('check', 'test', 'dev', 'build')]
   [string]$Mode = 'build',
+  # test mode: run only the Rust unit tests whose names contain this text.
+  [string]$TestFilter = '',
+  # test mode: build the tests without running them (warms the cache).
+  [switch]$NoRun,
   [string]$Bundles = 'nsis',
   [switch]$DebugBuild,
   [string]$DriveLetter = 'N:',
@@ -103,6 +108,14 @@ try {
   switch ($Mode) {
     'check' {
       & cargo check --manifest-path "$DriveLetter\src-tauri\Cargo.toml"
+    }
+    'test' {
+      # The app's own test binary links Tauri and cannot start on Windows
+      # (STATUS_ENTRYPOINT_NOT_FOUND), so the Tauri-free modules are tested in pure-tests/.
+      $testArgs = @('test', '--manifest-path', "$DriveLetter\src-tauri\pure-tests\Cargo.toml", '--offline')
+      if ($NoRun) { $testArgs += '--no-run' }
+      if ($TestFilter) { $testArgs += $TestFilter }
+      & cargo @testArgs
     }
     'dev' {
       & npx tauri dev
