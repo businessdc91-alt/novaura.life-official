@@ -38,6 +38,13 @@ for (const text of ['hey, how are you feeling today?', 'I had a rough day, can w
   });
 }
 
+test('no message means no lens (the built-in server bakes this into its startup control vectors)', async () => {
+  settings.clear();
+  const aug = await composeTurnAugmentations({ persona: 'aura' });
+  assert.deepEqual(aug.active.map(a => a.id), []);
+  assert.deepEqual(aug.channelBoosts, { warmth: 0, creativity: 0, caution: 0, focus: 0 });
+});
+
 test('"react" in conversation is not code; React the library is', () => {
   assert.notEqual(classifyTaskIntent('how did that make you react?', { activePersona: 'aura' }).route, 'code_architecture');
   assert.notEqual(classifyTaskIntent('that was an error in judgment on my part', { activePersona: 'aura' }).route, 'code_architecture');

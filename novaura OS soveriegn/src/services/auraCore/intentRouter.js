@@ -124,7 +124,9 @@ export function classifyTaskIntent(userText = '', { activePersona = 'aura', open
       route: 'fast_local',
       confidence: 0.5,
       reasoning: 'Empty prompt defaults to fast local standby.',
-      suggestedAugmentations: ['sovereign_navigator'],
+      recommendedReasoningEffort: null,
+      suggestedAugmentations: [],
+      matched: false,
       requiredAutonomyLevel: AUTONOMY_LEVELS.SUPERVISED,
       source: 'deterministic',
     };
