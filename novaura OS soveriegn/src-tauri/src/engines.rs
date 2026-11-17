@@ -582,9 +582,18 @@ pub fn parse_nvidia_telemetry(text: &str) -> Option<LiveGpuTelemetry> {
     })
 }
 
-/// Fast non-destructive hardware interoception probe (GPU thermal/load/VRAM + host RAM/CPU load).
+/// Non-destructive hardware interoception probe (GPU thermal/load/VRAM + host RAM/CPU load).
+/// Starting nvidia-smi and PowerShell takes a second or two, so it runs on a blocking worker
+/// thread: a synchronous command would run on the main thread and freeze the window while it
+/// waits (the heartbeat and every Aura turn ask for this).
 #[tauri::command]
-pub fn engine_live_telemetry() -> Result<LiveHardwareTelemetry, String> {
+pub async fn engine_live_telemetry() -> Result<LiveHardwareTelemetry, String> {
+    tauri::async_runtime::spawn_blocking(read_live_telemetry)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn read_live_telemetry() -> LiveHardwareTelemetry {
     let mut gpu = None;
     let mut smi = Command::new("nvidia-smi");
     smi.args([
@@ -619,12 +628,12 @@ pub fn engine_live_telemetry() -> Result<LiveHardwareTelemetry, String> {
         }
     }
 
-    Ok(LiveHardwareTelemetry {
+    LiveHardwareTelemetry {
         gpu,
         ram_total_mb,
         ram_free_mb,
         cpu_load_pct,
-    })
+    }
 }
 
 #[cfg(test)]
