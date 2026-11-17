@@ -4,11 +4,12 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { applySomaticNudge, CYCLE_MS, metabolize, restoreChemistry, systemicBias } from './endocrine.js';
-import { consolidateEngrams, listEngrams } from './engramMemory.js';
+import { consolidateEngrams, encodeReflection, listEngrams, replayEngrams, selectReplayCandidates } from './engramMemory.js';
 import { influence } from './influence.js';
 import { getLearnedProfile } from './dynamicLearning.js';
 import { sampleInteroception } from './interoception.js';
 import { LIGHTHOUSE_THRESHOLD_HOURS, readPhoenixMeta } from './phoenixProtocol.js';
+import { mutateSetting } from './coreStore.js';
 
 const DREAMS_KEY = 'aura_core:dreams';
 const MAX_DREAMS = 40;
@@ -100,35 +101,38 @@ export class AuraHeartbeat {
     this._lastTickAt = now;
     this._totalTicks++;
 
-    // 1. Load & metabolize chemistry against learned baselines + sample live hardware interoception
-    const [saved, dynamics, somatic, phoenixMeta] = await Promise.all([
-      db.getSetting(settingKey(this.persona), null).catch(() => null),
+    // 1. Slow reads first (the hardware probe can take a second or two), then metabolize and
+    //    store in one step on whatever is saved by then, so an appraisal that landed during
+    //    the probe is kept.
+    const [dynamics, somatic, phoenixMeta] = await Promise.all([
       getLearnedProfile(this.persona).catch(() => null),
       sampleInteroception({ now }).catch(() => null),
       readPhoenixMeta().catch(() => null),
     ]);
-    const prior = restoreChemistry(saved?.chemistry, now);
-    let settled = metabolize(prior, now, {
+    const metabolismOptions = {
       restingBaselines: dynamics?.learnedBaselines,
       decayMultipliers: dynamics?.learnedDecayRates,
-    });
-    if (somatic?.nudge) {
-      settled = applySomaticNudge(settled, {
-        adrenaline: somatic.nudge.adrenaline * 0.4,
-        cortisol: somatic.nudge.cortisol * 0.4,
-        energy: somatic.nudge.energy * 0.4,
-      }, now, {
-        restingBaselines: dynamics?.learnedBaselines,
-        decayMultipliers: dynamics?.learnedDecayRates,
-      });
-    }
-    if (settled.updatedAt > prior.updatedAt + CYCLE_MS / 2) {
-      await db.setSetting(settingKey(this.persona), {
-        ...(saved || {}),
-        chemistry: settled,
-      }).catch(() => {});
-      this._emitCoreUpdated(settled, saved?.lastAppraisal || null);
-    }
+    };
+    let settled = null;
+    let lastAppraisal = null;
+    let wrote = false;
+    await mutateSetting(settingKey(this.persona), (saved) => {
+      const prior = restoreChemistry(saved?.chemistry, now);
+      settled = metabolize(prior, now, metabolismOptions);
+      if (somatic?.nudge) {
+        settled = applySomaticNudge(settled, {
+          adrenaline: somatic.nudge.adrenaline * 0.4,
+          cortisol: somatic.nudge.cortisol * 0.4,
+          energy: somatic.nudge.energy * 0.4,
+        }, now, metabolismOptions);
+      }
+      lastAppraisal = saved?.lastAppraisal || null;
+      if (!(settled.updatedAt > prior.updatedAt + CYCLE_MS / 2)) return undefined;
+      wrote = true;
+      return { ...(saved && typeof saved === 'object' ? saved : {}), chemistry: settled };
+    }).catch(() => {});
+    if (!settled) settled = restoreChemistry(null, now);
+    if (wrote) this._emitCoreUpdated(settled, lastAppraisal);
 
     // 2. Track idle / boredom / rest / Phoenix Lighthouse state (block 02, block 15, Phoenix)
     const idleMs = Math.max(0, now - this._lastActivityAt);
@@ -169,13 +173,14 @@ export class AuraHeartbeat {
     this._lastConsolidationAt = now;
     const result = await consolidateEngrams(this.persona, now);
     const engrams = await listEngrams(this.persona);
+    // Sleep replays what mattered: the most salient recent memories, not merely the last few.
+    const replayed = selectReplayCandidates(engrams, 5);
     let dream = null;
 
     if (result.total > 0) {
       let reflection = '';
       if (allowModelDream && ai && typeof ai.chat === 'function') {
-        const recentSnippets = engrams
-          .slice(0, 5)
+        const recentSnippets = replayed
           .map(e => `- ${String(e.thought || '').slice(0, 140)}`)
           .join('\n');
         if (recentSnippets) {
@@ -205,16 +210,29 @@ export class AuraHeartbeat {
         }
       }
 
-      if (reflection && String(reflection).trim()) {
+      const text = String(reflection || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+      if (text) {
+        const sourceIds = replayed.map(e => e.id);
+        // The dream feeds back: replayed memories strengthen and link, and the dream itself is
+        // kept as her reflection, so it can come back to her in a later conversation.
+        const replay = await replayEngrams(this.persona, sourceIds).catch(() => ({ replayed: 0, linksAdded: 0 }));
+        const kept = await encodeReflection({
+          persona: this.persona,
+          text,
+          sourceIds,
+          themes: result.topThemes,
+          now,
+        }).catch(() => null);
         dream = {
           id: `dream_${now}`,
           at: now,
           themes: result.topThemes,
-          linksAdded: result.linksAdded,
-          reflection: String(reflection).trim(),
+          linksAdded: result.linksAdded + replay.linksAdded,
+          replayedIds: sourceIds,
+          reflectionEngramId: kept?.id || null,
+          reflection: text,
         };
-        const priorDreams = await listDreams();
-        await db.setSetting(DREAMS_KEY, [dream, ...priorDreams].slice(0, MAX_DREAMS));
+        await mutateSetting(DREAMS_KEY, (prior) => [dream, ...(Array.isArray(prior) ? prior : [])].slice(0, MAX_DREAMS), []);
         this._totalDreams++;
         this._emit('dream', { dream });
       }

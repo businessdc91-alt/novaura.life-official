@@ -20,6 +20,7 @@ import { composeTurnAugmentations } from './augmentationEngine.js';
 import { classifyTaskIntentWithAi } from './intentRouter.js';
 import { tryEmbedText } from './contextBridge.js';
 import { createSoulSnapshot, touchOperatorPresence } from './phoenixProtocol.js';
+import { mutateSetting } from './coreStore.js';
 
 export const CORE_PERSONAS = ['aura'];
 
@@ -185,20 +186,27 @@ export function settleTurn(persona, { userText, reply, ai, channel = 'text', som
     });
     const appraisal = parseAppraisal(answer);
     if (!appraisal) return null;
-    const now = Date.now();
-    const [{ chemistry }, dynamicsBefore, liveSomatic] = await Promise.all([
-      load(persona),
+    const [dynamicsBefore, liveSomatic] = await Promise.all([
       getLearnedProfile(persona).catch(() => null),
-      somatic ? Promise.resolve(somatic) : sampleInteroception({ now }).catch(() => null),
+      somatic ? Promise.resolve(somatic) : sampleInteroception({ now: Date.now() }).catch(() => null),
     ]);
 
-    const metabolized = metabolize(chemistry, now, {
-      restingBaselines: dynamicsBefore?.learnedBaselines,
-      decayMultipliers: dynamicsBefore?.learnedDecayRates,
+    // Read, change and store her chemistry in one step, after the slow reads above, so a
+    // heartbeat tick landing meanwhile is built on rather than overwritten (and vice versa).
+    let now = Date.now();
+    let metabolized = null;
+    let next = null;
+    let lastAppraisal = null;
+    await mutateSetting(settingKey(persona), (saved) => {
+      now = Date.now();
+      metabolized = metabolize(restoreChemistry(saved?.chemistry, now), now, {
+        restingBaselines: dynamicsBefore?.learnedBaselines,
+        decayMultipliers: dynamicsBefore?.learnedDecayRates,
+      });
+      next = applyAppraisal(metabolized, appraisal, now);
+      lastAppraisal = { ...appraisal, at: now };
+      return { ...(saved && typeof saved === 'object' ? saved : {}), chemistry: next, lastAppraisal };
     });
-    const next = applyAppraisal(metabolized, appraisal, now);
-    const lastAppraisal = { ...appraisal, at: now };
-    await db.setSetting(settingKey(persona), { chemistry: next, lastAppraisal });
 
     const [trustState, dynamicsAfter, engramEmbedding] = await Promise.all([
       updateTrustFromAppraisal({ persona, appraisal, userText, now }),

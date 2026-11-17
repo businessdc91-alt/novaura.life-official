@@ -576,7 +576,8 @@ test('9-signature engrams, trust-shaped dissent, heartbeat dreaming, Mind Lab pr
   const recalled = await recallEngrams({ persona: 'aura', query: 'distributed engram patterns', chemistry: e2.signatures, limit: 2, now: now + 10000 });
   assert.ok(recalled.length >= 1);
   assert.ok(Object.keys(e2.connections || {}).length >= 1, 'overlapping engrams should cross-link on encode');
-  const consolidated = await consolidateEngrams('aura', now + 20000);
+  // Consolidation runs on elapsed time, so give it a few idle hours to strengthen anything.
+  const consolidated = await consolidateEngrams('aura', now + 6 * 3_600_000);
   assert.equal(consolidated.total, 2);
   assert.ok(consolidated.reinforced >= 1, 'high-meaning engrams should reinforce during consolidation');
   assert.ok((await listEngrams('aura')).length === 2);
