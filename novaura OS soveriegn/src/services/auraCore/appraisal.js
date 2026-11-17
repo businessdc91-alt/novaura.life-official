@@ -39,8 +39,11 @@ export function appraisalMessages(userText, reply) {
   ];
 }
 
-/** Clean reasoning blocks and scan balanced JSON objects until one parses. */
-function extractJsonObject(text) {
+/**
+ * Clean reasoning blocks and scan balanced JSON objects until one parses. Prefers an object
+ * with every key in `requiredKeys`; otherwise returns the first object found.
+ */
+export function extractJson(text, requiredKeys = APPRAISAL_KEYS) {
   if (typeof text !== 'string') return null;
   const cleaned = text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -63,7 +66,7 @@ function extractJsonObject(text) {
           try {
             const candidate = JSON.parse(cleaned.slice(start, i + 1));
             if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-              if (APPRAISAL_KEYS.every(k => k in candidate)) return candidate;
+              if (requiredKeys.every(k => k in candidate)) return candidate;
               fallback ??= candidate;
             }
           } catch { /* try next balanced block */ }
@@ -81,7 +84,7 @@ const finiteRating = (v) => (
 
 /** The ratings from a model's answer, or null if it didn't give all six. Accepts 0-10 and 0-100 scales. */
 export function parseAppraisal(text) {
-  const raw = extractJsonObject(text);
+  const raw = extractJson(text);
   if (!raw) return null;
   if (!APPRAISAL_KEYS.every(k => finiteRating(raw[k]))) return null;
   const values = APPRAISAL_KEYS.map(k => Number(raw[k]));

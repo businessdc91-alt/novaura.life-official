@@ -2,6 +2,11 @@
 // (Port of AuraKernel_CPP/Cognition/MultiBrainRouter.cpp + Aura_Autonomy_Layer.py).
 // Classifies user intent dynamically to route models, reasoning depth, and Runtime Augmentations
 // across fast-local execution, code architecture, deep reasoning, creative synthesis, and media.
+//
+// `matched` says whether the text carried a real task signal. Fallback lanes (a short or long
+// message with no task words) still route, but augmentation lenses only fire on a match.
+
+import { extractJson } from './appraisal.js';
 
 export const AUTONOMY_LEVELS = {
   SUPERVISED: 0,
@@ -40,7 +45,7 @@ export const BRAIN_ROUTES = {
     recommendedPersona: 'aura',
     recommendedProviderLane: 'deep_reasoning',
     recommendedReasoningEffort: 'high',
-    defaultAugmentations: ['first_principles_skeptic', 'chain_logic_architect'],
+    defaultAugmentations: ['first_principles_skeptic'],
   },
   creative_synthesis: {
     id: 'creative_synthesis',
@@ -76,7 +81,10 @@ const ROUTE_PATTERNS = [
   {
     route: 'code_architecture',
     weight: 0.92,
-    re: /\b(bug|stack trace|error|exception|compile|cargo|rust|javascript|typescript|react|tauri|refactor|function|algorithm|schema|architecture|unit test|async|ipc|regression|debug)\b/i,
+    // Words that only mean code count at once; everyday words that also mean code ("error",
+    // "react", "function") need a second one, so "how did that make you react?" is not code.
+    re: /\b(stack ?trace|traceback|exception|segfault|compil(?:e|er|es|ed|ing)|cargo|rustc|npm|vite|webpack|javascript|typescript|jsx|tsx|tauri|refactor\w*|unit tests?|ipc|regression|debug(?:ger|ging)?|syntax error|null pointer|react ?(?:component|hook|state|props|js)|\w+\.(?:js|ts|rs|py|jsx|tsx|json))\b|```/i,
+    weak: /\b(bug|error|function|algorithm|schema|architecture|async|react|rust|code|crash|api|endpoint|build)\b/gi,
     reason: 'Engineering, debugging, or systems architecture terminology detected.',
   },
   {
@@ -126,12 +134,16 @@ export function classifyTaskIntent(userText = '', { activePersona = 'aura', open
   const scores = new Map();
 
   for (const rule of ROUTE_PATTERNS) {
-    const matches = text.match(new RegExp(rule.re.source, 'gi'));
+    let matches = text.match(new RegExp(rule.re.source, 'gi'));
+    if (!matches?.length && rule.weak) {
+      const weak = new Set((text.match(rule.weak) || []).map(w => w.toLowerCase()));
+      matches = weak.size >= 2 ? [...weak] : null;
+    }
     if (matches?.length) {
       const score = rule.weight + Math.min(0.25, (matches.length - 1) * 0.08);
       scores.set(rule.route, { score, reason: rule.reason });
       if (!best || score > best.score) {
-        best = { route: rule.route, score, reason: rule.reason };
+        best = { route: rule.route, score, reason: rule.reason, matched: true };
       }
     }
   }
@@ -140,9 +152,9 @@ export function classifyTaskIntent(userText = '', { activePersona = 'aura', open
   if (!best && Array.isArray(openWindows) && openWindows.length > 0) {
     const appTypes = new Set(openWindows.map(w => String(w?.appType || '').toLowerCase()));
     if (appTypes.has('cybeni') && text.length > 40) {
-      best = { route: 'code_architecture', score: 0.68, reason: 'Active Cybeni IDE workspace context.' };
+      best = { route: 'code_architecture', score: 0.68, reason: 'Active Cybeni IDE workspace context.', matched: true };
     } else if (appTypes.has('literature') && text.length > 40) {
-      best = { route: 'creative_synthesis', score: 0.66, reason: 'Active Literature workspace context.' };
+      best = { route: 'creative_synthesis', score: 0.66, reason: 'Active Literature workspace context.', matched: true };
     }
   }
 
@@ -184,8 +196,9 @@ export function classifyTaskIntent(userText = '', { activePersona = 'aura', open
     reasoning: best.reason,
     recommendedPersona: spec.recommendedPersona,
     recommendedProviderLane: spec.recommendedProviderLane,
-    recommendedReasoningEffort: spec.recommendedReasoningEffort,
-    suggestedAugmentations: suggested,
+    recommendedReasoningEffort: best.matched ? spec.recommendedReasoningEffort : null,
+    suggestedAugmentations: best.matched ? suggested : [],
+    matched: Boolean(best.matched),
     requiredAutonomyLevel,
     source: 'deterministic',
   };
@@ -227,7 +240,7 @@ export async function classifyTaskIntentWithAi({
       reasoningEffort: 'none',
       jsonSchema: ROUTER_SCHEMA,
     });
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const parsed = typeof raw === 'string' ? extractJson(raw, ['route']) : raw;
     if (parsed && BRAIN_ROUTES[parsed.route]) {
       const spec = BRAIN_ROUTES[parsed.route];
       return {
@@ -242,6 +255,7 @@ export async function classifyTaskIntentWithAi({
         suggestedAugmentations: Array.isArray(parsed.suggestedAugmentations) && parsed.suggestedAugmentations.length
           ? parsed.suggestedAugmentations.slice(0, 3)
           : spec.defaultAugmentations,
+        matched: baseline.matched || (Number(parsed.confidence) || 0) >= 0.6,
         source: 'ai_classifier',
       };
     }

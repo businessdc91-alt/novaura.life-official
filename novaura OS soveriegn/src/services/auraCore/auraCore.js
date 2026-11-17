@@ -147,7 +147,9 @@ export async function prepareTurn(
     }).catch(() => [])
     : [];
 
-  const charter = posture.boundaryNote ? `${CHARTER}\n${posture.boundaryNote}` : CHARTER;
+  // The same words whatever her state. Her posture reaches the model through temperature only;
+  // its note stays here for the Mind Lab and is never added to the prompt.
+  const charter = CHARTER;
 
   return {
     options: {

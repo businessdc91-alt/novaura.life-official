@@ -24,7 +24,7 @@ export const BUILTIN_AUGMENTATIONS = [
     category: 'engineering',
     personaScope: 'all',
     mode: 'auto', // 'pinned' | 'auto' | 'off'
-    routes: ['code_architecture', 'deep_reasoning'],
+    routes: ['code_architecture'],
     temperatureDelta: -0.14,
     reasoningEffort: 'high',
     channelBoosts: { focus: 0.45, caution: 0.25, creativity: 0.05, warmth: 0 },
@@ -258,7 +258,8 @@ export async function composeTurnAugmentations({
 
     if (cart.mode === 'pinned') {
       pinned.push({ ...cart, activationReason: 'pinned' });
-    } else if (cart.mode === 'auto' && cfg.autoActivate) {
+    } else if (cart.mode === 'auto' && cfg.autoActivate && resolvedIntent.matched !== false) {
+      // Auto lenses need a real task signal; casual conversation gets none unless pinned.
       const explicitSuggested = (resolvedIntent.suggestedAugmentations || []).includes(cart.id);
       const routeMatch = (cart.routes || []).includes(resolvedIntent.route);
       if (explicitSuggested || routeMatch) {
