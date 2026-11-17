@@ -175,7 +175,7 @@ function pickEntryHtml(files) {
  * files: [{ path, content }] with project-relative paths.
  * options.mode: 'server' (needs options.baseUrl, e.g. http://cyprev.localhost/<session>/) or 'inline'.
  */
-export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
+export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = '' } = {}) {
   const files = rawFiles
     .map(f => ({ path: normalizePath(f.path), content: typeof f.content === 'string' ? f.content : '' }))
     .filter(f => f.path);
@@ -318,8 +318,12 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
   const assetBootstrap = Object.keys(assetMap).length > 0
     ? `\n<script>(function(){var m=${safeAssetJson};window.__cybeniAssets=m;function fix(){document.querySelectorAll('img[src],audio[src],video[src],source[src]').forEach(function(el){var s=el.getAttribute('src')||'';if(/^https?:|^data:|^blob:|^\\/\\//.test(s))return;var k=s.replace(/^\\.\\//,'').replace(/^\\//,'');if(m[k])el.setAttribute('src',m[k]);});}if(typeof MutationObserver==='function'){new MutationObserver(fix).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src']});}window.addEventListener('DOMContentLoaded',fix);})();</script>`
     : '';
+  // The app's name comes first: @cybeni/backend keeps each app's data apart on the shared origin.
   // Storage isolation must run before the app reads storage; the test agent waits for instructions.
-  const head = `<script>${STORAGE_ISOLATION_SOURCE}</script>\n<script>${ERROR_REPORTER}</script>\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>\n<script>${escapeScript(OFFLINE_TAILWIND_FALLBACK_SCRIPT)}</script>${assetBootstrap}\n<script type="importmap">${JSON.stringify({ imports })}</script>\n<script type="module">import '@cybeni/backend';</script>`;
+  const appIdScript = appId
+    ? `<script>window.__cybeniAppId=${JSON.stringify(String(appId).slice(0, 80)).replace(/</g, '\\u003c')};</script>\n`
+    : '';
+  const head = `${appIdScript}<script>${STORAGE_ISOLATION_SOURCE}</script>\n<script>${ERROR_REPORTER}</script>\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>\n<script>${escapeScript(OFFLINE_TAILWIND_FALLBACK_SCRIPT)}</script>${assetBootstrap}\n<script type="importmap">${JSON.stringify({ imports })}</script>\n<script type="module">import '@cybeni/backend';</script>`;
   if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => `${m}\n${head}`);
   else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, m => `${m}\n<head>${head}</head>`);
   else html = `${head}\n${html}`;

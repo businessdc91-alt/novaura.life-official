@@ -154,13 +154,14 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     };
   }, [refreshProjects]); // windowProps is read once, on first open
 
-  const refreshPreview = useCallback(async (projectFiles) => {
+  // appId names the project so its @cybeni/backend data stays its own on the shared origin.
+  const refreshPreview = useCallback(async (projectFiles, appId) => {
     setPreviewBuilding(true);
     setInspecting(false);
     setPickedElement(null);
     setVisualIssues([]);
     try {
-      const published = await publishPreview(sessionRef.current, projectFiles);
+      const published = await publishPreview(sessionRef.current, projectFiles, { appId });
       setStaticIssues(published.issues);
       setConsoleEntries([]);
       setPreviewDoc({ ...published, key: Date.now() });
@@ -175,7 +176,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     const list = await loadProjectFiles(projectSlug);
     setFiles(list);
     setDrafts({});
-    if (preview) refreshPreview(list);
+    if (preview) refreshPreview(list, projectSlug);
     return list;
   }, [refreshPreview]);
 
@@ -389,7 +390,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
         setChangedPaths(changed);
         // Watch it come together: refresh the visible preview as files land.
         clearTimeout(liveTimer.current);
-        liveTimer.current = setTimeout(() => refreshPreview(snapshot), 1200);
+        liveTimer.current = setTimeout(() => refreshPreview(snapshot, slug), 1200);
       },
       ask: (text) => new Promise(resolve => setQuestion({ text, resolve })),
       isCancelled: () => cancelRef.current,
@@ -597,6 +598,15 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
       }
       say(`Compiling standalone ${lang.toUpperCase()} binary…`, 'info');
       const res = await compileNativeProject(slug, list, { checkOnly: false });
+      // A .NET build is the .exe plus the .dll and runtime files it needs: hand them over together.
+      const artifacts = Array.isArray(res.artifacts) ? res.artifacts : [];
+      if (res.ok && artifacts.length > 1) {
+        const folder = String(res.exeName || slug).replace(/\.exe$/i, '');
+        const entries = artifacts.map(a => ({ path: `${folder}/${a.name}`, bytes: base64ToUint8Array(a.base64) }));
+        downloadBytes(`${folder}-windows.zip`, buildZip(entries), 'application/zip');
+        say(`Compiled ${res.exeName} with ${res.compiler}. Keep the files in the zip together; it runs on Windows with the .NET runtime installed.`, 'good');
+        return;
+      }
       if (res.ok && res.exeBase64) {
         downloadBytes(res.exeName, base64ToUint8Array(res.exeBase64), 'application/octet-stream');
         say(`Compiled ${res.exeName} (${Math.max(1, Math.round(res.exeSize / 1024))} KB) with ${res.compiler}.`, 'good');
@@ -812,7 +822,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
                 frameRef={frameRef}
                 consoleEntries={consoleEntries}
                 onClearConsole={() => setConsoleEntries([])}
-                onReload={async () => { await flushDrafts(); refreshPreview(await loadProjectFiles(slug)); }}
+                onReload={async () => { await flushDrafts(); refreshPreview(await loadProjectFiles(slug), slug); }}
                 building={previewBuilding}
                 staticIssues={staticIssues}
                 inspecting={inspecting}

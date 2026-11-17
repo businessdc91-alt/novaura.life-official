@@ -78,7 +78,8 @@ test('@cybeni/backend runtime supports CRUD, reactive subscriptions, Auth/RBAC, 
 
     // Parent Admin Bridge mutates table and triggers sync
     for (const fn of listeners.get('message') || []) {
-      fn({ data: { __cybeniDbAdmin: true, action: 'insert', table: 'tasks', record: { title: 'From Admin' } } });
+      // From the hosting OS window: the runtime ignores data commands from any other sender.
+      fn({ source: fakeWindow.parent, data: { __cybeniDbAdmin: true, action: 'insert', table: 'tasks', record: { title: 'From Admin' } } });
     }
     assert.equal(tasks.count(), 2);
     assert.ok(posted.some(m => m.__cybeni && m.type === 'db-sync' && m.tables?.tasks?.length === 2));

@@ -8,10 +8,16 @@
  * Completely self-contained (zero imports, safe even inside opaque-origin srcdoc sandboxes).
  */
 export const CYBENI_BACKEND_MODULE_SOURCE = `
-const DB_PREFIX = '__cybeni_db__:';
-const KV_PREFIX = '__cybeni_kv__:';
-const USERS_KEY = '__cybeni_auth_users__';
-const SESSION_KEY = '__cybeni_auth_session__';
+// Every Cybeni app is served from the same origin, so each one keeps its data under its own
+// name (window.__cybeniAppId, set by the preview builder). Without a name (a standalone
+// export on its own origin) the keys have no prefix.
+const APP_NS = (typeof window !== 'undefined' && typeof window.__cybeniAppId === 'string' && window.__cybeniAppId)
+  ? window.__cybeniAppId + ':'
+  : '';
+const DB_PREFIX = '__cybeni_db__:' + APP_NS;
+const KV_PREFIX = '__cybeni_kv__:' + APP_NS;
+const USERS_KEY = '__cybeni_auth_users__' + (APP_NS ? ':' + APP_NS : '');
+const SESSION_KEY = '__cybeni_auth_session__' + (APP_NS ? ':' + APP_NS : '');
 const FILES_KEY = '__cybeni_files__';
 
 const memStorage = new Map();
@@ -498,7 +504,10 @@ if (typeof window !== 'undefined') {
   window.cybeniBackend = novaura;
 
   window.addEventListener('message', (e) => {
-    const d = e?.data;
+    // Only the OS window that hosts this app may answer AI requests or manage its data;
+    // a frame the app embeds (or a window it opened) may not.
+    if (!e || e.source !== window.parent || window.parent === window) return;
+    const d = e.data;
     if (!d || typeof d !== 'object') return;
 
     if (d.__cybeniAiReply && d.requestId && pendingAi.has(d.requestId)) {

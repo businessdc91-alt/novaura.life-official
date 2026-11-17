@@ -17,7 +17,7 @@ export default function UserAppWindow({ slug, name }) {
     try {
       const files = await loadProjectFiles(slug);
       if (!files.length) throw new Error('This app has no files any more. It may have been deleted in Cybeni.');
-      setDoc({ ...(await publishPreview(session.current, files)), key: Date.now() });
+      setDoc({ ...(await publishPreview(session.current, files, { appId: slug })), key: Date.now() });
       setError('');
     } catch (err) {
       setError(err.message);

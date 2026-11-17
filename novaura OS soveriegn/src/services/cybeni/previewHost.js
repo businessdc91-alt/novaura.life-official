@@ -25,18 +25,19 @@ function protocolBase(session) {
 /**
  * Publish files for a preview session.
  * Returns { src } (load in an iframe) or { srcdoc }, plus the frame sandbox to use
- * and any static issues found while building.
+ * and any static issues found while building. `appId` (the project slug) keeps the app's
+ * @cybeni/backend data apart from other apps on the shared preview origin.
  */
-export async function publishPreview(session, files) {
+export async function publishPreview(session, files, { appId = '' } = {}) {
   if (isTauri()) {
     const base = protocolBase(session);
-    const out = buildPreview(files, { mode: 'server', baseUrl: base });
+    const out = buildPreview(files, { mode: 'server', baseUrl: base, appId });
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('cybeni_preview_publish', { session, files: out.serverFiles });
     // allow-same-origin here means the preview's own origin (cyprev), never the OS's.
     return { src: `${base}index.html?v=${Date.now()}`, sandbox: 'allow-scripts allow-same-origin allow-forms allow-modals', issues: out.issues, origin: new URL(base).origin };
   }
-  const out = buildPreview(files, { mode: 'inline' });
+  const out = buildPreview(files, { mode: 'inline', appId });
   // No allow-same-origin: a srcdoc frame would otherwise share the OS's origin.
   return { srcdoc: out.html, sandbox: 'allow-scripts allow-forms allow-modals', issues: out.issues, origin: 'null' };
 }

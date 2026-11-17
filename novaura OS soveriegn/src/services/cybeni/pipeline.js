@@ -667,7 +667,15 @@ export async function runPipeline(input, hooks) {
     let testNote = '';
 
     if (hooks.compileNative && [...files.keys()].some(p => /\.(c|cc|cpp|cxx|cs)$/i.test(p))) {
-      const nat = await hooks.compileNative(snapshot());
+      // A missing toolchain (or a bridge failure) says nothing about the code: note it and
+      // still check the preview, rather than failing the phase or asking the model to fix it.
+      let nat = null;
+      try {
+        nat = await hooks.compileNative(snapshot());
+      } catch (err) {
+        if (err?.message === 'CANCELLED') throw err;
+        log(`${label}: native check skipped (${String(err?.message || err).slice(0, 160)}).`);
+      }
       cancelled();
       if (nat && nat.ok === false && Array.isArray(nat.errors) && nat.errors.length) {
         problems.push(...nat.errors.map(e => `Native compiler error: ${e}`));

@@ -183,7 +183,7 @@ function Workbench({ projects, selected, setSelected, brand, say, refresh }) {
   const preview = useCallback(async (files) => {
     if (!project) return;
     const list = files || await loadProjectFiles(project.slug);
-    setDoc({ ...(await publishPreview(session.current, list)), key: Date.now() });
+    setDoc({ ...(await publishPreview(session.current, list, { appId: project.slug })), key: Date.now() });
   }, [project]);
 
   useEffect(() => {
