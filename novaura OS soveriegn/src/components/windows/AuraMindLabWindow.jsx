@@ -337,14 +337,14 @@ export default function AuraMindLabWindow() {
     setBusy(`phoenix_${kind}`);
     try {
       if (kind === 'snapshot') {
-        const snap = await createSoulSnapshot('aura');
-        say(`SHA-256 Soul Snapshot captured (${snap.engramCount} engrams · ${snap.checksum.slice(0, 12)}...).`, 'good');
+        const snap = await createSoulSnapshot('aura', Date.now(), { forceDisk: true });
+        say(`SHA-256 Soul Snapshot captured (${snap.engramCount} engrams · ${snap.checksum.slice(0, 12)}...)${snap.disk ? `, also saved to disk (slot ${snap.disk.slot + 1} of 3)` : ''}.`, 'good');
       } else if (kind === 'verify') {
         const check = await verifySoulSnapshot('aura');
         say(check.valid ? `Soul integrity verified (SHA-256 ${check.checksum.slice(0, 12)}...).` : 'No valid Phoenix snapshot found yet.', check.valid ? 'good' : 'warn');
       } else if (kind === 'restore') {
         const restored = await restoreSoulSnapshot('aura');
-        say(`Restored verified Aura continuity snapshot (${restored.engramCount} engrams).`, 'good');
+        say(`Restored verified Aura continuity snapshot from the ${restored.source} (${restored.engramCount} engrams).`, 'good');
       }
       await refresh();
     } catch (err) {

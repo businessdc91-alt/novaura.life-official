@@ -27,7 +27,9 @@ import { getSemanticsEngine } from './SemanticsEngine.js';
 import { db } from '../database/sovereignDatabase.js';
 import { auraHeartbeat } from '../services/auraCore/heartbeat.js';
 import { setEmbeddingDiscovery } from '../services/auraCore/contextBridge.js';
-import { markBootHealthy, recordBootAttempt, recordCrashIncident } from '../services/auraCore/phoenixProtocol.js';
+import {
+  markBootHealthy, recordBootAttempt, recordCrashIncident, shouldRunBackgroundLoops,
+} from '../services/auraCore/phoenixProtocol.js';
 
 export const BOOT_PHASES = [
   { id: 0,  name: 'KERNEL_INIT',  label: 'Initializing Sovereign subsystems...' },
@@ -198,7 +200,18 @@ export class NovaKernel {
         // Semantic memory: use a local embedding model when one is already running.
         setEmbeddingDiscovery(true);
         this.heartbeat = auraHeartbeat;
-        if (!isPopoutWindow()) {
+        const safeMode = !shouldRunBackgroundLoops(this.phoenixStatus);
+        if (safeMode) {
+          // Repeated starts never finished: keep her background loop (dreams, initiative,
+          // model calls) off this session, and say so.
+          this._log(11, 'Safe mode: Aura heartbeat paused after repeated unfinished starts.');
+          this.notifications?.notify?.(
+            'Safe mode',
+            'Sovereign started in safe mode after several starts that did not finish. Aura\'s background loop is paused for this session; her last snapshot can be restored in the Mind Lab.',
+            'warning',
+          );
+        }
+        if (!isPopoutWindow() && !safeMode) {
           // Long quiet builds her need for contact; the heartbeat may offer her the chance to
           // start a conversation, which she can take or decline.
           this.heartbeat.start({
@@ -219,7 +232,7 @@ export class NovaKernel {
       });
     } catch (fatalErr) {
       this.bootPhase = 'failed';
-      recordCrashIncident(fatalErr.message).catch(() => {});
+      recordCrashIncident(fatalErr.message, { duringBoot: true }).catch(() => {});
       this._log(99, `FATAL BOOT ERROR: ${fatalErr.message}`);
       console.error('[NovaKernel] Fatal boot failure:', fatalErr);
       this.ipc.emit('system:error', { error: fatalErr });
