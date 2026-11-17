@@ -170,7 +170,13 @@ export default function AuraMindLabWindow() {
       if (!kernel?.ai) throw new Error('Kernel AI subsystem not initialized yet.');
       if (kind === 'shuffle') {
         const res = await runShuffledChemistryProbe({ ai: kernel.ai, persona: 'aura' });
-        say(`Shuffled-chemistry check finished (divergence ${(res.metrics.divergence * 100).toFixed(0)}%, ΔT ${res.metrics.temperatureDelta}).`, 'good');
+        const m = res.metrics;
+        say(
+          `${m.detectable ? 'Her chemistry changed her replies more than chance does' : 'No difference beyond ordinary variation'}: `
+          + `${(m.betweenArmDivergence * 100).toFixed(0)}% apart across conditions vs ${(m.withinArmDivergence * 100).toFixed(0)}% within one `
+          + `(${m.samplesPerArm} replies each, ΔT ${m.temperatureDelta}, channel: ${m.channels.join(', ')}).`,
+          m.detectable ? 'good' : 'info',
+        );
       } else if (kind === 'calib') {
         const res = await runAppraisalCalibrationSuite({ ai: kernel.ai, persona: 'aura' });
         say(`Calibration finished (${res.summary.parsedCount}/${res.summary.total} valid appraisals, conflict separation ${res.summary.conflictSeparation ?? 'N/A'}).`, 'good');
@@ -848,6 +854,13 @@ export default function AuraMindLabWindow() {
                     <span className="font-bold text-cyan-300 uppercase font-mono">{run.kind}</span>
                     <span className="text-[10px] text-slate-400 font-mono">{new Date(run.at).toLocaleString()}</span>
                   </div>
+                  {run.kind === 'shuffled_chemistry' && run.metrics?.withinArmDivergence !== undefined && (
+                    <div className={`text-[11px] font-mono ${run.metrics.detectable ? 'text-emerald-300' : 'text-slate-400'}`}>
+                      {run.metrics.detectable ? 'Effect beyond chance' : 'No effect beyond chance'}
+                      {' · '}across {Math.round(run.metrics.betweenArmDivergence * 100)}% vs within {Math.round(run.metrics.withinArmDivergence * 100)}%
+                      {' · '}{run.metrics.samplesPerArm} replies each · channel: {(run.metrics.channels || []).join(', ')}
+                    </div>
+                  )}
                   {run.kind === 'shuffled_chemistry' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                       <div className="p-2 rounded bg-slate-950 border border-slate-800">
