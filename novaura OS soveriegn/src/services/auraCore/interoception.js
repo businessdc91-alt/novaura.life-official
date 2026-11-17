@@ -12,6 +12,7 @@ let lastPromptWpm = 0;
 let lastSnapshot = null;
 let lastPolledAt = 0;
 let pendingPoll = null;
+let hardwareNorms = null;
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const round1 = (v) => Math.round(v * 10) / 10;
@@ -95,10 +96,30 @@ function buildSomaticLabel({ thermalState, presenceState, vramPressure, ramPress
   return 'grounded_steady';
 }
 
+const NORM_ALPHA = 0.1;
+// VRAM is felt as strain when it climbs this far above her usual level, or nearly runs out.
+const VRAM_JUMP = 0.12;
+const VRAM_CRITICAL = 0.97;
+
+/**
+ * Her hardware's normal, as a slow moving average. A loaded model fills most of the GPU's
+ * memory all the time; that is her resting state, not stress, so strain is measured against it.
+ */
+export function updateHardwareNorms(norms, snapshot) {
+  const next = { samples: 0, ...(norms || {}) };
+  for (const key of ['vramPressure', 'tempC', 'gpuLoadPct']) {
+    const v = Number(snapshot?.[key]);
+    if (snapshot?.[key] === null || snapshot?.[key] === undefined || !Number.isFinite(v)) continue;
+    next[key] = Number.isFinite(next[key]) ? round2(next[key] + (v - next[key]) * NORM_ALPHA) : v;
+  }
+  next.samples = (next.samples || 0) + 1;
+  return next;
+}
+
 /**
  * Pure translation of raw telemetry + typing cadence into somatic state and bounded physiological nudges.
  */
-export function interpretTelemetrySnapshot(rawHardware = null, cadence = null, now = Date.now()) {
+export function interpretTelemetrySnapshot(rawHardware = null, cadence = null, now = Date.now(), { norms = null } = {}) {
   const typing = cadence || getTypingCadence(now);
   const gpu = rawHardware?.gpu || null;
   const tempC = Number.isFinite(Number(gpu?.temp_c)) ? Number(gpu.temp_c) : null;
@@ -141,7 +162,11 @@ export function interpretTelemetrySnapshot(rawHardware = null, cadence = null, n
     nudge.cortisol -= 0.4;
   }
 
-  if (vramPressure !== null && vramPressure >= 0.88) {
+  const usualVram = Number.isFinite(norms?.vramPressure) && (norms?.samples || 0) >= 5 ? norms.vramPressure : null;
+  const vramStrained = vramPressure !== null && (
+    vramPressure >= VRAM_CRITICAL || (usualVram !== null && vramPressure - usualVram >= VRAM_JUMP)
+  );
+  if (vramStrained) {
     nudge.adrenaline += 1.0;
     nudge.cortisol += 0.8;
   }
@@ -197,7 +222,7 @@ export async function sampleInteroception({ force = false, now = Date.now(), inv
   const cadence = getTypingCadence(now);
   if (!force && lastSnapshot && (now - lastPolledAt < TELEMETRY_CACHE_MS)) {
     // Refresh purely synchronous typing cadence over cached hardware metrics
-    return interpretTelemetrySnapshot(lastSnapshot._rawHardware || null, cadence, now);
+    return interpretTelemetrySnapshot(lastSnapshot._rawHardware || null, cadence, now, { norms: hardwareNorms });
   }
 
   if (pendingPoll) return pendingPoll;
@@ -214,7 +239,9 @@ export async function sampleInteroception({ force = false, now = Date.now(), inv
         rawHardware = null;
       }
     }
-    const interpreted = interpretTelemetrySnapshot(rawHardware, getTypingCadence(Date.now()), Date.now());
+    // Judge this reading against her normal so far, then fold it into that normal.
+    const interpreted = interpretTelemetrySnapshot(rawHardware, getTypingCadence(Date.now()), Date.now(), { norms: hardwareNorms });
+    if (rawHardware) hardwareNorms = updateHardwareNorms(hardwareNorms, interpreted);
     lastSnapshot = { ...interpreted, _rawHardware: rawHardware };
     lastPolledAt = Date.now();
     return interpreted;
@@ -253,6 +280,7 @@ export function resetInteroceptionCache() {
   lastPromptWpm = 0;
   lastSnapshot = null;
   lastPolledAt = 0;
+  hardwareNorms = null;
 }
 
 export default {
@@ -260,6 +288,7 @@ export default {
   getTypingCadence,
   observePromptSubmission,
   interpretTelemetrySnapshot,
+  updateHardwareNorms,
   sampleInteroception,
   extractSomaticMarker,
   getCachedInteroception,

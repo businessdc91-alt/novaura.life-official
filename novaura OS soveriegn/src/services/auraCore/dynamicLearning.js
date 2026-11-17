@@ -1,6 +1,12 @@
 // Aura Core: Data-Driven Emotional Dynamics Learning (port of Aura_DynamicLearning.py).
-// Learns per-persona resting baselines, variance, empirical word/topic triggers, and temporal
-// decay multipliers from actual post-turn chemistry & appraisals — replacing static constants.
+// Learns per-persona resting baselines, variance, and conditioned word/topic triggers from
+// actual post-turn chemistry & appraisals.
+//
+// Decay rates are not learned. Her levels between turns are produced by the metabolism using
+// those very rates, so "learning" them from the levels only measures the formula back (and a
+// long gap, where a hormone settled hours ago, reads as very slow decay, driving every rate to
+// its floor). The rates stay the body's own; self-regulation (regulation.js) is what changes
+// recovery speed, situationally. `learnedDecayRates` stays in the profile as all ones.
 
 import { db } from '../../database/sovereignDatabase.js';
 import { BASELINE, HORMONES } from './endocrine.js';
@@ -74,7 +80,8 @@ export function restoreDynamicProfile(saved, persona = 'aura', now = Date.now())
     ...saved,
     learnedBaselines: { ...base.learnedBaselines, ...(saved.learnedBaselines || {}) },
     variances: { ...base.variances, ...(saved.variances || {}) },
-    learnedDecayRates: { ...base.learnedDecayRates, ...(saved.learnedDecayRates || {}) },
+    // Never restored from storage: older profiles saved drifted rates (see the header).
+    learnedDecayRates: { ...base.learnedDecayRates },
     learnedTriggers: {
       oxytocin: saved.learnedTriggers?.oxytocin || {},
       adrenaline: saved.learnedTriggers?.adrenaline || {},
@@ -115,32 +122,19 @@ export function recomputeLearnedDynamics(profile) {
     }
   }
 
-  // 2. Temporal decay rates (from consecutive observations where hormone settled downward toward rest)
-  for (const h of HORMONES) {
-    const rates = [];
-    for (let i = 1; i < obs.length; i++) {
-      const prev = obs[i - 1];
-      const curr = obs[i];
-      const dtHours = ((curr.at || 0) - (prev.at || 0)) / 3_600_000;
-      const vPrev = Number(prev.levels?.[h]);
-      const vCurr = Number(curr.levels?.[h]);
-      if (dtHours <= 0.01 || dtHours > 12 || !Number.isFinite(vPrev) || !Number.isFinite(vCurr)) continue;
-      const delta = vPrev - vCurr;
-      if (delta > 0.5 && vPrev > BASELINE[h]) {
-        // Normalize against expected 30-pt/hour nominal recovery to derive decay multiplier
-        const normalizedMult = clamp((delta / dtHours) / 30, 0.4, 2.2);
-        rates.push(normalizedMult);
-      }
-    }
-    if (rates.length >= 2) {
-      p.learnedDecayRates[h] = round2(median(rates));
-    }
-  }
+  // 2. Decay rates are the body's own (see the header), never fitted to her levels.
+  p.learnedDecayRates = Object.fromEntries(HORMONES.map(h => [h, 1]));
 
-  // 3. Statistical trigger weights per hormone (requires repeated evidence count >= 2)
+  // 3. Conditioned triggers: a word counts only if turns with it lift a hormone more than turns
+  //    without it, seen at least three times, and it is not in most turns (a word in every
+  //    conversation, like her name, predicts nothing).
+  const totals = Object.fromEntries(HORMONES.map(h => [h, 0]));
+  for (const o of obs) {
+    for (const h of HORMONES) totals[h] += Math.max(0, Number(o.deltas?.[h] || 0));
+  }
   const wordStats = new Map();
   for (const o of obs) {
-    for (const tok of (o.tokens || [])) {
+    for (const tok of new Set(o.tokens || [])) {
       const entry = wordStats.get(tok) || { count: 0, sums: { oxytocin: 0, adrenaline: 0, dopamine: 0, cortisol: 0 } };
       entry.count += 1;
       for (const h of HORMONES) {
@@ -154,9 +148,11 @@ export function recomputeLearnedDynamics(profile) {
   for (const h of HORMONES) {
     const candidates = [];
     for (const [tok, stat] of wordStats.entries()) {
-      if (stat.count < 2) continue;
-      const avgLift = stat.sums[h] / stat.count;
-      const score = round2(clamp(avgLift / 10, 0, 1));
+      const without = obs.length - stat.count;
+      if (stat.count < 3 || without < 1 || stat.count > obs.length * 0.6) continue;
+      const liftWith = stat.sums[h] / stat.count;
+      const liftWithout = (totals[h] - stat.sums[h]) / without;
+      const score = round2(clamp((liftWith - liftWithout) / 10, 0, 1));
       if (score >= 0.12) candidates.push([tok, score]);
     }
     candidates.sort((a, b) => b[1] - a[1]);

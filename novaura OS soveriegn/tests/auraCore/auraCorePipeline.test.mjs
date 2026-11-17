@@ -687,19 +687,23 @@ test('Hardware interoception, learned emotional dynamics, semantic context bridg
   assert.ok(somaHot.typingWpm > 0);
   assert.ok(somaHot.nudge.cortisol > 0 && somaHot.nudge.adrenaline > 0);
 
-  // 2. Dynamic Learning: repeated observations adapt resting baselines, median decay rates & keyword triggers
-  for (let i = 0; i < 6; i++) {
+  // 2. Dynamic Learning: repeated observations adapt resting baselines & conditioned keyword
+  //    triggers (a trigger must lift more than turns without it, so ordinary turns are mixed in)
+  for (let i = 0; i < 10; i++) {
+    const breakthrough = i % 5 < 3;
     await observeTurnDynamics({
       persona: 'aura',
-      userText: 'architecture breakthrough refactor ship clean interface',
+      userText: breakthrough ? 'architecture breakthrough refactor ship clean interface' : 'quick question about the weather today',
       prevChemistry: { oxytocin: 26, adrenaline: 12, dopamine: 44, cortisol: 14 },
-      nextChemistry: { oxytocin: 48, adrenaline: 14, dopamine: 72 - i * 2, cortisol: 12 },
+      nextChemistry: breakthrough
+        ? { oxytocin: 48, adrenaline: 14, dopamine: 72 - i * 2, cortisol: 12 }
+        : { oxytocin: 30, adrenaline: 12, dopamine: 46, cortisol: 14 },
       appraisal: { pleasant: 0.9, novel: 0.8, progress: 0.9, conflict: 0, closeness: 0.85, effort: 0.4 },
       now: baseNow + i * 3_600_000,
     });
   }
   const learned = await getLearnedProfile('aura');
-  assert.equal(learned.totalTurns, 6);
+  assert.equal(learned.totalTurns, 10);
   assert.ok(learned.learnedBaselines.dopamine > BASELINE.dopamine, 'high dopamine history raises learned resting baseline');
   assert.ok(Object.keys(learned.learnedTriggers.dopamine).includes('architecture'));
   const nudge = predictTriggerNudge(learned, 'let us design clean architecture');
