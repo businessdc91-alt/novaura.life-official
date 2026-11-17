@@ -3,6 +3,7 @@ pub mod engines;
 pub mod llm;
 pub mod forge;
 pub mod mesh;
+pub mod native_build;
 pub mod preview;
 pub mod games;
 pub mod templates;
@@ -1910,6 +1911,8 @@ pub fn run() {
             preview::cybeni_preview_publish,
             preview::cybeni_preview_clear,
             preview::site_preview_publish,
+            native_build::cybeni_native_toolchains,
+            native_build::cybeni_native_compile,
             llm::llm_catalog,
             llm::llm_install,
             llm::llm_install_status,

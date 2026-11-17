@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Send, Square, Mic, MicOff, Settings2, Loader2, CheckCircle2, XCircle, Circle, MinusCircle,
   ChevronDown, ChevronRight, RotateCcw, Wand2, ShieldCheck, Cpu, MessageCircleQuestion, ScrollText,
+  ImagePlus, X,
 } from 'lucide-react';
 import { MODES, SECURITY_LEVELS, QUALITY_LEVELS } from '../../../services/cybeni/pipeline.js';
 import { describeModelKey } from '../../../services/cybeni/models.js';
@@ -136,17 +137,34 @@ function Timeline({ phases, roles }) {
 }
 
 export default function AgentPanel({
-  settings, setSettings, models, onSuggestRoles, onRescanModels,
-  running, phases, logs, question, onAnswer, onRun, onStop,
-  previewErrorCount, onFixErrors, runs, onRestoreCheckpoint, lastResult,
+  settings,
+  setSettings,
+  models,
+  onSuggestRoles,
+  onRescanModels,
+  running,
+  phases,
+  logs,
+  question,
+  onAnswer,
+  onRun,
+  onStop,
+  previewErrorCount,
+  onFixErrors,
+  runs,
+  onRestoreCheckpoint,
+  lastResult,
+  streamingInfo = null,
 }) {
   const [prompt, setPrompt] = useState('');
+  const [attachedImages, setAttachedImages] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [answer, setAnswer] = useState('');
   const [listening, setListening] = useState(false);
   const [openRun, setOpenRun] = useState(null);
   const [ollamaCpu, setOllamaCpu] = useState(ollamaCpuOnly);
+  const imageInputRef = useRef(null);
 
   const roles = settings.roles || {};
   const missingRoles = Object.keys(ROLE_LABELS).filter(r => !roles[r]);
@@ -155,8 +173,25 @@ export default function AgentPanel({
   const submit = (e) => {
     e?.preventDefault();
     if (!prompt.trim() || running) return;
-    onRun(settings.mode, prompt.trim());
+    onRun(settings.mode, prompt.trim(), attachedImages);
     setPrompt('');
+    setAttachedImages([]);
+  };
+
+  const attachImages = (fileList) => {
+    const files = Array.from(fileList || []).slice(0, Math.max(0, 4 - attachedImages.length));
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== 'string') return;
+        setAttachedImages(prev => [
+          ...prev.slice(0, 3),
+          { id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name: file.name, mime: file.type, dataUrl: reader.result },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const dictate = () => {
@@ -264,6 +299,14 @@ export default function AgentPanel({
             <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold mb-1 flex items-center gap-1">
               <ShieldCheck className="w-3 h-3" /> {running ? 'Pipeline running' : 'Last pipeline'}
             </div>
+            {running && streamingInfo && (
+              <div className="mb-1.5 px-2 py-1 rounded border border-cyan-700/40 bg-cyan-950/30 text-[10px] text-cyan-200 flex items-center justify-between gap-2">
+                <span className="truncate">
+                  <b className="uppercase">{streamingInfo.role}</b> · {streamingInfo.status === 'streaming' ? 'streaming' : streamingInfo.status}
+                </span>
+                <span className="font-mono text-cyan-300 shrink-0">{streamingInfo.chars || 0} chars</span>
+              </div>
+            )}
             <Timeline phases={phases} roles={roles} />
             {lastResult && !running && (
               <div className={`mt-2 p-2 rounded-md border text-[11px] ${lastResult.status === 'done' ? (lastResult.approved === false ? 'border-amber-600/40 bg-amber-950/20 text-amber-100' : 'border-emerald-600/40 bg-emerald-950/20 text-emerald-100') : 'border-rose-600/40 bg-rose-950/20 text-rose-100'}`}>
@@ -273,6 +316,9 @@ export default function AgentPanel({
                 </div>
                 {lastResult.unreviewed?.length > 0 && (
                   <div className="mt-1 text-amber-200">Not fully checked: these steps could not run ({lastResult.unreviewed.join(', ')}), so the build is not approved. See the failed steps above.</div>
+                )}
+                {lastResult.visualIssues?.length > 0 && (
+                  <div className="mt-1 text-amber-200">{lastResult.visualIssues.length} visual layout note(s) flagged in the preview Audit tab.</div>
                 )}
                 <RequirementsCheck result={lastResult} />
                 {lastResult.summary && <div className="mt-1 whitespace-pre-wrap text-slate-200">{lastResult.summary}</div>}
@@ -291,7 +337,7 @@ export default function AgentPanel({
 
         {phases.length === 0 && !question && (
           <div className="text-[11px] text-slate-400 leading-relaxed">
-            Describe what to build or change. Cybeni plans it, builds it, has a second model review it, runs it in the preview and repairs what breaks.
+            Describe what to build or change, or attach a wireframe screenshot. Cybeni plans it, builds it, has a second model review it, runs it in the preview and repairs what breaks.
             <ul className="mt-2 space-y-1 text-slate-500">
               <li><b className="text-slate-300">Quick</b>: fast edits (5 passes)</li>
               <li><b className="text-slate-300">Standard</b>: plan, build, cross-review, runtime repair (12)</li>
@@ -334,6 +380,17 @@ export default function AgentPanel({
           </button>
         )}
         {missingRoles.length > 0 && <div className="text-[10px] text-amber-300">Assign a model to: {missingRoles.join(', ')} (gear icon).</div>}
+        {attachedImages.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {attachedImages.map(img => (
+              <div key={img.id} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 text-[10px] text-slate-300 max-w-[140px]">
+                <img src={img.dataUrl} alt={img.name} className="w-4 h-4 rounded object-cover shrink-0" />
+                <span className="truncate">{img.name}</span>
+                <button type="button" onClick={() => setAttachedImages(p => p.filter(x => x.id !== img.id))} className="text-slate-500 hover:text-white"><X className="w-3 h-3" /></button>
+              </div>
+            ))}
+          </div>
+        )}
         <form onSubmit={submit} className="space-y-1.5">
           <textarea
             value={prompt}
@@ -348,6 +405,26 @@ export default function AgentPanel({
             <button type="button" onClick={dictate} disabled={running} title="Dictate" className={`p-1.5 rounded-md border ${listening ? 'border-rose-500 text-rose-300' : 'border-slate-700 text-slate-400 hover:text-white'}`}>
               {listening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
             </button>
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={running || attachedImages.length >= 4}
+              title="Attach reference screenshot / wireframe"
+              className="p-1.5 rounded-md border border-slate-700 text-slate-400 hover:text-cyan-300 disabled:opacity-40"
+            >
+              <ImagePlus className="w-3.5 h-3.5" />
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) attachImages(e.target.files);
+                e.target.value = '';
+              }}
+            />
             <span className="text-[10px] text-slate-500 truncate">{MODES[settings.mode]?.description}</span>
             {running ? (
               <button type="button" onClick={onStop} className="ml-auto flex items-center gap-1 px-3 py-1.5 rounded-md bg-rose-600 text-white text-[11px] font-semibold"><Square className="w-3 h-3" /> Stop</button>

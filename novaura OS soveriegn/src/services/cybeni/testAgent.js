@@ -418,12 +418,206 @@ function cybeniTestAgent() {
     return results;
   }
 
+  function selectorOf(el) {
+    if (!el || !el.tagName) return '';
+    var s = el.tagName.toLowerCase();
+    if (el.id) return s + '#' + el.id;
+    var cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/).filter(Boolean).slice(0, 2).join('.') : '';
+    return cls ? s + '.' + cls : s;
+  }
+
+  function visualAudit() {
+    var issues = [];
+    if (!doc.body) return issues;
+    try {
+      var seenKinds = {};
+      var addIssue = function (kind, message, el) {
+        var key = kind + ':' + (message || '').slice(0, 60);
+        if (seenKinds[key] || issues.length >= 12) return;
+        seenKinds[key] = true;
+        issues.push({ kind: kind, message: message, selector: selectorOf(el) });
+      };
+
+      // 1. Viewport horizontal overflow
+      if (w.innerWidth > 0 && doc.documentElement && doc.documentElement.scrollWidth > w.innerWidth + 12) {
+        addIssue('horizontal-overflow', 'Page overflows horizontally (' + doc.documentElement.scrollWidth + 'px > ' + w.innerWidth + 'px).', doc.documentElement);
+      }
+
+      // 2. Broken visible text literals ([object Object], NaN)
+      var walker = doc.createTreeWalker ? doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null) : null;
+      if (walker) {
+        var node;
+        while ((node = walker.nextNode())) {
+          var p = node.parentElement;
+          if (!p || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/i.test(p.tagName) || p.id === '__cybeni_inspect_box' || !visible(p)) continue;
+          var txt = String(node.nodeValue || '');
+          if (txt.indexOf('[object Object]') >= 0) {
+            addIssue('literal-object-render', 'Rendered "[object Object]" inside ' + selectorOf(p) + ' — render a string or field instead of an object.', p);
+          } else if (/(^|\s)NaN(\s|$)/.test(txt)) {
+            addIssue('literal-nan-render', 'Rendered "NaN" inside ' + selectorOf(p) + ' — check arithmetic or missing numeric fallbacks.', p);
+          }
+        }
+      }
+
+      // 3. Broken images
+      var imgs = doc.querySelectorAll('img');
+      for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i];
+        var src = img.getAttribute('src');
+        if (src && img.complete && img.naturalWidth === 0) {
+          addIssue('broken-image', 'Image failed to load: ' + String(src).slice(0, 80), img);
+        }
+      }
+
+      // 4. Collapsed primary container
+      var root = doc.getElementById('root') || doc.getElementById('app') || doc.querySelector('main');
+      if (root && root.children.length > 0 && root.getBoundingClientRect) {
+        var rr = root.getBoundingClientRect();
+        if (rr.height === 0 && !(root.innerText || '').trim()) {
+          addIssue('collapsed-container', 'Primary container ' + selectorOf(root) + ' has children but collapsed to 0px height.', root);
+        }
+      }
+
+      // 5. Unlabelled visible buttons
+      var btns = [].slice.call(doc.querySelectorAll('button')).filter(visible).slice(0, 40);
+      for (var b = 0; b < btns.length; b++) {
+        var btn = btns[b];
+        var lbl = (btn.innerText || '').trim() || btn.getAttribute('aria-label') || btn.getAttribute('title');
+        if (!lbl) {
+          addIssue('unlabelled-button', 'Interactive button ' + selectorOf(btn) + ' has no text label, title, or aria-label.', btn);
+          break;
+        }
+      }
+
+      // 6. Overlapping interactive controls
+      var ctrls = [].slice.call(doc.querySelectorAll('button, input:not([type="hidden"]), select')).filter(visible).slice(0, 30);
+      for (var x = 0; x < ctrls.length; x++) {
+        var aEl = ctrls[x];
+        var ra = aEl.getBoundingClientRect();
+        if (ra.width < 8 || ra.height < 8) continue;
+        for (var y = x + 1; y < ctrls.length; y++) {
+          var bEl = ctrls[y];
+          if (aEl.contains(bEl) || bEl.contains(aEl)) continue;
+          var rb = bEl.getBoundingClientRect();
+          if (rb.width < 8 || rb.height < 8) continue;
+          var ox = Math.max(0, Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left));
+          var oy = Math.max(0, Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top));
+          var inter = ox * oy;
+          var minArea = Math.min(ra.width * ra.height, rb.width * rb.height);
+          if (minArea > 0 && inter > minArea * 0.45) {
+            addIssue('overlapping-controls', 'Controls ' + selectorOf(aEl) + ' and ' + selectorOf(bEl) + ' overlap significantly.', aEl);
+            break;
+          }
+        }
+      }
+    } catch { /* never break app tests during visual audit */ }
+    return issues;
+  }
+
+  // Interactive point-and-click visual element inspector
+  var inspectMode = false;
+  var inspectBox = null;
+  var inspectTag = null;
+  function ensureInspectOverlay() {
+    if (inspectBox) return;
+    inspectBox = doc.createElement('div');
+    inspectBox.id = '__cybeni_inspect_box';
+    inspectBox.style.cssText = 'position:fixed;pointer-events:none;border:2px solid #22d3ee;background:rgba(34,211,238,0.14);border-radius:4px;z-index:2147483646;display:none;';
+    inspectTag = doc.createElement('div');
+    inspectTag.style.cssText = 'position:absolute;top:-20px;left:-2px;background:#0891b2;color:#fff;font:600 10px/16px ui-monospace,monospace;padding:1px 6px;border-radius:3px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.4);';
+    inspectBox.appendChild(inspectTag);
+    if (doc.body) doc.body.appendChild(inspectBox);
+  }
+  function setInspectMode(on) {
+    inspectMode = Boolean(on);
+    if (!inspectMode && inspectBox) inspectBox.style.display = 'none';
+    if (doc.body) doc.body.style.cursor = inspectMode ? 'crosshair' : '';
+  }
+  doc.addEventListener('mousemove', function (e) {
+    if (!inspectMode) return;
+    ensureInspectOverlay();
+    if (inspectBox) inspectBox.style.display = 'none';
+    var target = doc.elementFromPoint(e.clientX, e.clientY);
+    if (!target || target === doc.documentElement || target === doc.body) return;
+    var r = target.getBoundingClientRect();
+    if (!r || !r.width || !r.height) return;
+    inspectBox.style.left = r.left + 'px';
+    inspectBox.style.top = r.top + 'px';
+    inspectBox.style.width = r.width + 'px';
+    inspectBox.style.height = r.height + 'px';
+    inspectBox.style.display = 'block';
+    inspectTag.textContent = selectorOf(target);
+  }, true);
+  function reactComponentOf(el) {
+    try {
+      var cur = el;
+      while (cur) {
+        var keys = Object.keys(cur);
+        for (var i = 0; i < keys.length; i++) {
+          if (keys[i].indexOf('__reactFiber$') === 0) {
+            var fiber = cur[keys[i]];
+            while (fiber) {
+              if (typeof fiber.type === 'function') {
+                return fiber.type.displayName || fiber.type.name || '';
+              }
+              fiber = fiber.return;
+            }
+          }
+        }
+        cur = cur.parentElement;
+      }
+    } catch { /* ignore fiber read errors */ }
+    return '';
+  }
+  doc.addEventListener('click', function (e) {
+    if (!inspectMode) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (inspectBox) inspectBox.style.display = 'none';
+    var target = doc.elementFromPoint(e.clientX, e.clientY) || e.target;
+    if (!target) return;
+    var hintNode = target.closest ? target.closest('[data-cy-file]') : null;
+    var compName = reactComponentOf(target);
+    var r = target.getBoundingClientRect ? target.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+    var payload = {
+      tag: target.tagName ? target.tagName.toLowerCase() : 'div',
+      id: target.id || '',
+      classes: typeof target.className === 'string' ? target.className.trim() : '',
+      text: String(target.innerText || target.value || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+      placeholder: target.getAttribute ? (target.getAttribute('placeholder') || '') : '',
+      ariaLabel: target.getAttribute ? (target.getAttribute('aria-label') || '') : '',
+      selector: selectorOf(target),
+      component: compName,
+      fileHint: hintNode ? hintNode.getAttribute('data-cy-file') : (compName ? compName + '.jsx' : ''),
+      rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    };
+    if (!e.shiftKey) setInspectMode(false);
+    w.parent.postMessage({ __cybeni: true, type: 'element-picked', element: payload }, '*');
+  }, true);
+  doc.addEventListener('keydown', function (e) {
+    if (inspectMode && e.key === 'Escape') {
+      setInspectMode(false);
+      w.parent.postMessage({ __cybeni: true, type: 'inspect-cancelled' }, '*');
+    }
+  }, true);
+
+  w.__cybeniVisualAudit = visualAudit;
   w.__cybeniRunTests = runTests;
   w.addEventListener('message', function (e) {
-    if (e.source !== w.parent || !e.data || !e.data.__cybeniTests) return;
+    if (e.source !== w.parent || !e.data) return;
+    if (e.data.__cybeniInspect !== undefined) {
+      setInspectMode(e.data.__cybeniInspect);
+      return;
+    }
+    if (e.data.__cybeniAudit) {
+      w.parent.postMessage({ __cybeni: true, type: 'visual-audit', visualIssues: visualAudit() }, '*');
+      return;
+    }
+    if (!e.data.__cybeniTests) return;
     runTests(e.data.tests || []).then(function (results) {
+      var audit = visualAudit();
       if (w.__cybeniRestoreStorage) w.__cybeniRestoreStorage();
-      w.parent.postMessage({ __cybeni: true, type: 'test-results', results: results }, '*');
+      w.parent.postMessage({ __cybeni: true, type: 'test-results', results: results, visualIssues: audit }, '*');
     });
   });
 }

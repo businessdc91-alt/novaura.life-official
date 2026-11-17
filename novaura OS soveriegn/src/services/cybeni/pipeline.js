@@ -30,6 +30,7 @@ import { normalizePath, staticCheck } from './previewBuilder.js';
 import { TESTS_SCHEMA, normalizeTests, normalizeRequirements, describeStep, failureProblems } from './testAgent.js';
 import { pickStarter, starterFiles, STARTER_NOTE } from './starters.js';
 import { libraryNotes } from './libraryNotes.js';
+import { detectNativeLanguage, nativeReferenceNotes } from './nativeReference.js';
 
 export const TESTS_PATH = '.cybeni/acceptance.json';
 const TRIAGE_SCHEMA = {
@@ -141,9 +142,10 @@ The app runs in a browser preview with no build step:
 - index.html at the project root plus ES modules. React 18 with JSX in .jsx/.tsx files is supported (import React from 'react'; mount into <div id="root"> with react-dom/client).
 - TypeScript (.ts/.tsx) is supported (types are stripped, not checked).
 - npm packages are imported by bare name and loaded from esm.sh at runtime, so only use packages that work in the browser. Do not write an import map: bare imports are resolved automatically.
-- Tailwind is available by adding <script src="https://cdn.tailwindcss.com"></script> to index.html.
+- Tailwind is available by adding <script src="https://cdn.tailwindcss.com"></script> to index.html (with automatic offline fallback utilities).
+- Built-in full-stack backend: import { db, auth, storage, ai } from '@cybeni/backend' (or window.novaura) gives you persistent tables (db.collection('items').list/get/insert/update/remove/seed/subscribe), multi-user accounts (auth.currentUser/signUp/signIn/demoSignIn/signOut/onAuthChange), storage, and ai.chat() with zero setup. Use '@cybeni/backend' for data-driven or multi-user apps unless localStorage/IndexedDB is simpler.
+- Project media assets under assets/ (images/audio) can be imported directly (import logo from './assets/logo.png') or referenced as <img src="assets/logo.png" />.
 - No Node APIs, no require(), no bundler or package.json build config.
-- Persist data with localStorage or IndexedDB unless the request says otherwise.
 - For an empty project, default to React + Tailwind with index.html, src/main.jsx and src/App.jsx.`;
 
 const ROLE_IDENTITY = {
@@ -349,6 +351,8 @@ function contextBudget(modelKey) {
   return String(modelKey || '').startsWith('cloud|') ? 320000 : 60000;
 }
 
+const ASSET_STUB_RE = /^data:(image|audio|video|font|application\/octet-stream)/i;
+
 /** Files as fenced blocks within a character budget; focus files go first. */
 function projectContext(files, budget, focus = []) {
   const order = [...new Set([...focus.filter(p => files.has(p)), ...files.keys()])];
@@ -356,7 +360,11 @@ function projectContext(files, budget, focus = []) {
   const omitted = [];
   let used = 0;
   for (const p of order) {
-    const block = `\`\`\`${p}\n${files.get(p)}\n\`\`\``;
+    const raw = String(files.get(p) ?? '');
+    const content = ASSET_STUB_RE.test(raw.trim())
+      ? `/* Binary asset "${p}" (${raw.length} chars data URL) — import or reference directly without rewriting. */`
+      : raw;
+    const block = `\`\`\`${p}\n${content}\n\`\`\``;
     if (used + block.length > budget) {
       omitted.push(p);
       continue;
@@ -401,8 +409,11 @@ export async function runPipeline(input, hooks) {
   let runtimeClean = null;
   let inspectionIssues = '';
   let pendingProblems = [];
+  let visualIssues = [];
+  let activePhaseId = null;
   let approved = null;
   let summary = '';
+  const images = Array.isArray(input.images) ? input.images.filter(i => i?.dataUrl) : [];
 
   // Requirements and acceptance tests saved by earlier runs on this project.
   let requirements = [];
@@ -449,12 +460,19 @@ export async function runPipeline(input, hooks) {
     if (!modelKey) throw new Error(`No model is assigned to the ${role} role.`);
     const system = [ROLE_IDENTITY[role], code ? FORMAT_RULES : '', code ? STACK_RULES : '', `## Standards\n${restrictions}`].filter(Boolean).join('\n\n');
     const notes = code ? libraryNotes(request, plan, importLines()) : '';
+    const nativeLang = detectNativeLanguage(request, [...files.keys()]);
+    const nativeNotes = nativeLang ? nativeReferenceNotes(nativeLang) : '';
+    const imagesNote = images.length
+      ? `## Reference images attached (${images.length})\n${images.map((im, idx) => `${idx + 1}. ${im.name || `image-${idx + 1}`} (${im.mime || 'image'}) — match its layout, palette, typography, and controls.`).join('\n')}`
+      : '';
     const user = [
       `## User request\n${request}`,
+      imagesNote,
       plan ? `## Plan\n${plan}` : '',
       requirements.length ? `## Requirements\n${requirements.map(r => `${r.id}. ${r.text}`).join('\n')}` : '',
       tests.length && code && runTests ? `## Acceptance tests\nThe finished app is tested with these steps in the preview; each test runs on a freshly loaded app with empty storage. It must pass every one, so use these exact labels, placeholders and texts in the UI.\n${testsText()}` : '',
       starter && code ? `## Starting point\n${STARTER_NOTE[starter]}` : '',
+      nativeNotes,
       notes ? `## Library notes\n${notes}` : '',
       directive && code ? `## Orchestrator directive\n${directive}` : '',
       extra,
@@ -462,12 +480,21 @@ export async function runPipeline(input, hooks) {
       `## Your task\n${task}`,
     ].filter(Boolean).join('\n\n');
     const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
+    let streamedChars = 0;
     const opts = {
       scope: `cybeni:${role}`,
       temperature: temperature ?? (role === 'designer' ? 0.6 : 0.25),
       maxTokens: maxTokens ?? (code ? 8192 : 2048),
       ...(jsonSchema ? { jsonSchema } : {}),
+      ...(images.length ? { images } : {}),
+      ...(hooks.onStream ? {
+        onToken: (chunk) => {
+          streamedChars += String(chunk || '').length;
+          hooks.onStream({ phase: activePhaseId, role, status: 'streaming', chars: streamedChars, chunk: String(chunk || '') });
+        },
+      } : {}),
     };
+    hooks.onStream?.({ phase: activePhaseId, role, status: 'start', chars: 0 });
 
     let usedKey = modelKey;
     const send = async () => {
@@ -493,6 +520,7 @@ export async function runPipeline(input, hooks) {
     stats.modelCalls++;
     stats.charsIn += system.length + user.length;
     stats.charsOut += String(reply || '').length;
+    hooks.onStream?.({ phase: activePhaseId, role, status: 'done', chars: String(reply || '').length });
     cancelled();
 
     const question = /^\s*QUESTION:\s*(.+)/i.exec(String(reply || ''));
@@ -630,28 +658,49 @@ export async function runPipeline(input, hooks) {
     return 'Approved.';
   }
 
+  const CRITICAL_VISUAL_KINDS = new Set(['literal-object-render', 'literal-nan-render', 'collapsed-container', 'broken-image']);
+
   async function runtimeCheck(label) {
-    if (!hooks.verify) return { note: 'Skipped: no preview available.', clean: null };
+    if (!hooks.verify && !hooks.compileNative) return { note: 'Skipped: no preview available.', clean: null };
     if (!files.size) return { note: 'Skipped: empty project.', clean: null };
-    const active = runTests ? tests : [];
-    const result = await hooks.verify(snapshot(), { tests: active });
-    cancelled();
+    const problems = [];
+    let testNote = '';
+
+    if (hooks.compileNative && [...files.keys()].some(p => /\.(c|cc|cpp|cxx|cs)$/i.test(p))) {
+      const nat = await hooks.compileNative(snapshot());
+      cancelled();
+      if (nat && nat.ok === false && Array.isArray(nat.errors) && nat.errors.length) {
+        problems.push(...nat.errors.map(e => `Native compiler error: ${e}`));
+      }
+    }
+
+    if (hooks.verify) {
+      const active = runTests ? tests : [];
+      const result = await hooks.verify(snapshot(), { tests: active });
+      cancelled();
+      const errors = result?.errors || [];
+      problems.push(...errors);
+      if (result?.blank && !errors.length) problems.push('The app rendered a blank page: nothing appeared in #root or the body.');
+      visualIssues = Array.isArray(result?.visualIssues) ? result.visualIssues : [];
+      for (const v of visualIssues) {
+        if (CRITICAL_VISUAL_KINDS.has(v?.kind)) {
+          problems.push(`Visual defect (${v.kind}): ${v.message}`);
+        }
+      }
+      if (active.length && Array.isArray(result?.tests)) {
+        testResults = result.tests;
+        const passed = testResults.filter(r => r.passed).length;
+        testNote = ` ${passed}/${active.length} acceptance tests pass.`;
+        if (!testResults.length) problems.push('The acceptance tests did not run: the page never reported back. It may be stuck in a loop.');
+        problems.push(...failureProblems(testResults, active));
+      }
+    }
+
     lastVerifiedAt = stats.modelCalls;
     editsSinceVerify = 0;
-    const errors = result?.errors || [];
-    const problems = [...errors];
-    if (result?.blank && !errors.length) problems.push('The app rendered a blank page: nothing appeared in #root or the body.');
-    let testNote = '';
-    if (active.length && Array.isArray(result?.tests)) {
-      testResults = result.tests;
-      const passed = testResults.filter(r => r.passed).length;
-      testNote = ` ${passed}/${active.length} acceptance tests pass.`;
-      if (!testResults.length) problems.push('The acceptance tests did not run: the page never reported back. It may be stuck in a loop.');
-      problems.push(...failureProblems(testResults, active));
-    }
     runtimeClean = problems.length === 0;
-    log(`${label}: ${runtimeClean ? 'ran cleanly' : `${problems.length} problem(s)`}.${testNote}`);
-    return { problems, clean: runtimeClean, note: runtimeClean ? `Ran cleanly.${testNote}` : `${problems.length} problem(s).${testNote} First: ${problems[0].slice(0, 140)}` };
+    log(`${label}: ${runtimeClean ? 'ran cleanly' : `${problems.length} problem(s)`}.${testNote}${visualIssues.length ? ` (${visualIssues.length} visual check note(s))` : ''}`);
+    return { problems, clean: runtimeClean, visualIssues, note: runtimeClean ? `Ran cleanly.${testNote}` : `${problems.length} problem(s).${testNote} First: ${problems[0].slice(0, 140)}` };
   }
 
   /** One line per requirement: passes, FAILS (with its tests) or has no automated test. */
@@ -917,6 +966,7 @@ export async function runPipeline(input, hooks) {
       const reply = await call('reviewer', [
         'Final quality inspection. Check: does it run, are all planned features implemented, is it secure, is the UX polished, does it match what the user asked for?',
         runtimeClean === false ? 'Note: the last preview run still reported problems.' : '',
+        visualIssues.length ? `Visual DOM layout audit warnings:\n${visualIssues.map(v => `- [${v.kind}] ${v.message}`).join('\n')}` : '',
         testResults ? `Automated acceptance results (from actually running the app):\n${coverage()}` : '',
         'Reply APPROVED on the first line followed by a short summary if everything passes.',
         'Otherwise reply ISSUES on the first line followed by a numbered list.',
@@ -970,6 +1020,7 @@ export async function runPipeline(input, hooks) {
         continue;
       }
       const started = Date.now();
+      activePhaseId = phase.id;
       hooks.onPhase?.(phase.id, { status: 'running', model: roles[phase.role] || null });
       try {
         const out = await handlers[phase.id]();
@@ -984,6 +1035,8 @@ export async function runPipeline(input, hooks) {
         if (CONTRACT_PHASES.has(phase.id)) failedChecks.push(phase.id);
         // A failed build pass leaves nothing to check; other failures are survivable.
         if (['build', 'foundation', 'fix'].includes(phase.id) && [...changed].every(p => PROTECTED_RE.test(p))) throw err;
+      } finally {
+        activePhaseId = null;
       }
     }
   } catch (err) {
@@ -1011,6 +1064,7 @@ export async function runPipeline(input, hooks) {
     approved: failedReviews.length || failedChecks.length || testsFailed || runtimeClean === false ? false : approved,
     unreviewed: [...failedReviews, ...failedChecks],
     runtimeClean,
+    visualIssues,
     requirements,
     tests,
     testResults,

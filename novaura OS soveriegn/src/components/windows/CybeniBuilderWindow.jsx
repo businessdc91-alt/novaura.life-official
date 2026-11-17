@@ -2,16 +2,22 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Binds @monaco-editor/react to the locally bundled Monaco (offline, no CDN).
 import '../../config/monacoConfig.js';
 import {
-  Code2, Eye, Columns2, Plus, Trash2, Pencil, Download, ChevronDown, Sparkles, GitCommit, Globe, ShoppingBag, FileArchive, FileCode2, X, Gauge,
+  Code2, Eye, Columns2, Plus, Trash2, Pencil, Download, ChevronDown, Sparkles, GitCommit, Globe, ShoppingBag,
+  FileArchive, FileCode2, X, Gauge, Server, AppWindow, Cpu,
 } from 'lucide-react';
 import { db } from '../../database/sovereignDatabase.js';
 import { novaHub } from '../../services/novaHubService.js';
 import { publishHostedSite } from '../../services/sovereignMesh.js';
 import { marketplacePublish } from '../../services/marketplacePublishService.js';
-import { runPipeline, phasesFor } from '../../services/cybeni/pipeline.js';
+import { runPipeline, phasesFor, TESTS_PATH } from '../../services/cybeni/pipeline.js';
 import { listCybeniModels, runModel, suggestRoles } from '../../services/cybeni/models.js';
-import { buildPreview } from '../../services/cybeni/previewBuilder.js';
+import { buildPreview, staticCheck } from '../../services/cybeni/previewBuilder.js';
 import { publishPreview, clearPreview, verifyInHiddenFrame, newSessionId, isNoise } from '../../services/cybeni/previewHost.js';
+import { normalizeTests } from '../../services/cybeni/testAgent.js';
+import { generateFullStackServerFiles, buildNovappManifest } from '../../services/cybeni/fullStackRuntime.js';
+import { detectNativeLanguage } from '../../services/cybeni/nativeReference.js';
+import { compileNativeProject, buildNativeSourceBundleFiles, base64ToUint8Array } from '../../services/cybeni/nativeCompiler.js';
+import { integrateAsApp } from '../../services/forge/forgeService.js';
 import {
   TEMPLATES, listProjects, createProject, updateProject, deleteProject, loadProjectFiles, saveProjectFile,
   deleteProjectFile, replaceProjectFiles, createCheckpoint, restoreCheckpoint, buildZip, downloadBytes,
@@ -53,6 +59,8 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const [question, setQuestion] = useState(null);
   const [lastResult, setLastResult] = useState(null);
   const [changedPaths, setChangedPaths] = useState([]);
+  const [lastCheckpointFiles, setLastCheckpointFiles] = useState(null);
+  const [streamingInfo, setStreamingInfo] = useState(null);
   const cancelRef = useRef(false);
 
   const sessionRef = useRef(newSessionId());
@@ -61,7 +69,19 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const [previewBuilding, setPreviewBuilding] = useState(false);
   const [consoleEntries, setConsoleEntries] = useState([]);
   const [staticIssues, setStaticIssues] = useState([]);
+  const [inspecting, setInspecting] = useState(false);
+  const [pickedElement, setPickedElement] = useState(null);
+  const [dbState, setDbState] = useState({ tables: {}, users: [], currentUser: null });
+  const [visualIssues, setVisualIssues] = useState([]);
+  const [checkReport, setCheckReport] = useState(null);
   const liveTimer = useRef(null);
+
+  const settingsRef = useRef(settings);
+  const modelsRef = useRef(models);
+  useEffect(() => {
+    settingsRef.current = settings;
+    modelsRef.current = models;
+  }, [settings, models]);
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [showExport, setShowExport] = useState(false);
@@ -136,6 +156,9 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
 
   const refreshPreview = useCallback(async (projectFiles) => {
     setPreviewBuilding(true);
+    setInspecting(false);
+    setPickedElement(null);
+    setVisualIssues([]);
     try {
       const published = await publishPreview(sessionRef.current, projectFiles);
       setStaticIssues(published.issues);
@@ -163,6 +186,13 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     setPhases([]);
     setLastResult(null);
     setChangedPaths([]);
+    setLastCheckpointFiles(null);
+    setStreamingInfo(null);
+    setInspecting(false);
+    setPickedElement(null);
+    setDbState({ tables: {}, users: [], currentUser: null });
+    setVisualIssues([]);
+    setCheckReport(null);
     loadFiles(slug).then(list => {
       const first = list.find(f => /App\.(j|t)sx?$/.test(f.path)) || list.find(f => f.path === 'index.html') || list[0];
       if (first) {
@@ -172,14 +202,61 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     });
   }, [slug, loadFiles]);
 
-  // Preview console
+  const postToPreview = useCallback((payload) => {
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    const targetOrigin = previewDoc?.origin && previewDoc.origin !== 'null' ? previewDoc.origin : '*';
+    win.postMessage(payload, targetOrigin);
+  }, [previewDoc]);
+
+  // Preview console + @cybeni/backend DB sync + Visual Audit + Element Inspector + AI bridge
   useEffect(() => {
-    const onMessage = (e) => {
+    const onMessage = async (e) => {
       if (!frameRef.current || e.source !== frameRef.current.contentWindow || !e.data?.__cybeni) return;
       const d = e.data;
-      if (d.type === 'error') setConsoleEntries(c => [...c.slice(-199), { level: 'error', text: `${d.message}${d.line ? ` (line ${d.line})` : ''}` }]);
-      else if (d.type === 'console' && !isNoise(d.text)) setConsoleEntries(c => [...c.slice(-199), { level: d.level, text: d.text }]);
-      else if (d.type === 'ready' && d.empty) setConsoleEntries(c => [...c, { level: 'warn', text: 'The app rendered a blank page.' }]);
+      const replyOrigin = e.origin && e.origin !== 'null' ? e.origin : '*';
+
+      if (d.type === 'error') {
+        setConsoleEntries(c => [...c.slice(-199), { level: 'error', text: `${d.message}${d.line ? ` (line ${d.line})` : ''}` }]);
+      } else if (d.type === 'console' && !isNoise(d.text)) {
+        setConsoleEntries(c => [...c.slice(-199), { level: d.level, text: d.text }]);
+      } else if (d.type === 'ready') {
+        if (d.empty) setConsoleEntries(c => [...c, { level: 'warn', text: 'The app rendered a blank page.' }]);
+        if (Array.isArray(d.visualIssues)) setVisualIssues(d.visualIssues);
+        try {
+          frameRef.current?.contentWindow?.postMessage({ __cybeniDbAdmin: true, action: 'request-sync' }, replyOrigin);
+        } catch { /* ignore */ }
+      } else if (d.type === 'visual-audit') {
+        if (Array.isArray(d.visualIssues)) setVisualIssues(d.visualIssues);
+      } else if (d.type === 'db-sync') {
+        setDbState({
+          tables: d.tables || {},
+          users: Array.isArray(d.users) ? d.users : [],
+          currentUser: d.currentUser || null,
+        });
+      } else if (d.type === 'element-picked') {
+        setPickedElement(d.element || null);
+        setInspecting(false);
+      } else if (d.type === 'inspect-cancelled') {
+        setInspecting(false);
+      } else if (d.type === 'ai-request' && d.requestId) {
+        try {
+          const roles = settingsRef.current?.roles || {};
+          const modelKey = roles.developer || roles.architect || modelsRef.current[0]?.key;
+          if (!modelKey) throw new Error('No AI model configured in Cybeni settings.');
+          const incoming = Array.isArray(d.messages) ? d.messages : [];
+          const hasSys = incoming.some(m => m.role === 'system');
+          const sysContent = d.opts?.system || 'You are a helpful AI assistant embedded inside an application.';
+          const msgs = hasSys ? incoming : [{ role: 'system', content: sysContent }, ...incoming];
+          const text = await runModel(modelKey, msgs, {
+            temperature: d.opts?.temperature ?? 0.5,
+            maxTokens: Math.min(2048, Number(d.opts?.maxTokens) || 1024),
+          });
+          e.source?.postMessage({ __cybeniAiReply: true, requestId: d.requestId, text }, replyOrigin);
+        } catch (err) {
+          e.source?.postMessage({ __cybeniAiReply: true, requestId: d.requestId, error: err.message || 'AI request failed.' }, replyOrigin);
+        }
+      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
@@ -236,22 +313,63 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     openFile(next.trim().replace(/^\/+/, ''));
   };
 
+  const revertFile = async (path) => {
+    if (!slug || !lastCheckpointFiles || !Object.prototype.hasOwnProperty.call(lastCheckpointFiles, path)) return;
+    await saveProjectFile(slug, path, lastCheckpointFiles[path]);
+    setDrafts(d => {
+      const { [path]: _drop, ...rest } = d;
+      return rest;
+    });
+    setChangedPaths(cs => cs.filter(p => p !== path));
+    await loadFiles(slug);
+    say(`Reverted ${path} to pre-run state.`, 'good');
+  };
+
+  const uploadAssets = async (fileList) => {
+    if (!slug || !fileList?.length) return;
+    const added = [];
+    for (const file of Array.from(fileList)) {
+      const cleanName = String(file.name || 'asset').replace(/[^a-zA-Z0-9._-]+/g, '-');
+      const assetPath = `assets/${cleanName}`;
+      const content = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => resolve('');
+        if (/\.svg$/i.test(cleanName)) reader.readAsText(file);
+        else reader.readAsDataURL(file);
+      });
+      if (!content) continue;
+      await saveProjectFile(slug, assetPath, content);
+      added.push(assetPath);
+    }
+    if (added.length) {
+      await loadFiles(slug);
+      openFile(added[0]);
+      say(`Added ${added.length} asset(s) under assets/. Import with "./${added[0]}" or src="${added[0]}".`, 'good');
+    }
+  };
+
   // ── Pipeline ──────────────────────────────────────────────────────────────
 
-  const startRun = async (mode, request) => {
+  const startRun = async (mode, request, images = []) => {
     if (!slug || running) return;
     await flushDrafts();
     const before = await loadProjectFiles(slug);
+    setLastCheckpointFiles(Object.fromEntries(before.map(f => [f.path, f.content])));
     const checkpointId = await createCheckpoint(slug, request, before);
     setPhases(phasesFor(mode).map(p => ({ ...p, status: 'pending' })));
     setLogs([]);
     setLastResult(null);
     setChangedPaths([]);
+    setPickedElement(null);
+    setInspecting(false);
+    setStreamingInfo(null);
     cancelRef.current = false;
     setRunning(true);
 
     const result = await runPipeline({
       request,
+      images,
       files: before,
       mode,
       roles: settings.roles,
@@ -262,7 +380,9 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     }, {
       runModel,
       verify: settings.autoVerify ? (snapshot, opts) => verifyInHiddenFrame(snapshot, opts) : undefined,
+      compileNative: settings.autoVerify ? (snapshot) => compileNativeProject(slug, snapshot, { checkOnly: true }) : undefined,
       onPhase: (id, patch) => setPhases(ps => ps.map(p => (p.id === id ? { ...p, ...patch } : p))),
+      onStream: (info) => setStreamingInfo(info),
       onLog: (text) => setLogs(l => [...l.slice(-400), { text, at: Date.now() }]),
       onFiles: (snapshot, changed) => {
         setFiles(snapshot);
@@ -294,6 +414,8 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     setProjects(ps => ps.map(p => (p.slug === slug ? updated : p)));
     setLastResult(result);
     setChangedPaths(result.changed);
+    if (Array.isArray(result.visualIssues)) setVisualIssues(result.visualIssues);
+    setStreamingInfo(null);
     setRunning(false);
     setQuestion(null);
     await loadFiles(slug);
@@ -317,6 +439,79 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const fixPreviewErrors = () => {
     const list = [...new Set(previewErrors.map(e => e.text))].slice(0, 10);
     startRun('fix', `The preview reported these problems. Fix them:\n${list.map((t, i) => `${i + 1}. ${t}`).join('\n')}`);
+  };
+
+  const fixVisualIssues = () => {
+    if (!visualIssues.length) return;
+    startRun('fix', `Fix these visual layout & DOM rendering issues reported by the preview audit:\n${visualIssues.map((v, i) => `${i + 1}. [${v.kind}] ${v.message}${v.selector ? ` (selector: ${v.selector})` : ''}`).join('\n')}`);
+  };
+
+  const toggleInspect = () => {
+    const next = !inspecting;
+    setInspecting(next);
+    postToPreview({ __cybeniInspect: next });
+  };
+
+  const applyElementEdit = (element, editPrompt) => {
+    const details = [
+      `Target element: ${element.selector || element.tag}`,
+      element.component ? `React component: <${element.component}>` : '',
+      element.fileHint ? `Likely file: ${element.fileHint}` : '',
+      element.text ? `Visible text: "${element.text}"` : '',
+      element.placeholder ? `Placeholder: "${element.placeholder}"` : '',
+      element.classes ? `Current classes: "${element.classes}"` : '',
+    ].filter(Boolean).join('\n');
+    startRun('quick', `Make this targeted change ONLY to the inspected element below while keeping everything else working:\n\n${details}\n\nRequested change: ${editPrompt}`);
+  };
+
+  const handleDbAdmin = (payload) => {
+    postToPreview({ __cybeniDbAdmin: true, ...payload });
+  };
+
+  const requestDbSync = () => {
+    postToPreview({ __cybeniDbAdmin: true, action: 'request-sync' });
+  };
+
+  const refreshAudit = () => {
+    postToPreview({ __cybeniAudit: true });
+  };
+
+  const runProjectChecks = async () => {
+    if (!slug) return;
+    setCheckReport(r => ({ ...(r || {}), running: true }));
+    try {
+      await flushDrafts();
+      const current = await loadProjectFiles(slug);
+      const staticList = staticCheck(current);
+      const testsFile = current.find(f => f.path === TESTS_PATH);
+      let tests = [];
+      if (testsFile) {
+        try { tests = normalizeTests(JSON.parse(testsFile.content)); } catch { tests = []; }
+      }
+      const nativeResult = detectNativeLanguage('', current.map(f => f.path))
+        ? await compileNativeProject(slug, current, { checkOnly: true }).catch(err => ({ ok: false, lang: 'native', compiler: 'error', errors: [err.message] }))
+        : null;
+      const verifyRes = await verifyInHiddenFrame(current, { tests });
+      if (Array.isArray(verifyRes.visualIssues)) setVisualIssues(verifyRes.visualIssues);
+      setCheckReport({
+        running: false,
+        staticIssues: staticList,
+        nativeResult,
+        runtimeErrors: verifyRes.errors || [],
+        testResults: verifyRes.tests || [],
+        visualIssues: verifyRes.visualIssues || [],
+        ranAt: Date.now(),
+      });
+    } catch (err) {
+      setCheckReport({
+        running: false,
+        staticIssues: [],
+        runtimeErrors: [err.message || 'Verification failed.'],
+        testResults: [],
+        visualIssues: [],
+        ranAt: Date.now(),
+      });
+    }
   };
 
   const restore = async (checkpointId) => {
@@ -363,7 +558,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
     }
   };
 
-  // ── Export ────────────────────────────────────────────────────────────────
+  // ── Export & Deploy ──────────────────────────────────────────────────────
 
   const currentFiles = async () => {
     await flushDrafts();
@@ -372,6 +567,65 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const exportZip = async () => {
     downloadBytes(`${slug}.zip`, buildZip(await currentFiles()), 'application/zip');
     setShowExport(false);
+  };
+  const exportFullStackZip = async () => {
+    setShowExport(false);
+    try {
+      const list = await currentFiles();
+      const { html } = buildPreview(list, { mode: 'inline' });
+      const serverFiles = generateFullStackServerFiles(project?.name || slug, list);
+      const novapp = buildNovappManifest(project?.name || slug, slug, list);
+      const map = new Map(list.map(f => [f.path, f.content]));
+      map.set('standalone.html', html);
+      map.set('novapp.json', `${JSON.stringify(novapp, null, 2)}\n`);
+      for (const sf of serverFiles) map.set(sf.path, sf.content);
+      const bundle = [...map.entries()].map(([path, content]) => ({ path, content }));
+      downloadBytes(`${slug}-fullstack.zip`, buildZip(bundle), 'application/zip');
+      say(`Exported full-stack Node.js + SQLite bundle (${bundle.length} files). Run with "npm start".`, 'good');
+    } catch (err) {
+      say(`Full-stack export failed: ${err.message}`, 'bad');
+    }
+  };
+  const compileStandaloneExe = async () => {
+    setShowExport(false);
+    try {
+      const list = await currentFiles();
+      const lang = detectNativeLanguage('', list.map(f => f.path));
+      if (!lang) {
+        say('Add C++ (.cpp) or C# (.cs) source files (or create a C++/C# template project) to compile a native executable.', 'warn');
+        return;
+      }
+      say(`Compiling standalone ${lang.toUpperCase()} binary…`, 'info');
+      const res = await compileNativeProject(slug, list, { checkOnly: false });
+      if (res.ok && res.exeBase64) {
+        downloadBytes(res.exeName, base64ToUint8Array(res.exeBase64), 'application/octet-stream');
+        say(`Compiled ${res.exeName} (${Math.max(1, Math.round(res.exeSize / 1024))} KB) with ${res.compiler}.`, 'good');
+        return;
+      }
+      if (!res.ok) {
+        say(`Native compile failed (${res.errors?.[0] || 'check C++/C# syntax'}).`, 'bad');
+        setCheckReport(r => ({ ...(r || {}), running: false, nativeResult: res }));
+        return;
+      }
+      const bundle = buildNativeSourceBundleFiles(project?.name || slug, list);
+      downloadBytes(`${slug}-native-src.zip`, buildZip(bundle.files), 'application/zip');
+      say(res.output || `Exported ready-to-build ${bundle.lang.toUpperCase()} bundle (run build.ps1 inside Sovereign Desktop or Windows terminal).`, 'good');
+    } catch (err) {
+      say(`Native compile failed: ${err.message}`, 'bad');
+    }
+  };
+  const installToSovereignOs = async () => {
+    setShowExport(false);
+    try {
+      const list = await currentFiles();
+      const manifest = buildNovappManifest(project?.name || slug, slug, list);
+      await saveProjectFile(slug, 'novapp.json', `${JSON.stringify(manifest, null, 2)}\n`);
+      await integrateAsApp(slug, { name: project?.name || slug });
+      await loadFiles(slug, { preview: false });
+      say(`Installed "${project?.name || slug}" to Sovereign OS Apps.`, 'good');
+    } catch (err) {
+      say(`Install failed: ${err.message}`, 'bad');
+    }
   };
   const exportHtml = async () => {
     const { html, issues } = buildPreview(await currentFiles(), { mode: 'inline' });
@@ -431,7 +685,11 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
 
   // ── Integrations library ─────────────────────────────────────────────────
 
-  const integrationPath = (integration) => `integrations/${String(integration.suggestedPath || 'integration.js').split('/').pop()}`;
+  const integrationPath = (integration) => {
+    const raw = String(integration.suggestedPath || 'integration.js').replace(/\\/g, '/');
+    if (raw.startsWith('/projects/cybeni/')) return raw.slice('/projects/cybeni/'.length);
+    return `integrations/${raw.split('/').pop()}`;
+  };
   const applyIntegration = async (integration) => {
     const path = integrationPath(integration);
     await saveProjectFile(slug, path, integration.code);
@@ -485,7 +743,11 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
               <Download className="w-3.5 h-3.5" /> Ship <ChevronDown className="w-3 h-3" />
             </button>
             {showExport && (
-              <div className="absolute right-0 top-full mt-1 w-60 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-50 py-1 text-[12px]">
+              <div className="absolute right-0 top-full mt-1 w-64 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-50 py-1 text-[12px]">
+                <button onClick={installToSovereignOs} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 text-emerald-300"><AppWindow className="w-3.5 h-3.5" /> Install to Sovereign OS</button>
+                <button onClick={exportFullStackZip} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 text-cyan-200"><Server className="w-3.5 h-3.5" /> Full-Stack Server (.zip)</button>
+                <button onClick={compileStandaloneExe} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 text-purple-200"><Cpu className="w-3.5 h-3.5" /> Compile Standalone .exe (C++/C#)</button>
+                <div className="my-1 border-t border-slate-800" />
                 <button onClick={exportZip} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800"><FileArchive className="w-3.5 h-3.5 text-slate-400" /> Download project (.zip)</button>
                 <button onClick={exportHtml} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800"><FileCode2 className="w-3.5 h-3.5 text-slate-400" /> Download as one HTML file</button>
                 <button onClick={pushHub} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800"><GitCommit className="w-3.5 h-3.5 text-slate-400" /> Push to NovaHub</button>
@@ -518,6 +780,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
             runs={runs}
             onRestoreCheckpoint={restore}
             lastResult={lastResult}
+            streamingInfo={streamingInfo}
           />
         </div>
         <div className="flex-1 min-w-0 min-h-0 flex">
@@ -529,6 +792,7 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
                 activePath={activePath}
                 drafts={drafts}
                 changedPaths={changedPaths}
+                checkpointFiles={lastCheckpointFiles}
                 onOpen={openFile}
                 onClose={closeTab}
                 onChange={(path, value) => setDrafts(d => ({ ...d, [path]: value }))}
@@ -536,6 +800,8 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
                 onNewFile={newFile}
                 onDeleteFile={removeFile}
                 onRenameFile={renameFile}
+                onRevertFile={revertFile}
+                onUploadAsset={uploadAssets}
               />
             </div>
           )}
@@ -549,6 +815,19 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
                 onReload={async () => { await flushDrafts(); refreshPreview(await loadProjectFiles(slug)); }}
                 building={previewBuilding}
                 staticIssues={staticIssues}
+                inspecting={inspecting}
+                onToggleInspect={toggleInspect}
+                pickedElement={pickedElement}
+                onClearPicked={() => setPickedElement(null)}
+                onApplyElementEdit={applyElementEdit}
+                dbState={dbState}
+                onDbAdmin={handleDbAdmin}
+                onRequestDbSync={requestDbSync}
+                visualIssues={visualIssues}
+                onFixVisualIssues={fixVisualIssues}
+                onRefreshAudit={refreshAudit}
+                onRunChecks={runProjectChecks}
+                checkReport={checkReport}
               />
             </div>
           )}

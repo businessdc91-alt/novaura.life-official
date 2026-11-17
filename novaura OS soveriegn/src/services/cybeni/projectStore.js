@@ -5,6 +5,7 @@
 import { db } from '../../database/sovereignDatabase.js';
 import { saveFile } from '../fileStorageService.js';
 import { mimeFor, normalizePath } from './previewBuilder.js';
+import { starterFiles } from './starters.js';
 
 const ROOT = '/projects/cybeni';
 const REGISTRY_KEY = 'cybeni_projects';
@@ -26,6 +27,14 @@ export const TEMPLATES = {
       { path: 'styles.css', content: 'body {\n  font-family: system-ui, sans-serif;\n  margin: 0;\n  display: grid;\n  place-items: center;\n  min-height: 100vh;\n}\n' },
       { path: 'app.js', content: "console.log('App ready');\n" },
     ],
+  },
+  cpp: {
+    label: 'C++20 Standalone + Visual Twin',
+    files: starterFiles('cpp'),
+  },
+  csharp: {
+    label: 'C# (.NET) Standalone + Visual Twin',
+    files: starterFiles('csharp'),
   },
   blank: { label: 'Empty (Cybeni chooses)', files: [] },
 };

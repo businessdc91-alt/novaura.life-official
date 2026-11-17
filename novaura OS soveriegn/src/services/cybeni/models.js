@@ -81,7 +81,7 @@ const EXCHANGE_TIMEOUT_MS = 45 * 60 * 1000;
 export async function runModel(
   key,
   messages,
-  { maxTokens = 4096, temperature = 0.3, jsonSchema, think, reasoningEffort, effort, scope, strictMaxTokens } = {}
+  { maxTokens = 4096, temperature = 0.3, jsonSchema, think, reasoningEffort, effort, scope, strictMaxTokens, onToken, images } = {}
 ) {
   const k = String(key || '');
   const opts = {
@@ -93,13 +93,46 @@ export async function runModel(
     ...(effort ? { effort } : {}),
     ...(scope ? { scope } : {}),
     ...(strictMaxTokens ? { strictMaxTokens } : {}),
+    ...(typeof onToken === 'function' ? { onToken } : {}),
   };
+
+  // Attach vision image payloads safely only on runtimes that natively accept them.
+  let preparedMessages = messages;
+  if (Array.isArray(images) && images.length > 0 && Array.isArray(messages) && messages.length > 0) {
+    const validUrls = images.map(img => img?.dataUrl).filter(u => typeof u === 'string' && u.startsWith('data:image/'));
+    if (validUrls.length > 0) {
+      preparedMessages = messages.map((m, idx) => {
+        if (idx !== messages.length - 1 || m.role !== 'user' || typeof m.content !== 'string') return m;
+        if (k.startsWith('local|ollama:')) {
+          return {
+            ...m,
+            images: validUrls.map(u => u.replace(/^data:image\/[^;]+;base64,/, '')),
+          };
+        }
+        if (k.startsWith('local|lmstudio:') || k.startsWith('local|novaura:')) {
+          return {
+            ...m,
+            content: [
+              { type: 'text', text: m.content },
+              ...validUrls.map(url => ({ type: 'image_url', image_url: { url } })),
+            ],
+          };
+        }
+        return m;
+      });
+    }
+  }
+
   if (k.startsWith('local|')) {
-    return runLocalChat(k.slice(6), messages, opts);
+    const out = await runLocalChat(k.slice(6), preparedMessages, opts);
+    if (typeof onToken === 'function' && out) onToken(out);
+    return out;
   }
   if (k.startsWith('exchange|')) {
     const [, keyId, ...rest] = k.split('|');
-    return callRemoteModel(keyId, rest.join('|'), messages, { maxTokens, temperature, timeoutMs: EXCHANGE_TIMEOUT_MS });
+    const out = await callRemoteModel(keyId, rest.join('|'), messages, { maxTokens, temperature, timeoutMs: EXCHANGE_TIMEOUT_MS });
+    if (typeof onToken === 'function' && out) onToken(out);
+    return out;
   }
   if (k.startsWith('cloud|')) {
     if (!kernel?.ai?.chat) throw new Error('The AI subsystem is not ready yet.');

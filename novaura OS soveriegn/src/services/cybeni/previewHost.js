@@ -64,6 +64,7 @@ function runFrame(published, tests, { timeoutMs, settleMs }) {
   const logs = [];
   let ready = null;
   let results = [];
+  let visualIssues = [];
   return new Promise((resolve) => {
     let settleTimer = null;
     let testTimer = null;
@@ -73,7 +74,7 @@ function runFrame(published, tests, { timeoutMs, settleMs }) {
       clearTimeout(settleTimer);
       clearTimeout(testTimer);
       frame.remove();
-      resolve({ errors, logs, ready, timedOut, results });
+      resolve({ errors, logs, ready, timedOut, results, visualIssues });
     };
     const startTests = () => {
       // Always sent, even with no tests: the agent then restores the person's storage.
@@ -93,10 +94,12 @@ function runFrame(published, tests, { timeoutMs, settleMs }) {
         if (d.level === 'error' && !isNoise(d.text)) errors.push(d.text);
       } else if (d.type === 'ready' && !ready) {
         ready = d;
+        if (Array.isArray(d.visualIssues)) visualIssues = d.visualIssues;
         clearTimeout(hardTimer);
         settleTimer = setTimeout(startTests, settleMs);
       } else if (d.type === 'test-results') {
         results = Array.isArray(d.results) ? d.results : [];
+        if (Array.isArray(d.visualIssues) && d.visualIssues.length) visualIssues = d.visualIssues;
         finish(false);
       }
     };
@@ -136,5 +139,13 @@ export async function verifyInHiddenFrame(files, { session = newSessionId(), tim
   if (first.timedOut && !first.ready) {
     unique.push(`The app did not finish loading within ${Math.round(timeoutMs / 1000)} seconds. An import may be failing, or the page may be stuck in a loop.`);
   }
-  return { errors: unique, blank: first.ready ? Boolean(first.ready.empty) : true, timedOut: first.timedOut, logs: first.logs, staticIssues: published.issues, tests: testResults };
+  return {
+    errors: unique,
+    blank: first.ready ? Boolean(first.ready.empty) : true,
+    timedOut: first.timedOut,
+    logs: first.logs,
+    staticIssues: published.issues,
+    tests: testResults,
+    visualIssues: first.visualIssues || [],
+  };
 }

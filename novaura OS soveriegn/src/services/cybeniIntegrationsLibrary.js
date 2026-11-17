@@ -18,9 +18,11 @@ import { MULTIMODAL_VOICE_INTEGRATIONS } from './integrations/multimodalVoiceInt
 import { CREATIVE_MEDIA_INTEGRATIONS } from './integrations/creativeMediaIntegrations.js';
 import { BACKEND_LANGUAGES_INTEGRATIONS } from './integrations/backendLanguagesIntegrations.js';
 import { UI_THEME_DESIGN_INTEGRATIONS } from './integrations/uiThemeDesignIntegrations.js';
+import { CSHARP_AND_CPP_STANDALONE_INTEGRATIONS } from './integrations/csharpAndCppStandaloneIntegrations.js';
 
 export const INTEGRATION_CATEGORIES = [
   { id: 'all', label: 'All Architectures', icon: 'Sparkles' },
+  { id: 'cpp_csharp_standalone', label: 'C# & C++ Standalone Apps', icon: 'Terminal' },
   { id: 'embedded_cpp_ai', label: 'C++ & Local Models (2B-35B)', icon: 'Cpu' },
   { id: 'ecommerce', label: 'E-Commerce (Shopify, Ali, Amazon, eBay)', icon: 'ShoppingBag' },
   { id: 'social_content', label: 'Social Media & Content APIs', icon: 'Share2' },
@@ -2305,6 +2307,7 @@ export const INTEGRATIONS_LIBRARY = [
   ...CREATIVE_MEDIA_INTEGRATIONS,
   ...BACKEND_LANGUAGES_INTEGRATIONS,
   ...UI_THEME_DESIGN_INTEGRATIONS,
+  ...CSHARP_AND_CPP_STANDALONE_INTEGRATIONS,
 ];
 
 /**

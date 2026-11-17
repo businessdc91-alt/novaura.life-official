@@ -16,11 +16,17 @@
 import { transform } from 'sucrase';
 import { TEST_AGENT_SOURCE, STORAGE_ISOLATION_SOURCE } from './testAgent.js';
 import { pinnedSpecifier } from './libraryNotes.js';
+import { CYBENI_BACKEND_MODULE_SOURCE } from './fullStackRuntime.js';
+import { OFFLINE_TAILWIND_FALLBACK_SCRIPT } from './offlineShims.js';
+import { nativeStaticCheck } from './nativeReference.js';
 
 export const REACT_VERSION = '18.3.1';
 const ESM_CDN = 'https://esm.sh';
 
 const SCRIPT_EXT = /\.(m?jsx?|tsx?)$/i;
+const ASSET_EXT = /\.(png|jpe?g|gif|webp|svg|ico|mp3|wav|ogg|mp4|webm|woff2?)$/i;
+const VIRTUAL_BACKEND_PATH = '_cybeni_internal/backend.js';
+const VIRTUAL_PACKAGES = new Set(['@cybeni/backend', '@novaura/sdk']);
 const ENTRY_CANDIDATES = [
   'src/main.jsx', 'src/main.tsx', 'src/main.js', 'src/main.ts',
   'src/index.jsx', 'src/index.tsx', 'src/index.js', 'src/index.ts',
@@ -48,7 +54,13 @@ export function mimeFor(path) {
   return {
     html: 'text/html', htm: 'text/html', css: 'text/css', json: 'application/json',
     js: 'text/javascript', mjs: 'text/javascript', jsx: 'text/javascript', ts: 'text/javascript', tsx: 'text/javascript',
-    svg: 'image/svg+xml', txt: 'text/plain', md: 'text/markdown', xml: 'application/xml',
+    svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', ico: 'image/x-icon', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+    mp4: 'video/mp4', webm: 'video/webm', woff: 'font/woff', woff2: 'font/woff2',
+    cpp: 'text/x-c++src', cc: 'text/x-c++src', cxx: 'text/x-c++src', h: 'text/x-chdr', hpp: 'text/x-c++hdr', c: 'text/x-csrc',
+    cs: 'text/x-csharp', csproj: 'application/xml', sln: 'text/plain', xaml: 'application/xml',
+    cmake: 'text/plain', ps1: 'text/plain',
+    txt: 'text/plain', md: 'text/markdown', xml: 'application/xml',
   }[ext] || 'text/plain';
 }
 
@@ -70,6 +82,7 @@ const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(['"])([^'"\n]+)\1\s*\)/g;
 function moduleSpecifierFor(target) {
   if (/\.css$/i.test(target)) return `@cy/${target}.cssmod.js`;
   if (/\.json$/i.test(target)) return `@cy/${target}.jsonmod.js`;
+  if (ASSET_EXT.test(target)) return `@cy/${target}.assetmod.js`;
   return `@cy/${target}`;
 }
 
@@ -84,7 +97,7 @@ function rewriteImports(path, code, fileSet, issues, bare) {
       }
       return moduleSpecifierFor(target);
     }
-    if (spec.startsWith('@cy/')) return spec;
+    if (spec.startsWith('@cy/') || VIRTUAL_PACKAGES.has(spec)) return spec;
     bare.add(spec);
     return spec;
   };
@@ -115,6 +128,7 @@ export function npmImportMap(bareSpecifiers) {
   };
   // Common packages are pinned to the major version Cybeni's library notes describe.
   for (const spec of bareSpecifiers) {
+    if (VIRTUAL_PACKAGES.has(spec)) continue;
     if (!map[spec]) map[spec] = `${ESM_CDN}/${pinnedSpecifier(spec)}?external=react,react-dom`;
   }
   return map;
@@ -138,7 +152,8 @@ export const ERROR_REPORTER = `(function(){
     var root=document.getElementById('root')||document.getElementById('app');
     var visible=(document.body&&document.body.innerText||'').trim();
     var empty=root?root.childElementCount===0:(!document.body||(document.body.childElementCount<=1&&!visible));
-    send('ready',{empty:empty,textSample:visible.slice(0,200)});
+    var visualIssues=typeof window.__cybeniVisualAudit==='function'?window.__cybeniVisualAudit():[];
+    send('ready',{empty:empty,textSample:visible.slice(0,200),visualIssues:visualIssues});
   },1200);});
 })();`;
 
@@ -169,8 +184,12 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
   const issues = [];
   const bare = new Set();
   const modules = new Map(); // "@cy/<path>" target path -> compiled JS
+  const assetMap = {}; // project asset path -> resolved URL / data URL
 
-  // 1. Compile every script module, plus CSS/JSON wrappers for importable assets.
+  // Always register the built-in zero-config full-stack runtime module.
+  modules.set(VIRTUAL_BACKEND_PATH, CYBENI_BACKEND_MODULE_SOURCE);
+
+  // 1. Compile every script module, plus CSS/JSON/binary asset wrappers.
   for (const f of files) {
     if (SCRIPT_EXT.test(f.path)) {
       const js = transpile(f.path, f.content, issues);
@@ -185,6 +204,14 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
       } catch (err) {
         issues.push({ type: 'syntax', path: f.path, message: `Invalid JSON in ${f.path}: ${err.message}` });
       }
+    } else if (ASSET_EXT.test(f.path) || /^\s*data:/i.test(f.content)) {
+      const trimmed = f.content.trim();
+      let assetUrl;
+      if (/^data:/i.test(trimmed)) assetUrl = trimmed;
+      else if (/\.svg$/i.test(f.path)) assetUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(f.content)}`;
+      else assetUrl = mode === 'server' ? `${baseUrl}${f.path}` : trimmed;
+      assetMap[f.path] = assetUrl;
+      modules.set(`${f.path}.assetmod.js`, `export default ${JSON.stringify(assetUrl)};\n`);
     }
   }
 
@@ -204,10 +231,12 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
       boot = `import React from 'react';\nimport { createRoot } from 'react-dom/client';\nimport App from '@cy/${app}';\ncreateRoot(document.getElementById('root')).render(React.createElement(App));`;
       bare.add('react').add('react-dom/client');
       entryNote = `No entry file found, so ${app} is mounted automatically.`;
+    } else if (files.some(f => /\.(c|cc|cpp|cxx|cs)$/i.test(f.path))) {
+      entryNote = 'Native C++/C# source project without an HTML Visual Twin; compile via Ship -> Compile Standalone .exe.';
     } else {
       issues.push({ type: 'no-entry', path: '', message: 'The project has no index.html and no entry module (such as src/main.jsx), so there is nothing to run.' });
     }
-    html = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<script src="https://cdn.tailwindcss.com"></script>\n</head>\n<body>\n<div id="root"></div>\n${boot ? `<script type="module">${boot}</script>` : ''}\n</body>\n</html>`;
+    html = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<script src="https://cdn.tailwindcss.com"></script>\n</head>\n<body>\n<div id="root">${entryNote && !app ? '<div style="font-family:system-ui;padding:24px;color:#94a3b8;background:#020617;min-height:100vh">Native C++ / C# project — inspect code or compile standalone executable via Ship.</div>' : ''}</div>\n${boot ? `<script type="module">${boot}</script>` : ''}\n</body>\n</html>`;
   }
   const htmlPath = entryHtml?.path || 'index.html';
 
@@ -248,6 +277,15 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
     }
     return `<style data-file="${target}">${byPath.get(target)}</style>`;
   });
+  // Rewrite relative <img src="..."> / <audio src="..."> / <source src="..."> to resolved asset URLs.
+  if (Object.keys(assetMap).length > 0) {
+    html = html.replace(/(<(?:img|audio|video|source)\b[^>]*?\bsrc\s*=\s*)(['"])([^'"]+)\2/gi, (match, prefix, q, src) => {
+      if (isUrl(src) || src.startsWith('//')) return match;
+      const target = resolveImport(htmlPath, src.startsWith('/') ? src : `./${src.replace(/^\.\//, '')}`, fileSet);
+      if (target && assetMap[target]) return `${prefix}${q}${assetMap[target]}${q}`;
+      return match;
+    });
+  }
 
   // 4. Import map and error reporter go first in <head>.
   // A project's own import map (models often write one, sometimes broken, e.g.
@@ -261,21 +299,32 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '' } = {}) {
     }
     return '';
   });
-  // Cybeni keeps control of React (one shared copy) and of project files.
+  // Cybeni keeps control of React (one shared copy) and of project files + virtual @cybeni/backend runtime.
   const imports = { ...ownImports, ...npmImportMap(bare) };
   for (const [spec, target] of Object.entries(ownImports)) {
-    if (!/^react(-dom)?(\/|$)/.test(spec) && !spec.startsWith('@cy/')) imports[spec] = target;
+    if (!/^react(-dom)?(\/|$)/.test(spec) && !spec.startsWith('@cy/') && !VIRTUAL_PACKAGES.has(spec)) imports[spec] = target;
   }
+  const backendUrl = mode === 'server'
+    ? `${baseUrl}${VIRTUAL_BACKEND_PATH}`
+    : `data:text/javascript;base64,${toBase64Utf8(CYBENI_BACKEND_MODULE_SOURCE)}`;
+  imports['@cybeni/backend'] = backendUrl;
+  imports['@novaura/sdk'] = backendUrl;
   if (mode === 'server') {
     imports['@cy/'] = baseUrl;
   } else {
     for (const [path, code] of modules) imports[`@cy/${path}`] = `data:text/javascript;base64,${toBase64Utf8(code)}`;
   }
+  const safeAssetJson = JSON.stringify(assetMap).replace(/</g, '\\u003c');
+  const assetBootstrap = Object.keys(assetMap).length > 0
+    ? `\n<script>(function(){var m=${safeAssetJson};window.__cybeniAssets=m;function fix(){document.querySelectorAll('img[src],audio[src],video[src],source[src]').forEach(function(el){var s=el.getAttribute('src')||'';if(/^https?:|^data:|^blob:|^\\/\\//.test(s))return;var k=s.replace(/^\\.\\//,'').replace(/^\\//,'');if(m[k])el.setAttribute('src',m[k]);});}if(typeof MutationObserver==='function'){new MutationObserver(fix).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src']});}window.addEventListener('DOMContentLoaded',fix);})();</script>`
+    : '';
   // Storage isolation must run before the app reads storage; the test agent waits for instructions.
-  const head = `<script>${STORAGE_ISOLATION_SOURCE}</script>\n<script>${ERROR_REPORTER}</script>\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>\n<script type="importmap">${JSON.stringify({ imports })}</script>`;
+  const head = `<script>${STORAGE_ISOLATION_SOURCE}</script>\n<script>${ERROR_REPORTER}</script>\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>\n<script>${escapeScript(OFFLINE_TAILWIND_FALLBACK_SCRIPT)}</script>${assetBootstrap}\n<script type="importmap">${JSON.stringify({ imports })}</script>\n<script type="module">import '@cybeni/backend';</script>`;
   if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => `${m}\n${head}`);
   else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, m => `${m}\n<head>${head}</head>`);
   else html = `${head}\n${html}`;
+
+  issues.push(...nativeStaticCheck(files));
 
   const result = { html, issues, npm: [...bare].sort(), entryNote };
   if (mode === 'server') {

@@ -46,6 +46,8 @@ const NOTES = {
   '@tanstack/react-query': 'TanStack Query v5: wrap the app in <QueryClientProvider client={new QueryClient()}>; useQuery({ queryKey: [...], queryFn }).',
   uuid: 'uuid v9: import { v4 as uuidv4 } from \'uuid\'; or use crypto.randomUUID() with no package.',
   'date-fns': 'date-fns v3: named imports, e.g. import { format, addDays } from \'date-fns\'.',
+  '@cybeni/backend': '@cybeni/backend (built-in): import { db, auth, storage, ai } from \'@cybeni/backend\'. db.collection(\'items\') supports list/get/insert/update/remove/seed/subscribe; auth supports currentUser/signUp/signIn/demoSignIn/signOut/onAuthChange; storage has get/set; ai.chat(prompt) uses Sovereign OS AI.',
+  '@novaura/sdk': '@novaura/sdk (alias of @cybeni/backend / window.novaura): provides db, auth, storage, and ai APIs with zero configuration.',
 };
 
 /** Split "pkg/sub/path" or "@scope/pkg/sub" into [package, subpath]. */
