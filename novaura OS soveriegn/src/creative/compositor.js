@@ -12,6 +12,7 @@
 // This is the one module a GPU backend would replace.
 
 import { CanvasSurface, createSurface } from './surface.js';
+import { buildLayerTree } from './document.js';
 
 const renderers = new Map(); // kind → fn(ctx, doc, layer), drawing in document coordinates
 let maskProvider = null;     // fn(doc, layer) → { surface, x, y, defaultValue } | null (alpha = visibility)
@@ -20,6 +21,23 @@ let adjustmentProvider = null; // fn(doc, layer, belowSurface, region) → Surfa
 export function registerLayerRenderer(kind, fn) { renderers.set(kind, fn); }
 export function setMaskProvider(fn) { maskProvider = fn; }
 export function setAdjustmentProvider(fn) { adjustmentProvider = fn; }
+
+const selCanvasCache = new WeakMap(); // doc.selection → OffscreenCanvas (alpha channel = selection matte)
+
+function selectionAlphaCanvas(selection) {
+  if (!selection || !selection.bounds || typeof OffscreenCanvas !== 'function') return null;
+  let canvas = selCanvasCache.get(selection);
+  if (canvas) return canvas;
+  canvas = new OffscreenCanvas(selection.width, selection.height);
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(selection.width, selection.height);
+  const src = selection.data;
+  const dst = img.data;
+  for (let i = 0, p = 3; i < src.length; i++, p += 4) dst[p] = src[i];
+  ctx.putImageData(img, 0, 0);
+  selCanvasCache.set(selection, canvas);
+  return canvas;
+}
 
 const canvasFor = (w, h) => new OffscreenCanvas(Math.max(1, w), Math.max(1, h));
 const full = doc => ({ x: 0, y: 0, w: doc.width, h: doc.height });
@@ -50,8 +68,19 @@ function surfaceCanvas(doc, id) {
   return doc.buffers.get(id)?.canvas || null;
 }
 
-// Multiply the scratch layer's alpha by its mask (outside the mask's rectangle, its default).
-function applyMask(doc, layer, ctx, region) {
+function clipScratchToSelection(ctx, region, selection) {
+  const selCanvas = selectionAlphaCanvas(selection);
+  if (!selCanvas) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(selCanvas, region.x, region.y, region.w, region.h, 0, 0, region.w, region.h);
+  ctx.restore();
+}
+
+// Multiply the scratch layer's alpha by its mask (outside the mask's rectangle, its default),
+// including any live stroke currently being painted onto the mask.
+function applyMask(doc, layer, ctx, region, live) {
   if (!layer.mask || layer.mask.enabled === false || !maskProvider) return;
   const m = maskProvider(doc, layer);
   if (!m) return;
@@ -62,6 +91,17 @@ function applyMask(doc, layer, ctx, region) {
     maskCtx.clearRect(m.x, m.y, m.surface.width, m.surface.height);
   }
   maskCtx.drawImage(m.surface.canvas, m.x, m.y);
+  if (live && live.layerId === layer.id && live.part === 'mask') {
+    const liveMaskCtx = scratch(region);
+    liveMaskCtx.drawImage(live.surface.canvas, live.origin.x, live.origin.y);
+    // Keep mask luminance RGB and turn its drawn alpha into mask stroke blend at live.opacity.
+    if (doc.selection) clipScratchToSelection(liveMaskCtx, region, doc.selection);
+    maskCtx.save();
+    maskCtx.globalAlpha = live.opacity;
+    maskCtx.globalCompositeOperation = 'source-over';
+    maskCtx.drawImage(liveMaskCtx.canvas, region.x, region.y);
+    maskCtx.restore();
+  }
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = 'destination-in';
@@ -69,7 +109,18 @@ function applyMask(doc, layer, ctx, region) {
   ctx.restore();
 }
 
-function drawLive(ctx, live) {
+function drawLive(ctx, doc, live, region) {
+  if (doc.selection) {
+    const liveCtx = scratch(region);
+    liveCtx.drawImage(live.surface.canvas, live.origin.x, live.origin.y);
+    clipScratchToSelection(liveCtx, region, doc.selection);
+    ctx.save();
+    ctx.globalAlpha = live.opacity;
+    ctx.globalCompositeOperation = live.erase ? 'destination-out' : 'source-over';
+    ctx.drawImage(liveCtx.canvas, region.x, region.y);
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.globalAlpha = live.opacity;
   ctx.globalCompositeOperation = live.erase ? 'destination-out' : 'source-over';
@@ -83,13 +134,13 @@ function layerAlone(doc, layer, region, live) {
   if (layer.kind === 'pixel') {
     const canvas = surfaceCanvas(doc, layer.bufferId);
     if (canvas) ctx.drawImage(canvas, layer.x, layer.y);
-    if (live && live.layerId === layer.id && live.part === 'layer') drawLive(ctx, live);
+    if (live && live.layerId === layer.id && live.part === 'layer') drawLive(ctx, doc, live, region);
   } else {
     const render = renderers.get(layer.kind);
     if (!render) return null;
     render(ctx, doc, layer);
   }
-  applyMask(doc, layer, ctx, region);
+  applyMask(doc, layer, ctx, region, live);
   return ctx;
 }
 
@@ -98,15 +149,33 @@ function needsScratch(layer, live) {
 }
 
 /**
- * Composite `layers` (bottom to top) onto `target`, a context already drawing in
- * document coordinates and holding whatever lies beneath them, within `region`.
+ * Composite `items` (a level of the layer tree, bottom to top) onto `target`, a context
+ * already drawing in document coordinates and holding whatever lies beneath them, within `region`.
  */
-function paint(target, doc, layers, region, live = null) {
-  for (const layer of layers) {
+function paintTree(target, doc, items, tree, region, live = null, onAsyncReady = null) {
+  for (const layer of items) {
     if (!layer.visible || layer.opacity <= 0) continue;
+    if (layer.kind === 'group') {
+      const children = tree.get(layer.id) || [];
+      const passThrough = (!layer.blend || layer.blend === 'pass-through')
+        && layer.opacity >= 1 && (!layer.mask || layer.mask.enabled === false);
+      if (passThrough) {
+        paintTree(target, doc, children, tree, region, live, onAsyncReady);
+      } else {
+        const gCtx = scratch(region);
+        paintTree(gCtx, doc, children, tree, region, live, onAsyncReady);
+        applyMask(doc, layer, gCtx, region, live);
+        target.save();
+        target.globalAlpha = layer.opacity;
+        target.globalCompositeOperation = (!layer.blend || layer.blend === 'pass-through') ? 'source-over' : layer.blend;
+        target.drawImage(gCtx.canvas, region.x, region.y);
+        target.restore();
+      }
+      continue;
+    }
     if (layer.kind === 'adjust') {
       if (!adjustmentProvider) continue;
-      paintAdjustment(target, doc, layer, region);
+      paintAdjustment(target, doc, layer, region, live, onAsyncReady);
       continue;
     }
     target.save();
@@ -123,14 +192,14 @@ function paint(target, doc, layers, region, live = null) {
   }
 }
 
-function paintAdjustment(target, doc, layer, region) {
+function paintAdjustment(target, doc, layer, region, live = null, onAsyncReady = null) {
   const below = new CanvasSurface(region.w, region.h);
   below.ctx.drawImage(target.canvas, region.x - originOf(target).x, region.y - originOf(target).y, region.w, region.h, 0, 0, region.w, region.h);
-  const adjusted = adjustmentProvider(doc, layer, below, region);
+  const adjusted = adjustmentProvider(doc, layer, below, region, onAsyncReady);
   if (!adjusted) return;
   const ctx = scratch(region);
   ctx.drawImage(adjusted.canvas, region.x, region.y);
-  applyMask(doc, layer, ctx, region);
+  applyMask(doc, layer, ctx, region, live);
   target.save();
   target.globalAlpha = layer.opacity;
   target.globalCompositeOperation = 'source-over';
@@ -144,12 +213,15 @@ function originOf(ctx) {
   return { x: -m.e, y: -m.f };
 }
 
-/** The composite of `layers` alone over transparency, as a surface covering the given area. */
+/** The composite of `layers` (or a flat subset) alone over transparency, as a surface covering the given area. */
 export function composeLayers(doc, layers, { x = 0, y = 0, width = doc.width, height = doc.height } = {}) {
   const surface = new CanvasSurface(width, height);
   surface.ctx.save();
   surface.ctx.translate(-x, -y);
-  paint(surface.ctx, doc, layers, { x, y, w: width, h: height });
+  const subsetIds = new Set(layers.map(l => l.id));
+  const tree = buildLayerTree(layers);
+  const roots = layers.filter(l => !l.parentId || !subsetIds.has(l.parentId));
+  paintTree(surface.ctx, doc, roots, tree, { x, y, w: width, h: height });
   surface.ctx.restore();
   return surface;
 }
@@ -158,7 +230,26 @@ export const flatten = doc => composeLayers(doc, doc.layers);
 
 export function compositeBelow(doc, layerId) {
   const index = doc.layers.findIndex(l => l.id === layerId);
-  return composeLayers(doc, doc.layers.slice(0, Math.max(0, index)));
+  const layer = index >= 0 ? doc.layers[index] : null;
+  if (!layer) return composeLayers(doc, []);
+  const tree = buildLayerTree(doc.layers);
+  const roots = tree.get(null) || [];
+  // Flatten full stack excluding the target layer and anything above it in visual draw order.
+  const order = [];
+  const collectUntil = (items) => {
+    for (const item of items) {
+      if (item.id === layerId) return true;
+      if (item.kind === 'group') {
+        if (collectUntil(tree.get(item.id) || [])) return true;
+        order.push(item);
+      } else {
+        order.push(item);
+      }
+    }
+    return false;
+  };
+  collectUntil(roots);
+  return composeLayers(doc, order);
 }
 
 /** One layer's own pixels, unmasked and at full opacity: { surface, x, y }. */
@@ -166,10 +257,34 @@ export function rasterizeLayer(doc, layer) {
   if (layer.kind === 'pixel') {
     return { surface: doc.buffers.get(layer.bufferId).clone(), x: layer.x, y: layer.y };
   }
+  if (layer.kind === 'group') {
+    const tree = buildLayerTree(doc.layers);
+    const items = [];
+    const gather = (gid) => {
+      for (const c of tree.get(gid) || []) {
+        items.push(c);
+        if (c.kind === 'group') gather(c.id);
+      }
+    };
+    gather(layer.id);
+    return { surface: composeLayers(doc, items), x: 0, y: 0 };
+  }
   const surface = createSurface(doc.width, doc.height);
   const render = renderers.get(layer.kind);
   if (render) render(surface.ctx, doc, layer);
   return { surface, x: 0, y: 0 };
+}
+
+function rootIdOf(doc, layerId) {
+  let cur = doc.layers.find(l => l.id === layerId);
+  const seen = new Set();
+  while (cur?.parentId && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const parent = doc.layers.find(l => l.id === cur.parentId);
+    if (!parent) break;
+    cur = parent;
+  }
+  return cur?.id ?? null;
 }
 
 export function createCompositor(doc) {
@@ -179,17 +294,25 @@ export function createCompositor(doc) {
   let focusId = null;
   let live = null;
   let cache = null; // { canvas, key }
+  const asyncListeners = new Set();
+  let disposed = false;
 
-  function belowKey(index) {
-    const below = doc.layers.slice(0, index);
-    return below.map(l => `${l.id}:${l.rev}`).join('|');
+  const onAsyncReady = () => {
+    if (disposed) return;
+    cache = null;
+    dirty = full(doc);
+    for (const fn of asyncListeners) fn();
+  };
+
+  function belowKey(roots, index) {
+    return `${doc.version}|roots:${roots.slice(0, index).map(l => `${l.id}:${l.rev}`).join('|')}`;
   }
 
-  function belowCache(index) {
-    const key = belowKey(index);
+  function belowCache(roots, tree, index) {
+    const key = belowKey(roots, index);
     if (cache && cache.key === key && cache.width === doc.width && cache.height === doc.height) return cache.canvas;
     const canvas = canvasFor(doc.width, doc.height);
-    paint(canvas.getContext('2d'), doc, doc.layers.slice(0, index), full(doc));
+    paintTree(canvas.getContext('2d'), doc, roots.slice(0, index), tree, full(doc), null, onAsyncReady);
     cache = { canvas, key, width: doc.width, height: doc.height };
     return canvas;
   }
@@ -201,12 +324,15 @@ export function createCompositor(doc) {
     ctx.rect(region.x, region.y, region.w, region.h);
     ctx.clip();
     ctx.clearRect(region.x, region.y, region.w, region.h);
-    const focusIndex = focusId ? doc.layers.findIndex(l => l.id === focusId) : -1;
+    const tree = buildLayerTree(doc.layers);
+    const roots = tree.get(null) || [];
+    const focusRootId = focusId ? rootIdOf(doc, focusId) : null;
+    const focusIndex = focusRootId ? roots.findIndex(l => l.id === focusRootId) : -1;
     if (focusIndex > 0) {
-      ctx.drawImage(belowCache(focusIndex), region.x, region.y, region.w, region.h, region.x, region.y, region.w, region.h);
-      paint(ctx, doc, doc.layers.slice(focusIndex), region, live);
+      ctx.drawImage(belowCache(roots, tree, focusIndex), region.x, region.y, region.w, region.h, region.x, region.y, region.w, region.h);
+      paintTree(ctx, doc, roots.slice(focusIndex), tree, region, live, onAsyncReady);
     } else {
-      paint(ctx, doc, doc.layers, region, live);
+      paintTree(ctx, doc, roots, tree, region, live, onAsyncReady);
     }
     ctx.restore();
   }
@@ -255,8 +381,13 @@ export function createCompositor(doc) {
       live = next;
       dirty = full(doc);
     },
+    /** Notify when an asynchronous background adjustment pass completes. */
+    onAsyncReady(fn) {
+      asyncListeners.add(fn);
+      return () => asyncListeners.delete(fn);
+    },
     /** The current composite canvas (redrawn first if needed). */
     canvas() { sync(); return output; },
-    dispose() { output = null; cache = null; live = null; },
+    dispose() { disposed = true; output = null; cache = null; live = null; asyncListeners.clear(); },
   };
 }

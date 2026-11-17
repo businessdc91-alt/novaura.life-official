@@ -3,7 +3,8 @@
 import { getLayer } from '../document.js';
 import { beginStroke } from '../stroke.js';
 import { hexToRgba } from '../colour.js';
-import { maskColour } from '../masks.js';
+import { maskColour, invalidateMaskAlpha } from '../masks.js';
+import { clipPixelsToSelection } from '../selection.js';
 
 /**
  * Fill pixels matching the colour at (x, y), within `tolerance` on every channel, with rgba.
@@ -87,10 +88,13 @@ export const fill = {
       sample = flatten(doc).read(o.x, o.y, surface.width, surface.height);
     }
     const colour = part === 'mask' ? maskColour(state.colours.primary) : state.colours.primary;
+    const before = doc.selection ? { width: pixels.width, height: pixels.height, data: pixels.data.slice() } : null;
     const rect = floodFill(pixels, p.x - o.x, p.y - o.y, hexToRgba(colour), { ...state.fill, sample });
     if (!rect) { stroke.cancel(); return; }
+    if (doc.selection && before) clipPixelsToSelection(pixels, before, o.x, o.y, doc.selection);
     stroke.touch({ x: rect.x + o.x, y: rect.y + o.y, w: rect.w, h: rect.h });
     surface.write(rect.x, rect.y, region(pixels, rect));
+    if (part === 'mask') invalidateMaskAlpha(doc, layer, { x: rect.x + o.x, y: rect.y + o.y, w: rect.w, h: rect.h });
     stroke.end();
     ctx.compositor?.invalidate();
     ctx.requestRender();

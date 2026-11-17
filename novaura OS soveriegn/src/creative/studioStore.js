@@ -15,7 +15,7 @@ import './text.js';
 import './masks.js';
 import './adjustmentLayers.js';
 
-const NESTED = ['colours', 'brush', 'fill', 'gradient', 'eyedropper', 'shape'];
+const NESTED = ['colours', 'brush', 'fill', 'gradient', 'eyedropper', 'shape', 'selection', 'crop'];
 
 export function createStudioStore({ historyBytes = Infinity } = {}) {
   const listeners = new Set();
@@ -31,9 +31,13 @@ export function createStudioStore({ historyBytes = Infinity } = {}) {
     gradient: { type: 'linear', mode: 'toSecondary' },
     eyedropper: { sample: 'composite' },
     shape: { kind: 'rect', stroke: false, strokeWidth: 4 },
+    selection: { shape: 'rect', mode: 'replace', feather: 0, tolerance: 32, contiguous: true, sampleAll: true },
+    crop: { aspect: 'free', deleteCropped: false },
     maskView: null,
     busy: null, // { label, progress, cancel } while a long job (a filter) runs
     textFocus: null, // a text layer id whose text box should take focus
+    editingTextId: null, // active text layer being edited inline on canvas
+    clipboard: null, // { width, height, x, y, data } copied pixel selection
     openReport: null, // { name, lines } after opening a PSD that needed changes
   };
 

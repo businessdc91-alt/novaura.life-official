@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Palette, Image as ImageIcon, Smile } from 'lucide-react';
 import { createStudioStore } from '../../creative/studioStore.js';
-import { shouldHandleShortcut, historyActionFor, studioActionFor, nextBrushSize } from '../../creative/shortcuts.js';
+import { shouldHandleShortcut, historyActionFor, ctrlActionFor, studioActionFor, nextBrushSize } from '../../creative/shortcuts.js';
 import { TOOLS, toolForKey, toolContext } from '../../creative/tools/index.js';
 import { useStudio } from './creative/useStudio.js';
 import CanvasView from './creative/CanvasView.jsx';
@@ -19,15 +19,22 @@ import { makeOverlay } from './creative/canvasOverlay.js';
 import '../../creative/tools/shape.js';
 import '../../creative/tools/gradient.js';
 import '../../creative/tools/text.js';
+import '../../creative/tools/selection.js';
+import '../../creative/tools/crop.js';
 import PhotoPanel from './creative/PhotoPanel.jsx';
 import MemePanel from './creative/MemePanel.jsx';
 import DocumentTabs from './creative/DocumentTabs.jsx';
 import NewDocumentDialog from './creative/NewDocumentDialog.jsx';
+import ResizeDialog from './creative/ResizeDialog.jsx';
 import ConfirmCloseDialog from './creative/ConfirmCloseDialog.jsx';
 import StatusBar from './creative/StatusBar.jsx';
 import { loadBudgets } from '../../creative/memory.js';
 import FileMenu from './creative/FileMenu.jsx';
 import ExportDialog from './creative/ExportDialog.jsx';
+import {
+  selectAll, clearSelection, invertSelection, clearSelectedPixels,
+  copySelectedPixels, cutSelectedPixels, pastePixels, groupLayer, ungroupLayer,
+} from '../../creative/edits.js';
 import { openFileBlob, saveProject, downloadProject, openVaultFile } from '../../creative/io/projectFiles.js';
 import { classifyDrop, openImageFile, placeImage, scaledNotice } from '../../creative/io/raster.js';
 import { startRecovery, listRecovery, takeRecovery, clearRecovery } from '../../creative/io/recovery.js';
@@ -59,19 +66,49 @@ function handleKey(store, e, actions = {}) {
   }
   const history = historyActionFor(e);
   if (history) { runHistory(store, history); return true; }
-  if (e.ctrlKey || e.metaKey || e.altKey) return false;
   const state = store.getState();
+  const session = store.active();
+  const action = ctrlActionFor(e) || studioActionFor(e);
+  if (action && session) {
+    const meta = { tab: state.tab };
+    const report = (r) => { if (r && !r.ok) store.notify(r.reason); session.compositor?.invalidate(); };
+    if (action === 'selectAll') { report(selectAll(session, meta)); return true; }
+    if (action === 'deselect') { report(clearSelection(session, meta)); return true; }
+    if (action === 'invertSelection') { report(invertSelection(session, meta)); return true; }
+    if (action === 'group') { if (session.doc.activeLayerId) report(groupLayer(session, session.doc.activeLayerId, meta)); return true; }
+    if (action === 'ungroup') { if (session.doc.activeLayerId) report(ungroupLayer(session, session.doc.activeLayerId, meta)); return true; }
+    if (action === 'copy') {
+      const r = copySelectedPixels(session.doc);
+      if (r.ok) store.update({ clipboard: r.clipboard }); else store.notify(r.reason);
+      return true;
+    }
+    if (action === 'cut') {
+      const r = cutSelectedPixels(session, meta);
+      if (r.ok) store.update({ clipboard: r.clipboard }); else store.notify(r.reason);
+      session.compositor?.invalidate();
+      return true;
+    }
+    if (action === 'paste') {
+      if (state.clipboard) report(pastePixels(session, state.clipboard, meta));
+      return true;
+    }
+    if (action === 'clearSelection') {
+      if (!session.doc.selection) return false;
+      report(clearSelectedPixels(session, meta));
+      return true;
+    }
+    if (action === 'swapColours') {
+      store.update({ colours: { primary: state.colours.secondary, secondary: state.colours.primary } });
+      return true;
+    }
+    if (action === 'brushSmaller' || action === 'brushLarger') {
+      store.update({ brush: { size: nextBrushSize(state.brush.size, action === 'brushLarger' ? 1 : -1) } });
+      return true;
+    }
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
   const tool = TOOLS[state.tool];
   if (tool?.key && tool.key(toolContext(store), e)) return true;
-  const action = studioActionFor(e);
-  if (action === 'swapColours') {
-    store.update({ colours: { primary: state.colours.secondary, secondary: state.colours.primary } });
-    return true;
-  }
-  if (action === 'brushSmaller' || action === 'brushLarger') {
-    store.update({ brush: { size: nextBrushSize(state.brush.size, action === 'brushLarger' ? 1 : -1) } });
-    return true;
-  }
   const next = toolForKey(e);
   if (next) { store.setTool(next); return true; }
   return false;
@@ -92,6 +129,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
   const hasDocument = useStudio(store, s => s.activeId) !== null;
   const [newDocOpen, setNewDocOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [resizeDialog, setResizeDialog] = useState(null);
   const [closing, setClosing] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [budgets, setBudgets] = useState(null);
@@ -265,7 +303,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
             <h2 className="text-sm font-bold text-white leading-tight">Creative Studio</h2>
             <p className="text-[11px] text-slate-400 truncate">Layered painting, photo editing and memes</p>
           </div>
-          <FileMenu store={store} onNew={() => setNewDocOpen(true)} onOpen={openFile} onSave={() => save()} onDownload={download} onExport={() => setExportOpen(true)} />
+          <FileMenu store={store} onNew={() => setNewDocOpen(true)} onOpen={openFile} onSave={() => save()} onDownload={download} onExport={() => setExportOpen(true)} onResize={setResizeDialog} />
         </div>
         <div role="tablist" aria-label="Workspace" className="flex items-center bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/60 text-xs">
           {TABS.map(({ id, label, icon: Icon, on }) => (
@@ -285,7 +323,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
 
       <div className="flex-1 min-h-0 flex">
         {tab === 'paint' && <PaintPanel store={store} />}
-        {tab === 'photo' && <PhotoPanel store={store} />}
+        {tab === 'photo' && <PhotoPanel store={store} onOpenResize={setResizeDialog} />}
         {tab === 'meme' && <MemePanel store={store} />}
         {hasDocument ? (
           <CanvasView store={store} rootRef={rootRef} overlay={overlay} isActive={studioActive} onZoom={setZoom} onDropFiles={dropFiles} />
@@ -307,6 +345,7 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
       <StatusBar store={store} zoom={zoom} budgets={budgets} onBudgets={applyBudgets} />
 
       {exportOpen && <ExportDialog store={store} onClose={() => setExportOpen(false)} />}
+      {resizeDialog && <ResizeDialog store={store} mode={resizeDialog} onClose={() => setResizeDialog(null)} />}
       {newDocOpen && (
         <NewDocumentDialog
           onCancel={() => setNewDocOpen(false)}

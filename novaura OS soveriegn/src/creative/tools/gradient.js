@@ -5,7 +5,8 @@
 import { getLayer } from '../document.js';
 import { beginStroke } from '../stroke.js';
 import { rgbaCss } from '../colour.js';
-import { maskColour } from '../masks.js';
+import { maskColour, invalidateMaskAlpha } from '../masks.js';
+import { clipPixelsToSelection } from '../selection.js';
 import { registerTool } from './index.js';
 
 let drag = null;
@@ -33,6 +34,7 @@ function apply(ctx, start, end) {
   stroke.ensureCovers(area);
   stroke.touch(area);
   const o = stroke.origin;
+  const before = doc.selection ? stroke.surface.read(-o.x, -o.y, doc.width, doc.height) : null;
   const target = stroke.surface.ctx;
   const { colours: picked, gradient } = ctx.store.getState();
   const colours = part === 'mask' // a mask takes greys
@@ -46,6 +48,12 @@ function apply(ctx, start, end) {
   target.fillStyle = g;
   target.fillRect(-o.x, -o.y, doc.width, doc.height);
   target.restore();
+  if (doc.selection && before) {
+    const after = stroke.surface.read(-o.x, -o.y, doc.width, doc.height);
+    clipPixelsToSelection(after, before, 0, 0, doc.selection);
+    stroke.surface.write(-o.x, -o.y, after);
+  }
+  if (part === 'mask') invalidateMaskAlpha(doc, layer, area);
   stroke.end();
   ctx.compositor?.invalidate();
   ctx.requestRender();

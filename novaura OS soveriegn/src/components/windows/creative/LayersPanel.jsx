@@ -8,16 +8,17 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Merge, ChevronUp, ChevronDown, Layers,
-  SquareDashed, FlipHorizontal2, Stamp, X,
+  Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Merge, ChevronUp, ChevronDown, ChevronRight, Layers,
+  SquareDashed, FlipHorizontal2, Stamp, X, Folder, FolderOpen, FolderPlus, Group, Ungroup,
 } from 'lucide-react';
 import { useStudio } from './useStudio.js';
 import { BLEND_MODES, blendLabel } from '../../../creative/blendModes.js';
-import { surfaceOf } from '../../../creative/document.js';
+import { surfaceOf, buildLayerTree, getLayer } from '../../../creative/document.js';
 import { rasterizeLayer } from '../../../creative/compositor.js';
 import {
   addLayer, deleteLayer, duplicateLayer, mergeDown, moveLayerTo, setLayerProps, setActiveLayer,
   addMask, deleteMask, invertMask, applyMask, setMaskEnabled, copyLayerToDocument,
+  groupLayer, ungroupLayer, setLayerParent, selectionToMask,
 } from '../../../creative/edits.js';
 
 const THUMB_W = 44;
@@ -43,12 +44,20 @@ function Thumbnail({ doc, layer }) {
     if (layer.kind === 'pixel') {
       const surface = surfaceOf(doc, layer);
       if (surface?.canvas) ctx.drawImage(surface.canvas, layer.x, layer.y);
-    } else if (layer.kind !== 'adjust') {
+    } else if (layer.kind !== 'adjust' && layer.kind !== 'group') {
       const { surface, x, y } = rasterizeLayer(doc, layer);
       if (surface.canvas) ctx.drawImage(surface.canvas, x, y);
     }
     ctx.restore();
   }, [doc, layer, layer.rev]);
+  if (layer.kind === 'group') {
+    const FolderIcon = layer.expanded === false ? Folder : FolderOpen;
+    return (
+      <span className="w-[44px] h-[32px] rounded-sm border border-slate-700 bg-slate-800/80 flex items-center justify-center shrink-0 text-amber-300" aria-hidden="true">
+        <FolderIcon className="w-4 h-4" />
+      </span>
+    );
+  }
   return <canvas ref={ref} width={THUMB_W} height={THUMB_H} className="rounded-sm border border-slate-700 shrink-0" aria-hidden="true" />;
 }
 
@@ -157,14 +166,47 @@ export default function LayersPanel({ store }) {
     report(setLayerProps(session, active.id, { blend: e.target.value, psdBlend: null }, meta({ label: 'Blend mode' })));
   };
 
-  const rows = [...doc.layers].reverse();
+  const tree = buildLayerTree(doc.layers);
+  const displayRows = [];
+  const appendRows = (parentId, depth) => {
+    const items = [...(tree.get(parentId) || [])].reverse();
+    for (const item of items) {
+      displayRows.push({ layer: item, depth });
+      if (item.kind === 'group' && item.expanded !== false) appendRows(item.id, depth + 1);
+    }
+  };
+  appendRows(null, 0);
+
+  const onDropLayer = (fromId, targetLayer, targetIndex) => {
+    const fromLayer = getLayer(doc, fromId);
+    if (!fromLayer || fromId === targetLayer.id) return;
+    if (targetLayer.kind === 'group' && fromLayer.parentId !== targetLayer.id) {
+      report(setLayerParent(session, fromId, targetLayer.id, meta({})));
+      return;
+    }
+    if ((fromLayer.parentId ?? null) !== (targetLayer.parentId ?? null)) {
+      const r = setLayerParent(session, fromId, targetLayer.parentId ?? null, meta({}));
+      if (!r.ok) { store.notify(r.reason); return; }
+    }
+    report(moveLayerTo(session, fromId, targetIndex, meta({})));
+  };
 
   return (
     <section className="flex flex-col min-h-0" aria-label="Layers">
-      <div className="flex items-center justify-between px-3 pt-3 pb-1.5">
+      <div className="flex items-center justify-between px-3 pt-3 pb-1.5 gap-2">
         <h3 className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
           <Layers className="w-3 h-3" /> Layers
         </h3>
+        {doc.selection && active && (
+          <button
+            type="button" data-action="selection-to-mask"
+            onClick={() => report(selectionToMask(session, meta({})))}
+            className="px-1.5 py-0.5 rounded bg-cyan-800/70 hover:bg-cyan-700 text-[10px] text-cyan-100 font-semibold"
+            title="Convert current selection into a mask on the active layer"
+          >
+            Sel → Mask
+          </button>
+        )}
       </div>
 
       {active && store.getState().sessions.length > 1 && (
@@ -192,6 +234,7 @@ export default function LayersPanel({ store }) {
             className="w-full bg-slate-950 border border-slate-700 rounded-md px-2 py-1 text-[11px]"
           >
             {active.psdBlend && <option value="" disabled>{blendLabel(active)}</option>}
+            {active.kind === 'group' && <option value="pass-through">Pass Through</option>}
             {BLEND_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
           </select>
           <label className="flex items-center gap-2 text-[11px] text-slate-400">
@@ -235,13 +278,14 @@ export default function LayersPanel({ store }) {
       )}
 
       <ul className="flex-1 min-h-0 overflow-y-auto px-2 space-y-0.5" role="listbox" aria-label="Layer stack">
-        {rows.map((layer) => {
+        {displayRows.map(({ layer, depth }) => {
           const index = doc.layers.indexOf(layer);
           const isActive = layer.id === doc.activeLayerId;
           return (
             <li
               key={layer.id} role="option" aria-selected={isActive}
-              data-layer-id={layer.id} data-visible={String(layer.visible)} data-locked={String(layer.locked)}
+              data-layer-id={layer.id} data-layer-kind={layer.kind} data-visible={String(layer.visible)} data-locked={String(layer.locked)}
+              style={depth > 0 ? { paddingLeft: `${depth * 14 + 6}px` } : undefined}
               draggable
               onDragStart={(e) => { dragRef.current = layer.id; e.dataTransfer.effectAllowed = 'move'; }}
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
@@ -249,16 +293,26 @@ export default function LayersPanel({ store }) {
                 e.preventDefault();
                 const from = dragRef.current;
                 dragRef.current = null;
-                if (from && from !== layer.id) report(moveLayerTo(session, from, index, meta({})));
+                if (from) onDropLayer(from, layer, index);
               }}
               onClick={() => select(layer.id)}
-              className={`flex items-center gap-2 px-1.5 py-1 rounded-md cursor-pointer ${isActive ? 'bg-cyan-900/40 ring-1 ring-cyan-700/60' : 'hover:bg-slate-800/60'} ${layer.visible ? '' : 'opacity-50'}`}
+              className={`flex items-center gap-1.5 px-1.5 py-1 rounded-md cursor-pointer ${isActive ? 'bg-cyan-900/40 ring-1 ring-cyan-700/60' : 'hover:bg-slate-800/60'} ${layer.visible ? '' : 'opacity-50'}`}
             >
+              {layer.kind === 'group' && (
+                <button
+                  type="button" data-action="toggle-group-expand"
+                  aria-label={layer.expanded === false ? `Expand ${layer.name}` : `Collapse ${layer.name}`}
+                  onClick={(e) => { e.stopPropagation(); report(setLayerProps(session, layer.id, { expanded: layer.expanded === false }, meta({}))); }}
+                  className="p-0.5 text-slate-400 hover:text-white shrink-0"
+                >
+                  {layer.expanded === false ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              )}
               <button
                 type="button" data-action="toggle-visible" aria-pressed={layer.visible}
                 aria-label={layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`}
                 onClick={(e) => { e.stopPropagation(); report(setLayerProps(session, layer.id, { visible: !layer.visible }, meta({}))); }}
-                className="p-0.5 text-slate-400 hover:text-white"
+                className="p-0.5 text-slate-400 hover:text-white shrink-0"
               >
                 {layer.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
               </button>
@@ -285,9 +339,20 @@ export default function LayersPanel({ store }) {
         })}
       </ul>
 
-      <div className="flex items-center justify-between px-2 py-1.5 border-t border-slate-800">
+      <div className="flex items-center justify-between px-1.5 py-1.5 border-t border-slate-800">
         <IconButton action="new-layer" label="New layer" onClick={() => report(addLayer(session, 'pixel', {}, meta({})))}>
           <Plus className="w-3.5 h-3.5" />
+        </IconButton>
+        <IconButton action="new-group" label="New group" onClick={() => report(addLayer(session, 'group', { parentId: active?.parentId ?? null }, meta({ label: 'New group' })))}>
+          <FolderPlus className="w-3.5 h-3.5" />
+        </IconButton>
+        <IconButton
+          action="toggle-group"
+          label={active?.kind === 'group' ? 'Ungroup (Ctrl+Shift+G)' : 'Group layer (Ctrl+G)'}
+          disabled={!active}
+          onClick={() => report(active.kind === 'group' ? ungroupLayer(session, active.id, meta({})) : groupLayer(session, active.id, meta({})))}
+        >
+          {active?.kind === 'group' ? <Ungroup className="w-3.5 h-3.5" /> : <Group className="w-3.5 h-3.5" />}
         </IconButton>
         <IconButton action="duplicate-layer" label="Duplicate layer" disabled={!active} onClick={() => report(duplicateLayer(session, active.id, meta({})))}>
           <Copy className="w-3.5 h-3.5" />

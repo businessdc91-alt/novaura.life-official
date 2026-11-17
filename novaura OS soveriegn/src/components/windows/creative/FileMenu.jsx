@@ -17,7 +17,7 @@ function MenuItem({ action, label, hint = '', disabled = false, onRun, onDone })
   );
 }
 
-export default function FileMenu({ store, onNew, onOpen, onSave, onDownload, onExport }) {
+export default function FileMenu({ store, onNew, onOpen, onSave, onDownload, onExport, onResize }) {
   const [open, setOpen] = useState(false);
   const openRef = useRef(null);
   const placeRef = useRef(null);
@@ -60,6 +60,9 @@ export default function FileMenu({ store, onNew, onOpen, onSave, onDownload, onE
           <MenuItem action="file-new" label="New document…" onRun={onNew} onDone={close} />
           <MenuItem action="file-open" label="Open…" hint=".novaart, PSD, images" onRun={chooseOpen} onDone={close} />
           <MenuItem action="file-place" label="Place image as a layer…" disabled={!hasDoc} onRun={choosePlace} onDone={close} />
+          <div className="my-1 border-t border-slate-800" />
+          <MenuItem action="file-image-size" label="Image size…" disabled={!hasDoc} onRun={() => onResize?.('image')} onDone={close} />
+          <MenuItem action="file-canvas-size" label="Canvas size…" disabled={!hasDoc} onRun={() => onResize?.('canvas')} onDone={close} />
           <div className="my-1 border-t border-slate-800" />
           <MenuItem action="file-save" label="Save to Files" hint="Ctrl+S" disabled={!hasDoc} onRun={onSave} onDone={close} />
           <MenuItem action="file-download" label="Download project (.novaart)" disabled={!hasDoc} onRun={onDownload} onDone={close} />

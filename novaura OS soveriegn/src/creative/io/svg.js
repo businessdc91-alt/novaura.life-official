@@ -9,6 +9,7 @@
 import { shapeSvg } from '../shapes.js';
 import { layoutText, canvasMeasure, resolveFont, fontAvailable } from '../text.js';
 import { svgFilter } from '../adjustments.js';
+import { buildLayerTree } from '../document.js';
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 // Every number goes through num(): a project file is untrusted, and a non-number written
@@ -55,45 +56,56 @@ function textSvg(layer, measure) {
 /** The document as an SVG string. Options can replace PNG encoding, text measuring and baking (for tests). */
 export async function writeSvg(doc, { pngDataUrl = defaultPngDataUrl, measure = canvasMeasure, bake = defaultBake } = {}) {
   const defs = [];
-  let body = [];
   let belowCount = 0;
+  const tree = buildLayerTree(doc.layers);
 
-  for (const layer of doc.layers) {
-    const id = `l-${layer.id}`;
-    let attrs = ` id="${esc(id)}" inkscape:groupmode="layer" inkscape:label="${esc(layer.name)}"`;
-    if (layer.opacity < 1) attrs += ` opacity="${num(layer.opacity)}"`;
-    if (blendCss(layer.blend) !== 'normal') attrs += ` style="mix-blend-mode:${blendCss(layer.blend)}"`;
-    if (!layer.visible) attrs += ' display="none"';
-    if (layer.mask && layer.mask.enabled !== false) {
-      const m = layer.mask;
-      const v = m.defaultValue;
-      defs.push(`<mask id="m-${esc(layer.id)}" maskUnits="userSpaceOnUse" x="0" y="0" width="${num(doc.width)}" height="${num(doc.height)}">`
-        + `<rect x="0" y="0" width="${num(doc.width)}" height="${num(doc.height)}" fill="rgb(${num(v)}, ${num(v)}, ${num(v)})"/>`
-        + `${image(await pngDataUrl(doc.buffers.get(m.bufferId)), m.x, m.y, m.width, m.height)}</mask>`);
-      attrs += ` mask="url(#m-${esc(layer.id)})"`;
-    }
+  const renderList = async (items) => {
+    let body = [];
+    for (const layer of items) {
+      const id = `l-${layer.id}`;
+      let attrs = ` id="${esc(id)}" inkscape:groupmode="layer" inkscape:label="${esc(layer.name)}"`;
+      if (layer.opacity < 1) attrs += ` opacity="${num(layer.opacity)}"`;
+      if (layer.blend !== 'pass-through' && blendCss(layer.blend) !== 'normal') attrs += ` style="mix-blend-mode:${blendCss(layer.blend)}"`;
+      if (!layer.visible) attrs += ' display="none"';
+      if (layer.mask && layer.mask.enabled !== false) {
+        const m = layer.mask;
+        const v = m.defaultValue;
+        defs.push(`<mask id="m-${esc(layer.id)}" maskUnits="userSpaceOnUse" x="0" y="0" width="${num(doc.width)}" height="${num(doc.height)}">`
+          + `<rect x="0" y="0" width="${num(doc.width)}" height="${num(doc.height)}" fill="rgb(${num(v)}, ${num(v)}, ${num(v)})"/>`
+          + `${image(await pngDataUrl(doc.buffers.get(m.bufferId)), m.x, m.y, m.width, m.height)}</mask>`);
+        attrs += ` mask="url(#m-${esc(layer.id)})"`;
+      }
 
-    if (layer.kind === 'adjust') {
-      const filter = svgFilter(layer.adjust, layer.params, `f-${layer.id}`);
-      if (filter) {
-        defs.push(filter);
-        const below = `below-${++belowCount}`;
-        body = [`<g id="${below}">${body.join('')}</g>`, `<g${attrs}><use href="#${below}" filter="url(#f-${esc(layer.id)})"/></g>`];
+      if (layer.kind === 'group') {
+        const children = await renderList(tree.get(layer.id) || []);
+        body.push(`<g${attrs}>${children.join('')}</g>`);
         continue;
       }
-      const baked = await bake(doc, layer);
-      attrs = attrs.replace(`inkscape:label="${esc(layer.name)}"`, `inkscape:label="${esc(`${layer.name} (baked)`)}"`).replace(/ style="[^"]*"/, '');
-      body.push(`<g${attrs}>${image(await pngDataUrl(baked), 0, 0, doc.width, doc.height)}</g>`);
-      continue;
+
+      if (layer.kind === 'adjust') {
+        const filter = svgFilter(layer.adjust, layer.params, `f-${layer.id}`);
+        if (filter) {
+          defs.push(filter);
+          const below = `below-${++belowCount}`;
+          body = [`<g id="${below}">${body.join('')}</g>`, `<g${attrs}><use href="#${below}" filter="url(#f-${esc(layer.id)})"/></g>`];
+          continue;
+        }
+        const baked = await bake(doc, layer);
+        attrs = attrs.replace(`inkscape:label="${esc(layer.name)}"`, `inkscape:label="${esc(`${layer.name} (baked)`)}"`).replace(/ style="[^"]*"/, '');
+        body.push(`<g${attrs}>${image(await pngDataUrl(baked), 0, 0, doc.width, doc.height)}</g>`);
+        continue;
+      }
+
+      let content = '';
+      if (layer.kind === 'pixel') content = image(await pngDataUrl(doc.buffers.get(layer.bufferId)), layer.x, layer.y, layer.width, layer.height);
+      else if (layer.kind === 'shape') content = shapeSvg(layer);
+      else if (layer.kind === 'text') content = textSvg(layer, measure);
+      body.push(`<g${attrs}>${content}</g>`);
     }
+    return body;
+  };
 
-    let content = '';
-    if (layer.kind === 'pixel') content = image(await pngDataUrl(doc.buffers.get(layer.bufferId)), layer.x, layer.y, layer.width, layer.height);
-    else if (layer.kind === 'shape') content = shapeSvg(layer);
-    else if (layer.kind === 'text') content = textSvg(layer, measure);
-    body.push(`<g${attrs}>${content}</g>`);
-  }
-
+  const body = await renderList(tree.get(null) || []);
   const W = num(doc.width);
   const H = num(doc.height);
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`

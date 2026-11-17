@@ -44,11 +44,14 @@ const titleCase = s => s.replace(/\b\w/g, c => c.toUpperCase());
 
 export function blendLabel(layer) {
   if (layer.psdBlend) return `${titleCase(layer.psdBlend)} (PSD)`;
+  if (layer.blend === 'pass-through') return 'Pass Through';
   return BY_ID.get(layer.blend)?.label || 'Normal';
 }
 
 export function toPsdBlend(layer) {
-  return layer.psdBlend || BY_ID.get(layer.blend)?.psd || 'normal';
+  if (layer.psdBlend) return layer.psdBlend;
+  if (layer.blend === 'pass-through') return 'pass through';
+  return BY_ID.get(layer.blend)?.psd || 'normal';
 }
 
 /** A PSD blend key → { blend, psdBlend }; psdBlend is null unless the mode is drawn with a fallback. */

@@ -37,7 +37,11 @@ function fillSurface(surface, [r, g, b, a]) {
 
 export function touchLayer(doc, layer) {
   doc.version += 1;
-  if (layer) layer.rev = doc.version;
+  let cur = layer;
+  while (cur) {
+    cur.rev = doc.version;
+    cur = cur.parentId ? doc.layers.find(l => l.id === cur.parentId) : null;
+  }
 }
 
 /** background: 'white' | 'black' | 'transparent' | '#rrggbb'. */
@@ -45,7 +49,7 @@ export function createDocument({ name = 'Untitled', width, height, background = 
   createSurface(width, height); // validates the size before anything is built
   const doc = {
     id: newId(), name, width, height, layers: [], activeLayerId: null, activeTarget: 'layer',
-    buffers: new Map(), version: 0, nextLayerNumber: 1,
+    selection: null, buffers: new Map(), version: 0, nextLayerNumber: 1, nextGroupNumber: 1,
   };
   const colour = colourOf(background);
   const layer = createLayer(doc, 'pixel', colour ? { name: 'Background' } : {});
@@ -59,11 +63,16 @@ function defaultName(doc, kind, fields) {
   if (kind === 'shape') return SHAPE_NAMES[fields.shape] || 'Shape';
   if (kind === 'text') return (fields.text || 'Text').split('\n')[0].slice(0, 40) || 'Text';
   if (kind === 'adjust') return adjustmentLabel(fields.adjust);
+  if (kind === 'group') {
+    const n = doc.nextGroupNumber || 1;
+    doc.nextGroupNumber = n + 1;
+    return `Group ${n}`;
+  }
   return `Layer ${doc.nextLayerNumber++}`;
 }
 
 /**
- * A new layer of `kind` ('pixel' | 'shape' | 'text' | 'adjust'), not yet in the stack.
+ * A new layer of `kind` ('pixel' | 'shape' | 'text' | 'adjust' | 'group'), not yet in the stack.
  * A pixel layer gets a canvas-sized surface, or adopts `fields.surface` and its size.
  */
 export function createLayer(doc, kind, fields = {}) {
@@ -71,8 +80,9 @@ export function createLayer(doc, kind, fields = {}) {
   const layer = {
     id: newId(),
     name: rest.name ?? defaultName(doc, kind, rest),
-    kind, visible: true, opacity: 1, blend: 'source-over', locked: false,
-    mask: null, psdBlend: null, role: null, rev: doc.version,
+    kind, visible: true, opacity: 1, blend: kind === 'group' ? 'pass-through' : 'source-over', locked: false,
+    mask: null, psdBlend: null, role: null, parentId: null, rev: doc.version,
+    ...(kind === 'group' ? { expanded: true } : {}),
     ...rest,
   };
   if (kind === 'pixel') {
@@ -114,7 +124,8 @@ export function insertLayer(doc, layer, index) {
 
 export function removeLayerAt(doc, index) {
   const [layer] = doc.layers.splice(index, 1);
-  touchLayer(doc, null);
+  const parent = layer?.parentId ? getLayer(doc, layer.parentId) : null;
+  touchLayer(doc, parent);
   return layer;
 }
 
@@ -122,6 +133,60 @@ export function moveLayer(doc, from, to) {
   const [layer] = doc.layers.splice(from, 1);
   doc.layers.splice(to, 0, layer);
   touchLayer(doc, layer);
+}
+
+/** Map<parentId | null, Layer[]> in bottom-to-top rendering order. */
+export function buildLayerTree(layers) {
+  const byParent = new Map();
+  const ids = new Set(layers.map(l => l.id));
+  for (const l of layers) {
+    const pid = l.parentId && ids.has(l.parentId) ? l.parentId : null;
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid).push(l);
+  }
+  return byParent;
+}
+
+/** True when `candidateId` equals `ancestorId` or is nested inside it. */
+export function isDescendant(doc, candidateId, ancestorId) {
+  let cur = getLayer(doc, candidateId);
+  const seen = new Set();
+  while (cur) {
+    if (cur.id === ancestorId) return true;
+    if (!cur.parentId || seen.has(cur.id)) break;
+    seen.add(cur.id);
+    cur = getLayer(doc, cur.parentId);
+  }
+  return false;
+}
+
+/** All nested child layers inside `groupId` (bottom-to-top subtree order). */
+export function collectDescendants(doc, groupId) {
+  const tree = buildLayerTree(doc.layers);
+  const out = [];
+  const walk = (pid) => {
+    for (const child of tree.get(pid) || []) {
+      out.push(child);
+      if (child.kind === 'group') walk(child.id);
+    }
+  };
+  walk(groupId);
+  return out;
+}
+
+/** Nesting depth (0 for top-level layers). */
+export function layerDepth(doc, layer) {
+  let depth = 0;
+  let cur = layer;
+  const seen = new Set();
+  while (cur?.parentId && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const parent = getLayer(doc, cur.parentId);
+    if (!parent) break;
+    depth += 1;
+    cur = parent;
+  }
+  return depth;
 }
 
 /** Set fields on a layer; returns the values they had before. */

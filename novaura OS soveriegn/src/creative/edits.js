@@ -7,11 +7,16 @@
 import {
   getLayer, layerIndex, canEdit, insertLayer, removeLayerAt, moveLayer, assignLayer,
   createLayer, cloneLayer, takeBuffers, putBuffers, touchLayer, surfaceOf,
+  collectDescendants, isDescendant,
 } from './document.js';
 import { compoundStep } from './history.js';
 import { applyPatch, beginPixelEdit } from './pixelRecorder.js';
 import { createMask, invertPixels } from './masks.js';
-import { createSurface, MAX_SIDE } from './surface.js';
+import { createSurface, MAX_SIDE, surfaceFromPixels, resampleSurface } from './surface.js';
+import {
+  cloneSelection, createSelection, invertSelectionMask, translateSelectionMask,
+  resampleSelectionMask, featherMaskData, rectSelectionData, computeSelectionBounds,
+} from './selection.js';
 
 const PROP_BYTES = 64;
 const refuse = reason => ({ ok: false, reason });
@@ -60,12 +65,16 @@ function insertStep(s, layer, index, buffers) {
   return { bytes: PROP_BYTES, apply, revert };
 }
 
-const kindLabel = { pixel: 'layer', shape: 'shape layer', text: 'text layer', adjust: 'adjustment layer' };
+const kindLabel = { pixel: 'layer', shape: 'shape layer', text: 'text layer', adjust: 'adjustment layer', group: 'group' };
 
-/** Add a new layer, by default just above the active layer, and make it active. */
+/** Add a new layer, by default just above the active layer (inheriting its group), and make it active. */
 export function addLayer(s, kind, fields, meta, index) {
   const { doc } = s;
-  const layer = createLayer(doc, kind, fields || {});
+  const active = getLayer(doc, doc.activeLayerId);
+  const parentId = fields?.parentId !== undefined
+    ? fields.parentId
+    : (active?.kind === 'group' ? active.id : (active?.parentId ?? null));
+  const layer = createLayer(doc, kind, { parentId, ...(fields || {}) });
   const at = index ?? (layerIndex(doc, doc.activeLayerId) + 1 || doc.layers.length);
   const buffers = takeBuffers(doc, layer); // createLayer registered them; insertStep puts them back
   push(s, insertStep(s, layer, at, buffers), meta, `New ${kindLabel[kind] || 'layer'}`);
@@ -78,22 +87,36 @@ export function deleteLayer(s, id, meta) {
   if (!layer) return GONE;
   const allowed = canEdit(layer, 'delete');
   if (!allowed.ok) return allowed;
-  if (doc.layers.length === 1) return refuse('A document needs at least one layer.');
-  const index = layerIndex(doc, id);
+  const targets = layer.kind === 'group' ? [layer, ...collectDescendants(doc, id)] : [layer];
+  for (const t of targets) {
+    const ok = canEdit(t, 'delete');
+    if (!ok.ok) return ok;
+  }
+  if (doc.layers.length - targets.length < 1) return refuse('A document needs at least one layer.');
+  const targetIds = new Set(targets.map(t => t.id));
+  const entries = doc.layers
+    .map((l, idx) => (targetIds.has(l.id) ? { index: idx, layer: l } : null))
+    .filter(Boolean);
   const before = { id: doc.activeLayerId, target: doc.activeTarget };
   let buffers = new Map();
   const apply = () => {
-    removeLayerAt(doc, layerIndex(doc, id));
-    buffers = takeBuffers(doc, layer);
-    if (doc.activeLayerId === id) restoreActive(doc, doc.layers[Math.max(0, index - 1)].id, 'layer');
+    buffers = new Map();
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const removed = removeLayerAt(doc, entries[i].index);
+      for (const [k, v] of takeBuffers(doc, removed)) buffers.set(k, v);
+    }
+    if (!getLayer(doc, doc.activeLayerId)) {
+      const fallbackIdx = Math.max(0, Math.min(entries[0].index - 1, doc.layers.length - 1));
+      restoreActive(doc, doc.layers[fallbackIdx]?.id ?? null, 'layer');
+    }
   };
   const revert = () => {
     putBuffers(doc, buffers);
-    insertLayer(doc, layer, index);
+    for (const entry of entries) insertLayer(doc, entry.layer, entry.index);
     restoreActive(doc, before.id, before.target);
   };
   apply();
-  push(s, { bytes: PROP_BYTES + bytesOf(buffers), apply, revert }, meta, 'Delete layer');
+  push(s, { bytes: PROP_BYTES + bytesOf(buffers), apply, revert }, meta, layer.kind === 'group' ? 'Delete group' : 'Delete layer');
   return { ok: true, layer };
 }
 
@@ -112,7 +135,7 @@ export function moveLayerTo(s, id, toIndex, meta) {
   return { ok: true, layer };
 }
 
-const KEY_ACTION = { visible: 'visibility', locked: 'unlock', name: 'rename', x: 'move', y: 'move' };
+const KEY_ACTION = { visible: 'visibility', locked: 'unlock', name: 'rename', x: 'move', y: 'move', parentId: 'reorder', expanded: 'reorder' };
 
 function propsLabel(patch) {
   const keys = Object.keys(patch);
@@ -123,6 +146,8 @@ function propsLabel(patch) {
     if (k === 'visible') return patch.visible ? 'Show layer' : 'Hide layer';
     if (k === 'locked') return patch.locked ? 'Lock layer' : 'Unlock layer';
     if (k === 'name') return 'Rename layer';
+    if (k === 'parentId') return 'Move into group';
+    if (k === 'expanded') return patch.expanded ? 'Expand group' : 'Collapse group';
   }
   if (keys.every(k => k === 'x' || k === 'y')) return 'Move layer';
   return 'Edit layer';
@@ -161,16 +186,158 @@ export function setLayerProps(s, id, patch, meta) {
   return { ok: true, layer };
 }
 
-/** Copy a layer (pixels and mask included) just above itself. */
+/** Atomically update multiple layers in one mergeable history step (e.g. moving a group). */
+export function setBatchLayerProps(s, entries, meta) {
+  const { doc } = s;
+  const normalized = entries
+    .map(({ id, patch }) => {
+      const layer = getLayer(doc, id);
+      if (!layer) return null;
+      const changes = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !Object.is(layer[k], v)));
+      if (!Object.keys(changes).length) return null;
+      return { id, changes, previous: assignLayer(doc, id, changes) };
+    })
+    .filter(Boolean);
+  if (!normalized.length) return { ok: true };
+  const makeStep = (list) => ({
+    bytes: PROP_BYTES * list.length, list,
+    apply: () => { for (const x of list) assignLayer(doc, x.id, x.changes); },
+    revert: () => { for (const x of list) assignLayer(doc, x.id, x.previous); },
+    mergeWith(newer) {
+      const byId = new Map(list.map(x => [x.id, { ...x, changes: { ...x.changes }, previous: { ...x.previous } }]));
+      for (const n of newer.list) {
+        const cur = byId.get(n.id);
+        if (cur) {
+          Object.assign(cur.changes, n.changes);
+          for (const [k, v] of Object.entries(n.previous)) if (!(k in cur.previous)) cur.previous[k] = v;
+        } else {
+          byId.set(n.id, n);
+        }
+      }
+      const merged = makeStep([...byId.values()]);
+      merged.label = meta?.label || 'Move group';
+      merged.tab = meta?.tab;
+      return merged;
+    },
+  });
+  push(s, makeStep(normalized), meta, meta?.label || 'Move group');
+  return { ok: true };
+}
+
+function cloneSubtree(fromDoc, layer, intoDoc = fromDoc) {
+  const idMap = new Map();
+  const list = layer.kind === 'group' ? [...collectDescendants(fromDoc, layer.id), layer] : [layer];
+  const clones = list.map((src) => {
+    const copy = cloneLayer(fromDoc, src, intoDoc);
+    idMap.set(src.id, copy.id);
+    return { src, copy };
+  });
+  for (const { src, copy } of clones) {
+    copy.parentId = src.id === layer.id ? (src.parentId ?? null) : (idMap.get(src.parentId) ?? null);
+  }
+  return { root: clones.at(-1).copy, clones: clones.map(c => c.copy), idMap };
+}
+
+/** Copy a layer or group (descendants, pixels and masks included) just above itself. */
 export function duplicateLayer(s, id, meta) {
   const { doc } = s;
   const layer = getLayer(doc, id);
   if (!layer) return GONE;
-  const copy = cloneLayer(doc, layer);
-  copy.name = `${layer.name} copy`;
-  const buffers = takeBuffers(doc, copy);
-  push(s, insertStep(s, copy, layerIndex(doc, id) + 1, buffers), meta, 'Duplicate layer');
-  return { ok: true, layer: copy };
+  const { root, clones } = cloneSubtree(doc, layer, doc);
+  root.name = `${layer.name} copy`;
+  const buffers = new Map();
+  for (const c of clones) for (const [k, v] of takeBuffers(doc, c)) buffers.set(k, v);
+  const insertAt = layerIndex(doc, id) + 1;
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  const apply = () => {
+    putBuffers(doc, buffers);
+    clones.forEach((c, i) => insertLayer(doc, c, insertAt + i));
+    restoreActive(doc, root.id, 'layer');
+  };
+  const revert = () => {
+    for (let i = clones.length - 1; i >= 0; i--) {
+      const idx = layerIndex(doc, clones[i].id);
+      if (idx >= 0) removeLayerAt(doc, idx);
+      takeBuffers(doc, clones[i]);
+    }
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES * clones.length + bytesOf(buffers), apply, revert }, meta, layer.kind === 'group' ? 'Duplicate group' : 'Duplicate layer');
+  return { ok: true, layer: root };
+}
+
+/** Put a layer inside a group (`parentId`), or move it out (`parentId = null`). */
+export function setLayerParent(s, id, parentId, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, id);
+  if (!layer) return GONE;
+  if (parentId) {
+    const target = getLayer(doc, parentId);
+    if (!target || target.kind !== 'group') return refuse('Target is not a group.');
+    if (isDescendant(doc, parentId, id)) return refuse("A group can't go inside itself.");
+  }
+  return setLayerProps(s, id, { parentId: parentId || null }, { ...meta, label: meta?.label || (parentId ? 'Move into group' : 'Move out of group') });
+}
+
+/** Wrap a layer (or layers) in a new folder group. One undoable step. */
+export function groupLayer(s, id, meta) {
+  const { doc } = s;
+  const ids = Array.isArray(id) ? id : [id];
+  const targets = ids.map(x => getLayer(doc, x)).filter(Boolean);
+  if (!targets.length) return GONE;
+  for (const t of targets) {
+    const ok = canEdit(t, 'reorder');
+    if (!ok.ok) return ok;
+  }
+  const top = targets.reduce((best, t) => (layerIndex(doc, t.id) > layerIndex(doc, best.id) ? t : best), targets[0]);
+  const group = createLayer(doc, 'group', { parentId: top.parentId ?? null });
+  const prevParents = new Map(targets.map(t => [t.id, t.parentId ?? null]));
+  const at = layerIndex(doc, top.id) + 1;
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  const apply = () => {
+    insertLayer(doc, group, at);
+    for (const t of targets) assignLayer(doc, t.id, { parentId: group.id });
+    restoreActive(doc, group.id, 'layer');
+  };
+  const revert = () => {
+    for (const t of targets) assignLayer(doc, t.id, { parentId: prevParents.get(t.id) });
+    const idx = layerIndex(doc, group.id);
+    if (idx >= 0) removeLayerAt(doc, idx);
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES, apply, revert }, meta, 'Group layers');
+  return { ok: true, layer: group };
+}
+
+/** Dissolve a group folder, promoting its direct children up to its parent level. */
+export function ungroupLayer(s, groupId, meta) {
+  const { doc } = s;
+  const group = getLayer(doc, groupId);
+  if (!group) return GONE;
+  if (group.kind !== 'group') return refuse('That layer is not a group.');
+  const allowed = canEdit(group, 'delete');
+  if (!allowed.ok) return allowed;
+  const children = doc.layers.filter(l => l.parentId === groupId);
+  const idx = layerIndex(doc, groupId);
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+  let maskBuffers = new Map();
+  const apply = () => {
+    for (const c of children) assignLayer(doc, c.id, { parentId: group.parentId ?? null });
+    removeLayerAt(doc, layerIndex(doc, groupId));
+    maskBuffers = takeBuffers(doc, group);
+    if (doc.activeLayerId === groupId) restoreActive(doc, children.at(-1)?.id ?? doc.layers.at(-1)?.id ?? null, 'layer');
+  };
+  const revert = () => {
+    putBuffers(doc, maskBuffers);
+    insertLayer(doc, group, idx);
+    for (const c of children) assignLayer(doc, c.id, { parentId: groupId });
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES + bytesOf(maskBuffers), apply, revert }, meta, 'Ungroup');
+  return { ok: true };
 }
 
 /** Merge a layer into the one below it, giving one pixel layer. Needs the compositor (a canvas). */
@@ -354,17 +521,63 @@ export function applyMask(s, id, meta) {
 
 // ── Resampling the whole document ─────────────────────────────────────────────
 
-const SCALED = {
-  shape: ['x', 'y', 'w', 'h', 'x1', 'y1', 'x2', 'y2', 'radius', 'strokeWidth'],
-  text: ['x', 'y', 'fontSize', 'strokeWidth', 'wrapWidth'],
-};
+const SCALE_X = new Set(['x', 'w', 'x1', 'x2', 'wrapWidth']);
+const SCALE_Y = new Set(['y', 'h', 'y1', 'y2']);
+const SCALE_UNIFORM = new Set(['radius', 'strokeWidth', 'fontSize']);
 
-function resampled(surface, w, h) {
-  const out = createSurface(w, h);
-  out.ctx.imageSmoothingEnabled = true;
-  out.ctx.imageSmoothingQuality = 'high';
-  out.ctx.drawImage(surface.canvas, 0, 0, w, h);
-  return out;
+function resampleDocument(s, targetW, targetH, meta, label) {
+  const { doc } = s;
+  const W = Math.round(Number(targetW));
+  const H = Math.round(Number(targetH));
+  if (!Number.isInteger(W) || !Number.isInteger(H) || W < 1 || H < 1) return refuse('Width and height must be at least 1 px.');
+  if (W > MAX_SIDE || H > MAX_SIDE) return refuse(`${W}×${H} px would be larger than 16384 px.`);
+  if (W === doc.width && H === doc.height) return { ok: true };
+  const sx = W / doc.width;
+  const sy = H / doc.height;
+  const su = Math.min(sx, sy);
+  const sizeX = n => Math.max(1, Math.round(n * sx));
+  const sizeY = n => Math.max(1, Math.round(n * sy));
+  const oldBuffers = new Map();
+  const newBuffers = new Map();
+  const changes = doc.layers.map((layer) => {
+    const patch = {};
+    if (layer.kind === 'pixel') {
+      Object.assign(patch, { x: Math.round(layer.x * sx), y: Math.round(layer.y * sy), width: sizeX(layer.width), height: sizeY(layer.height) });
+      const old = doc.buffers.get(layer.bufferId);
+      oldBuffers.set(layer.bufferId, old);
+      newBuffers.set(layer.bufferId, resampleSurface(old, patch.width, patch.height));
+    }
+    if (layer.kind === 'shape' || layer.kind === 'text') {
+      for (const k of SCALE_X) if (typeof layer[k] === 'number') patch[k] = layer[k] * sx;
+      for (const k of SCALE_Y) if (typeof layer[k] === 'number') patch[k] = layer[k] * sy;
+      for (const k of SCALE_UNIFORM) if (typeof layer[k] === 'number') patch[k] = layer[k] * su;
+    }
+    if (layer.kind === 'adjust' && layer.adjust === 'blur') patch.params = { ...layer.params, radius: layer.params.radius * su };
+    if (layer.mask) {
+      const m = layer.mask;
+      const old = doc.buffers.get(m.bufferId);
+      patch.mask = { ...m, x: Math.round(m.x * sx), y: Math.round(m.y * sy), width: sizeX(m.width), height: sizeY(m.height) };
+      oldBuffers.set(m.bufferId, old);
+      newBuffers.set(m.bufferId, resampleSurface(old, patch.mask.width, patch.mask.height));
+    }
+    const previous = Object.fromEntries(Object.keys(patch).map(k => [k, layer[k]]));
+    return { layer, patch, previous };
+  });
+  const before = { width: doc.width, height: doc.height, selection: doc.selection };
+  const nextSel = resampleSelectionMask(doc.selection, W, H);
+  const set = (dims, buffers, which, selection) => {
+    doc.width = dims.width;
+    doc.height = dims.height;
+    doc.selection = selection;
+    for (const [id, surface] of buffers) doc.buffers.set(id, surface);
+    for (const c of changes) assignLayer(doc, c.layer.id, c[which]);
+    touchLayer(doc, null);
+  };
+  const apply = () => set({ width: W, height: H }, newBuffers, 'patch', nextSel);
+  const revert = () => set(before, oldBuffers, 'previous', before.selection);
+  apply();
+  push(s, { bytes: PROP_BYTES + bytesOf(oldBuffers), apply, revert }, meta, label);
+  return { ok: true };
 }
 
 /**
@@ -376,53 +589,312 @@ export function upscaleDocument(s, factor, meta) {
   const W = Math.round(doc.width * factor);
   const H = Math.round(doc.height * factor);
   if (W > MAX_SIDE || H > MAX_SIDE) return refuse(`${factor}× would make the image larger than 16384 px.`);
-  const size = n => Math.max(1, Math.round(n * factor));
+  return resampleDocument(s, W, H, meta, `${factor}× Upscale`);
+}
+
+/** Resample the entire document to exact dimensions `{ width, height }`. One step. */
+export function resizeImage(s, { width, height }, meta) {
+  return resampleDocument(s, width, height, meta, 'Image size');
+}
+
+function shiftLayerFields(layer, dx, dy) {
+  const patch = {};
+  if (layer.kind === 'pixel' || layer.kind === 'text') {
+    patch.x = layer.x + dx;
+    patch.y = layer.y + dy;
+  } else if (layer.kind === 'shape') {
+    if (layer.shape === 'line') {
+      Object.assign(patch, { x1: layer.x1 + dx, y1: layer.y1 + dy, x2: layer.x2 + dx, y2: layer.y2 + dy });
+    } else {
+      Object.assign(patch, { x: layer.x + dx, y: layer.y + dy });
+    }
+  }
+  if (layer.mask) patch.mask = { ...layer.mask, x: layer.mask.x + dx, y: layer.mask.y + dy };
+  return patch;
+}
+
+const ANCHOR_X = { left: 0, center: 0.5, right: 1 };
+const ANCHOR_Y = { top: 0, middle: 0.5, bottom: 1 };
+
+/** Change canvas dimensions without scaling existing artwork, aligning via anchor (e.g. 'middle-center'). */
+export function resizeCanvas(s, { width, height, anchor = 'middle-center' }, meta) {
+  const { doc } = s;
+  const W = Math.round(Number(width));
+  const H = Math.round(Number(height));
+  if (!Number.isInteger(W) || !Number.isInteger(H) || W < 1 || H < 1) return refuse('Canvas width and height must be at least 1 px.');
+  if (W > MAX_SIDE || H > MAX_SIDE) return refuse('Canvas sides must be 1–16384 px.');
+  const [ayName = 'middle', axName = 'center'] = String(anchor).split('-');
+  const dx = Math.round((W - doc.width) * (ANCHOR_X[axName] ?? 0.5));
+  const dy = Math.round((H - doc.height) * (ANCHOR_Y[ayName] ?? 0.5));
+  if (W === doc.width && H === doc.height && dx === 0 && dy === 0) return { ok: true };
+
+  const changes = doc.layers.map((layer) => {
+    const patch = shiftLayerFields(layer, dx, dy);
+    const previous = Object.fromEntries(Object.keys(patch).map(k => [k, layer[k]]));
+    return { layer, patch, previous };
+  });
+  const before = { width: doc.width, height: doc.height, selection: doc.selection };
+  const nextSel = translateSelectionMask(doc.selection, dx, dy, W, H);
+  const run = (dims, which, sel) => {
+    doc.width = dims.width;
+    doc.height = dims.height;
+    doc.selection = sel;
+    for (const c of changes) if (Object.keys(c[which]).length) assignLayer(doc, c.layer.id, c[which]);
+    touchLayer(doc, null);
+  };
+  const apply = () => run({ width: W, height: H }, 'patch', nextSel);
+  const revert = () => run(before, 'previous', before.selection);
+  apply();
+  push(s, { bytes: PROP_BYTES * changes.length, apply, revert }, meta, 'Canvas size');
+  return { ok: true };
+}
+
+/** Crop the document to `{ x, y, w, h }` in document coordinates. One step. */
+export function cropDocument(s, rect, meta, { deleteCropped = false } = {}) {
+  const { doc } = s;
+  const cx = Math.round(rect.x);
+  const cy = Math.round(rect.y);
+  const cw = Math.round(rect.w);
+  const ch = Math.round(rect.h);
+  if (cw < 1 || ch < 1 || cw > MAX_SIDE || ch > MAX_SIDE) return refuse('Crop size must be 1–16384 px.');
+  if (cx === 0 && cy === 0 && cw === doc.width && ch === doc.height && !deleteCropped) return { ok: true };
+
   const oldBuffers = new Map();
   const newBuffers = new Map();
   const changes = doc.layers.map((layer) => {
-    const patch = {};
-    if (layer.kind === 'pixel') {
-      Object.assign(patch, { x: Math.round(layer.x * factor), y: Math.round(layer.y * factor), width: size(layer.width), height: size(layer.height) });
+    const patch = shiftLayerFields(layer, -cx, -cy);
+    if (deleteCropped && layer.kind === 'pixel') {
       const old = doc.buffers.get(layer.bufferId);
+      const ix0 = Math.max(layer.x, cx);
+      const iy0 = Math.max(layer.y, cy);
+      const ix1 = Math.min(layer.x + layer.width, cx + cw);
+      const iy1 = Math.min(layer.y + layer.height, cy + ch);
+      const trimmed = ix1 > ix0 && iy1 > iy0
+        ? surfaceFromPixels(old.read(ix0 - layer.x, iy0 - layer.y, ix1 - ix0, iy1 - iy0))
+        : createSurface(1, 1);
+      patch.x = ix1 > ix0 ? ix0 - cx : 0;
+      patch.y = iy1 > iy0 ? iy0 - cy : 0;
+      patch.width = trimmed.width;
+      patch.height = trimmed.height;
       oldBuffers.set(layer.bufferId, old);
-      newBuffers.set(layer.bufferId, resampled(old, patch.width, patch.height));
-    }
-    for (const key of SCALED[layer.kind] || []) if (typeof layer[key] === 'number') patch[key] = layer[key] * factor;
-    if (layer.kind === 'adjust' && layer.adjust === 'blur') patch.params = { ...layer.params, radius: layer.params.radius * factor };
-    if (layer.mask) {
-      const m = layer.mask;
-      const old = doc.buffers.get(m.bufferId);
-      patch.mask = { ...m, x: Math.round(m.x * factor), y: Math.round(m.y * factor), width: size(m.width), height: size(m.height) };
-      oldBuffers.set(m.bufferId, old);
-      newBuffers.set(m.bufferId, resampled(old, patch.mask.width, patch.mask.height));
+      newBuffers.set(layer.bufferId, trimmed);
     }
     const previous = Object.fromEntries(Object.keys(patch).map(k => [k, layer[k]]));
     return { layer, patch, previous };
   });
-  const before = { width: doc.width, height: doc.height };
-  const set = (dims, buffers, which) => {
+
+  const before = { width: doc.width, height: doc.height, selection: doc.selection };
+  const nextSel = translateSelectionMask(doc.selection, -cx, -cy, cw, ch);
+  const run = (dims, buffers, which, sel) => {
     doc.width = dims.width;
     doc.height = dims.height;
+    doc.selection = sel;
     for (const [id, surface] of buffers) doc.buffers.set(id, surface);
-    for (const c of changes) assignLayer(doc, c.layer.id, c[which]);
+    for (const c of changes) if (Object.keys(c[which]).length) assignLayer(doc, c.layer.id, c[which]);
     touchLayer(doc, null);
   };
-  const apply = () => set({ width: W, height: H }, newBuffers, 'patch');
-  const revert = () => set(before, oldBuffers, 'previous');
+  const apply = () => run({ width: cw, height: ch }, newBuffers, 'patch', nextSel);
+  const revert = () => run(before, oldBuffers, 'previous', before.selection);
   apply();
-  push(s, { bytes: PROP_BYTES + bytesOf(oldBuffers), apply, revert }, meta, `${factor}× Upscale`);
+  push(s, { bytes: PROP_BYTES * changes.length + bytesOf(oldBuffers), apply, revert }, meta, 'Crop');
   return { ok: true };
+}
+
+// ── Selections ────────────────────────────────────────────────────────────────
+
+export function setSelection(s, nextSelection, meta, label = 'Selection') {
+  const { doc } = s;
+  const before = cloneSelection(doc.selection);
+  const after = nextSelection ? cloneSelection(nextSelection) : null;
+  if (!before && !after) return { ok: true };
+  const set = (sel) => {
+    doc.selection = sel;
+    touchLayer(doc, null);
+  };
+  set(after);
+  const bytes = PROP_BYTES + (after?.data.byteLength || before?.data.byteLength || 0);
+  push(s, { bytes, apply: () => set(after), revert: () => set(before) }, meta, label);
+  return { ok: true, selection: doc.selection };
+}
+
+export function selectAll(s, meta) {
+  const { doc } = s;
+  const data = rectSelectionData(doc.width, doc.height, { x: 0, y: 0, w: doc.width, h: doc.height });
+  return setSelection(s, createSelection(doc.width, doc.height, data), meta, 'Select all');
+}
+
+export function clearSelection(s, meta) {
+  if (!s.doc.selection) return { ok: true };
+  return setSelection(s, null, meta, 'Deselect');
+}
+
+export function invertSelection(s, meta) {
+  const { doc } = s;
+  return setSelection(s, invertSelectionMask(doc.selection, doc.width, doc.height), meta, 'Invert selection');
+}
+
+export function featherSelection(s, radius, meta) {
+  const { doc } = s;
+  if (!doc.selection) return refuse('Make a selection first.');
+  const data = featherMaskData(doc.selection.data, doc.width, doc.height, radius);
+  return setSelection(s, createSelection(doc.width, doc.height, data), meta, 'Feather selection');
+}
+
+/** Erase/clear the pixels inside doc.selection (or the whole layer) on the active pixel layer or mask. */
+export function clearSelectedPixels(s, meta) {
+  const { doc } = s;
+  const layer = getLayer(doc, doc.activeLayerId);
+  if (!layer) return GONE;
+  const part = doc.activeTarget === 'mask' ? 'mask' : 'layer';
+  const allowed = canEdit(layer, part === 'mask' ? 'mask' : 'paint');
+  if (!allowed.ok) return allowed;
+  const surface = surfaceOf(doc, layer, part);
+  const o = part === 'mask' ? layer.mask : layer;
+  const sel = doc.selection;
+  const rect = sel
+    ? {
+        x0: Math.max(0, sel.bounds.x - o.x),
+        y0: Math.max(0, sel.bounds.y - o.y),
+        x1: Math.min(surface.width, sel.bounds.x + sel.bounds.w - o.x),
+        y1: Math.min(surface.height, sel.bounds.y + sel.bounds.h - o.y),
+      }
+    : { x0: 0, y0: 0, x1: surface.width, y1: surface.height };
+  if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) return { ok: true };
+
+  const rw = rect.x1 - rect.x0;
+  const rh = rect.y1 - rect.y0;
+  const recorder = beginPixelEdit(surface);
+  recorder.touch(rect.x0, rect.y0, rw, rh);
+  const px = surface.read(rect.x0, rect.y0, rw, rh);
+  for (let y = 0; y < rh; y++) {
+    for (let x = 0; x < rw; x++) {
+      const m = sel ? (sel.data[(o.y + rect.y0 + y) * sel.width + (o.x + rect.x0 + x)] / 255) : 1;
+      if (m <= 0) continue;
+      const i = (y * rw + x) * 4;
+      if (part === 'mask') {
+        const inv = 1 - m;
+        px.data[i] = Math.round(px.data[i] * inv);
+        px.data[i + 1] = Math.round(px.data[i + 1] * inv);
+        px.data[i + 2] = Math.round(px.data[i + 2] * inv);
+      } else {
+        px.data[i + 3] = Math.round(px.data[i + 3] * (1 - m));
+      }
+    }
+  }
+  surface.write(rect.x0, rect.y0, px);
+  commitPatch(s, layer.id, part, recorder.finish(), { ...meta, label: meta?.label || (sel ? 'Clear selection' : 'Clear layer') });
+  return { ok: true };
+}
+
+/** Extract copied pixel data { width, height, x, y, data } from active pixel layer within selection. */
+export function copySelectedPixels(doc) {
+  const layer = getLayer(doc, doc.activeLayerId);
+  if (!layer || layer.kind !== 'pixel') return { ok: false, reason: 'Choose a pixel layer to copy.' };
+  const surface = surfaceOf(doc, layer);
+  const sel = doc.selection;
+  const x = sel ? Math.max(0, sel.bounds.x) : Math.max(0, layer.x);
+  const y = sel ? Math.max(0, sel.bounds.y) : Math.max(0, layer.y);
+  const x1 = sel ? Math.min(doc.width, sel.bounds.x + sel.bounds.w) : Math.min(doc.width, layer.x + layer.width);
+  const y1 = sel ? Math.min(doc.height, sel.bounds.y + sel.bounds.h) : Math.min(doc.height, layer.y + layer.height);
+  if (x1 <= x || y1 <= y) return { ok: false, reason: 'Nothing inside the canvas to copy.' };
+  const w = x1 - x;
+  const h = y1 - y;
+  const pixels = surface.read(x - layer.x, y - layer.y, w, h);
+  if (sel) {
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const m = sel.data[(y + py) * sel.width + (x + px)];
+        const i = (py * w + px) * 4;
+        pixels.data[i + 3] = Math.round((pixels.data[i + 3] * m) / 255);
+      }
+    }
+  }
+  return { ok: true, clipboard: { width: w, height: h, x, y, data: pixels.data } };
+}
+
+export function cutSelectedPixels(s, meta) {
+  const res = copySelectedPixels(s.doc);
+  if (!res.ok) return res;
+  const cleared = clearSelectedPixels(s, { ...meta, label: 'Cut' });
+  if (!cleared.ok) return cleared;
+  return { ok: true, clipboard: res.clipboard };
+}
+
+export function pastePixels(s, clipboard, meta) {
+  if (!clipboard?.data || !clipboard.width || !clipboard.height) return refuse('Clipboard is empty.');
+  const { doc } = s;
+  const w = Math.min(MAX_SIDE, clipboard.width);
+  const h = Math.min(MAX_SIDE, clipboard.height);
+  const surface = surfaceFromPixels({ width: w, height: h, data: clipboard.data.slice(0, w * h * 4) });
+  const x = Math.max(0, Math.min(doc.width - w, clipboard.x ?? Math.round((doc.width - w) / 2)));
+  const y = Math.max(0, Math.min(doc.height - h, clipboard.y ?? Math.round((doc.height - h) / 2)));
+  return addLayer(s, 'pixel', { name: 'Pasted layer', surface, x, y }, { ...meta, label: 'Paste' });
+}
+
+/** Convert the active selection into a layer mask on the active layer (creating one if absent). */
+export function selectionToMask(s, meta) {
+  const { doc } = s;
+  const sel = doc.selection;
+  if (!sel || !computeSelectionBounds(sel.data, sel.width, sel.height)) return refuse('Make a selection first.');
+  const { layer, error } = maskable(doc, doc.activeLayerId);
+  if (error) return error;
+
+  const surface = createSurface(doc.width, doc.height);
+  const rgba = new Uint8ClampedArray(doc.width * doc.height * 4);
+  for (let i = 0; i < sel.data.length; i++) {
+    const v = sel.data[i];
+    const p = i * 4;
+    rgba[p] = v; rgba[p + 1] = v; rgba[p + 2] = v; rgba[p + 3] = 255;
+  }
+  surface.write(0, 0, { width: doc.width, height: doc.height, data: rgba });
+  const newMask = { x: 0, y: 0, width: doc.width, height: doc.height, bufferId: globalThis.crypto.randomUUID(), defaultValue: 0, enabled: true };
+  const oldMask = layer.mask;
+  const oldSurface = oldMask ? doc.buffers.get(oldMask.bufferId) : null;
+  const before = { id: doc.activeLayerId, target: doc.activeTarget };
+
+  const apply = () => {
+    if (oldMask) doc.buffers.delete(oldMask.bufferId);
+    doc.buffers.set(newMask.bufferId, surface);
+    assignLayer(doc, layer.id, { mask: newMask });
+    restoreActive(doc, layer.id, 'mask');
+  };
+  const revert = () => {
+    doc.buffers.delete(newMask.bufferId);
+    if (oldMask && oldSurface) doc.buffers.set(oldMask.bufferId, oldSurface);
+    assignLayer(doc, layer.id, { mask: oldMask });
+    restoreActive(doc, before.id, before.target);
+  };
+  apply();
+  push(s, { bytes: PROP_BYTES + surface.bytes + (oldSurface?.bytes || 0), apply, revert }, meta, 'Selection to mask');
+  return { ok: true, layer };
 }
 
 // ── Between documents ─────────────────────────────────────────────────────────
 
-/** Copy a layer (mask included) into another open document, above its active layer. One step there. */
+/** Copy a layer or group (descendants and masks included) into another open document. One step there. */
 export function copyLayerToDocument(from, layerId, to, meta) {
   const layer = getLayer(from.doc, layerId);
   if (!layer) return GONE;
-  const copy = cloneLayer(from.doc, layer, to.doc);
-  const buffers = takeBuffers(to.doc, copy);
+  const { root, clones } = cloneSubtree(from.doc, layer, to.doc);
+  root.parentId = null;
+  const buffers = new Map();
+  for (const c of clones) for (const [k, v] of takeBuffers(to.doc, c)) buffers.set(k, v);
   const index = layerIndex(to.doc, to.doc.activeLayerId) + 1 || to.doc.layers.length;
-  push(to, insertStep(to, copy, index, buffers), meta, `Copy layer from ${from.doc.name}`);
-  return { ok: true, layer: copy };
+  const before = { id: to.doc.activeLayerId, target: to.doc.activeTarget };
+  const apply = () => {
+    putBuffers(to.doc, buffers);
+    clones.forEach((c, i) => insertLayer(to.doc, c, index + i));
+    restoreActive(to.doc, root.id, 'layer');
+  };
+  const revert = () => {
+    for (let i = clones.length - 1; i >= 0; i--) {
+      const idx = layerIndex(to.doc, clones[i].id);
+      if (idx >= 0) removeLayerAt(to.doc, idx);
+      takeBuffers(to.doc, clones[i]);
+    }
+    restoreActive(to.doc, before.id, before.target);
+  };
+  apply();
+  push(to, { bytes: PROP_BYTES * clones.length + bytesOf(buffers), apply, revert }, meta, `Copy layer from ${from.doc.name}`);
+  return { ok: true, layer: root };
 }

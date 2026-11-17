@@ -23,6 +23,7 @@ function Range({ label, value, min, max, step = 1, suffix = '', onStart, onChang
 export default function TextProperties({ store }) {
   useStudio(store, s => s.version);
   const focusId = useStudio(store, s => s.textFocus);
+  const editingTextId = useStudio(store, s => s.editingTextId);
   const tab = useStudio(store, s => s.tab);
   const textRef = useRef(null);
   const dragId = useRef(0);
@@ -31,12 +32,12 @@ export default function TextProperties({ store }) {
   const text = layer?.kind === 'text' ? layer : null;
 
   useEffect(() => {
-    if (text && focusId === text.id) {
+    if (text && focusId === text.id && !editingTextId) {
       textRef.current?.focus();
       textRef.current?.select();
       store.update({ textFocus: null });
     }
-  }, [focusId, text, store]);
+  }, [focusId, editingTextId, text, store]);
 
   if (!text) return null;
   const set = (patch, key, windowMs = 1000) => {

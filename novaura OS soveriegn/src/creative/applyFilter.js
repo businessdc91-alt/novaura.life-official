@@ -5,6 +5,8 @@ import { getLayer } from './document.js';
 import { beginStroke } from './stroke.js';
 import { FILTERS } from './filters/kernels.js';
 import { sharedFilterPool } from './filters/pool.js';
+import { clipPixelsToSelection } from './selection.js';
+import { invalidateMaskAlpha } from './masks.js';
 
 export async function applyFilter(session, id, params, { tab = 'photo', pool = sharedFilterPool(), onProgress, signal } = {}) {
   const { doc } = session;
@@ -26,7 +28,9 @@ export async function applyFilter(session, id, params, { tab = 'photo', pool = s
     if (err?.name === 'AbortError') return { ok: false, reason: 'Cancelled.', cancelled: true };
     return { ok: false, reason: `${FILTERS[id].label} failed: ${err?.message || err}` };
   }
+  if (doc.selection) clipPixelsToSelection(result, pixels, origin.x, origin.y, doc.selection);
   surface.write(0, 0, result);
+  if (part === 'mask') invalidateMaskAlpha(doc, layer, { x: origin.x, y: origin.y, w: surface.width, h: surface.height });
   stroke.end();
   session.compositor?.invalidate();
   return { ok: true };

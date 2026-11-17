@@ -1,8 +1,8 @@
 // move.js — Move the selected layer by dragging, or nudge it with the arrow keys.
 // Pixel layers change their x, y, so nothing is lost off the canvas; a mask moves with its layer.
 
-import { getLayer, canEdit } from '../document.js';
-import { setLayerProps } from '../edits.js';
+import { getLayer, canEdit, collectDescendants } from '../document.js';
+import { setLayerProps, setBatchLayerProps } from '../edits.js';
 
 let drag = null;
 let dragCount = 0;
@@ -37,25 +37,46 @@ function movable(ctx) {
   return layer;
 }
 
-function apply(ctx, layer, patch, meta) {
-  const r = setLayerProps(ctx.session, layer.id, patch, { tab: ctx.tab, label: 'Move layer', ...meta });
-  if (!r.ok) ctx.notify(r.reason);
+function applyMove(ctx, target, dx, dy, meta) {
+  if (target.kind === 'group') {
+    const entries = [];
+    for (const item of target.children) {
+      const p = moved(item.layer, item.start, dx, dy);
+      if (Object.keys(p).length) entries.push({ id: item.layer.id, patch: p });
+    }
+    const r = setBatchLayerProps(ctx.session, entries, { tab: ctx.tab, label: 'Move group', ...meta });
+    if (!r.ok) ctx.notify(r.reason);
+  } else {
+    const r = setLayerProps(ctx.session, target.layer.id, moved(target.layer, target.start, dx, dy), { tab: ctx.tab, label: 'Move layer', ...meta });
+    if (!r.ok) ctx.notify(r.reason);
+  }
   ctx.compositor?.invalidate();
   ctx.requestRender();
+}
+
+function targetFor(ctx) {
+  const layer = movable(ctx);
+  if (!layer) return null;
+  if (layer.kind === 'group') {
+    const kids = [layer, ...collectDescendants(ctx.session.doc, layer.id)]
+      .filter(l => !l.locked && l.kind !== 'adjust' && (l.kind !== 'group' || l.mask));
+    return { kind: 'group', layer, children: kids.map(l => ({ layer: l, start: snapshot(l) })) };
+  }
+  return { kind: 'leaf', layer, start: snapshot(layer) };
 }
 
 export const move = {
   id: 'move',
   cursor: 'move',
   down(ctx, p) {
-    const layer = movable(ctx);
-    drag = layer ? { layer, sx: p.x, sy: p.y, start: snapshot(layer), id: ++dragCount } : null;
+    const t = targetFor(ctx);
+    drag = t ? { target: t, sx: p.x, sy: p.y, id: ++dragCount } : null;
   },
   move(ctx, p) {
     if (!drag) return;
     const dx = Math.round(p.x - drag.sx);
     const dy = Math.round(p.y - drag.sy);
-    apply(ctx, drag.layer, moved(drag.layer, drag.start, dx, dy), { mergeKey: `move:${drag.layer.id}:${drag.id}` });
+    applyMove(ctx, drag.target, dx, dy, { mergeKey: `move:${drag.target.layer.id}:${drag.id}` });
   },
   up() { drag = null; },
   cancel() { drag = null; },
@@ -63,11 +84,11 @@ export const move = {
   key(ctx, event) {
     const dir = ARROWS[event.key];
     if (!dir) return false;
-    const layer = movable(ctx);
-    if (!layer) return true;
+    const t = targetFor(ctx);
+    if (!t) return true;
     const step = event.shiftKey ? 10 : 1;
-    apply(ctx, layer, moved(layer, snapshot(layer), dir[0] * step, dir[1] * step), {
-      mergeKey: `nudge:${layer.id}`, mergeWindowMs: 500, label: 'Nudge layer',
+    applyMove(ctx, t, dir[0] * step, dir[1] * step, {
+      mergeKey: `nudge:${t.layer.id}`, mergeWindowMs: 500, label: 'Nudge layer',
     });
     return true;
   },

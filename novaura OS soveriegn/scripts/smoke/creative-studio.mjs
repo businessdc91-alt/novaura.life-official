@@ -300,6 +300,7 @@ try {
     children: [
       { name: 'Paper', left: 0, top: 0, imageData: swatch(300, 200, [240, 230, 210, 255]) },
       { name: 'Ink', blendMode: 'multiply', children: [{ name: 'Logo', left: 40, top: 30, opacity: 0.8, imageData: swatch(120, 80, [30, 60, 160, 255]) }] },
+      { name: 'Exposure', adjustment: { type: 'exposure', exposure: 1, offset: 0, gamma: 1 } },
       { name: 'Brighten', adjustment: { type: 'brightness/contrast', brightness: 20, contrast: 10 } },
     ],
   }, { generateThumbnail: false, noBackground: true })));
@@ -308,10 +309,30 @@ try {
   await b.send('DOM.setFileInputFiles', { files: [psdPath], objectId: input.result.result.objectId });
   check('File > Open opens a PSD in its own tab', await b.waitFor(`[...document.querySelectorAll('[data-doc-tab]')].some(t => t.textContent.includes('fixture-poster'))`, 20000));
   await sleep(400);
-  check('with its layers', (await layerNames()).join() === 'Brighten,Logo,Paper', (await layerNames()).join());
-  check('and a report of what changed', /Group "Ink": blend mode "multiply"/.test(await b.evaluate(`document.querySelector('[data-open-report]')?.textContent || ''`)));
+  check('with its layers and group folder', (await layerNames()).join() === 'Brighten,Exposure,Ink,Logo,Paper', (await layerNames()).join());
+  check('and a report of what changed', /adjustment can't be shown/.test(await b.evaluate(`document.querySelector('[data-open-report]')?.textContent || ''`)));
   await b.screenshot(join(OUT, 'c12_psd_open.png'));
   await clickOn('[data-action="close-open-report"]');
+
+  // ── Phase 2 UI smoke: New Group, Marquee + Crop, Image/Canvas Size dialog ──
+  await clickOn('[data-action="new-group"]');
+  check('New group adds a folder row', await b.evaluate(`[...document.querySelectorAll('[data-layer-kind="group"]')].length >= 2`));
+  await clickOn('[data-action="delete-layer"]');
+  await clickOn('[data-menu="file"]');
+  await clickOn('[data-action="file-canvas-size"]');
+  check('Canvas Size dialog opens with 9-point anchor', await b.evaluate(`!!document.querySelector('[data-anchor="middle-center"]')`));
+  await clickOn('[data-action="apply-resize"]');
+  await sleep(200);
+  await clickOn('[data-tab="paint"]');
+  await clickOn('[data-tool="crop"]');
+  check('Crop tool shows Apply & Reset controls', await b.evaluate(`!!document.querySelector('[data-action="apply-crop"]')`));
+  await b.key('m', 'KeyM', 77);
+  await sleep(150);
+  check('M selects Marquee tool', await b.evaluate(`document.querySelector('[data-tool="marquee"]')?.getAttribute('aria-pressed') === 'true'`));
+  await clickOn('[data-action="select-all"]');
+  check('Select All enables Selection -> Mask button', await b.evaluate(`!!document.querySelector('[data-action="selection-to-mask"]')`));
+  await clickOn('[data-action="deselect"]');
+  await b.key('b', 'KeyB', 66);
 
   // ── Exporting a PSD ──
   await clickOn('[data-menu="file"]');

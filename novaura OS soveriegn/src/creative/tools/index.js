@@ -15,6 +15,7 @@ export function registerTool(tool) { TOOLS[tool.id] = tool; }
 
 const KEYS = {
   b: 'brush', n: 'pencil', e: 'eraser', g: 'fill', 'shift+g': 'gradient', i: 'eyedropper', u: 'shape', v: 'move', t: 'text',
+  m: 'marquee', l: 'lasso', w: 'wand', c: 'crop',
 };
 
 /** The tool a key press selects, or null (modifier keys, unknown keys, tools not registered). */

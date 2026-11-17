@@ -7,6 +7,9 @@ import { renderShape } from '../../../creative/shapes.js';
 import { handlesFor } from '../../../creative/transformHandles.js';
 import { shapePreview } from '../../../creative/tools/shape.js';
 import { gradientPreview } from '../../../creative/tools/gradient.js';
+import { selectionPreview } from '../../../creative/tools/selection.js';
+import { getCropRect, cropHandles } from '../../../creative/tools/crop.js';
+import { selectionOutlineCanvas } from '../../../creative/selection.js';
 import { textBox } from '../../../creative/text.js';
 
 const ACCENT = '#22d3ee';
@@ -59,6 +62,76 @@ export function makeOverlay(store) {
       ctx.restore();
     }
     const { tool } = store.getState();
+
+    // Active pixel selection contour (Marquee / Lasso / Magic Wand)
+    if (session.doc.selection) {
+      const outline = selectionOutlineCanvas(session.doc.selection);
+      if (outline) {
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(outline.canvas, outline.x, outline.y);
+        ctx.restore();
+      }
+    }
+
+    // Live drag preview while tracing Marquee or Lasso
+    const selDrag = selectionPreview();
+    if (selDrag) {
+      ctx.save();
+      ctx.lineWidth = 1.5 / z;
+      ctx.strokeStyle = '#ffffff';
+      ctx.setLineDash([5 / z, 4 / z]);
+      if (selDrag.kind === 'rect') {
+        const { x, y, w, h } = selDrag.rect;
+        ctx.strokeRect(x, y, w, h);
+      } else if (selDrag.kind === 'ellipse') {
+        const { x, y, w, h } = selDrag.rect;
+        ctx.beginPath();
+        ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (selDrag.kind === 'lasso' && selDrag.points.length > 1) {
+        ctx.beginPath();
+        selDrag.points.forEach((pt, idx) => ctx[idx ? 'lineTo' : 'moveTo'](pt.x, pt.y));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Interactive Crop frame + darkened outer veil + rule of thirds
+    if (tool === 'crop') {
+      const crop = getCropRect(session.doc);
+      if (crop) {
+        const { width: dw, height: dh } = session.doc;
+        ctx.save();
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.58)';
+        ctx.fillRect(0, 0, dw, Math.max(0, crop.y));
+        ctx.fillRect(0, crop.y + crop.h, dw, Math.max(0, dh - (crop.y + crop.h)));
+        ctx.fillRect(0, crop.y, Math.max(0, crop.x), crop.h);
+        ctx.fillRect(crop.x + crop.w, crop.y, Math.max(0, dw - (crop.x + crop.w)), crop.h);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.lineWidth = 1 / z;
+        for (const t of [1 / 3, 2 / 3]) {
+          ctx.beginPath();
+          ctx.moveTo(crop.x + crop.w * t, crop.y);
+          ctx.lineTo(crop.x + crop.w * t, crop.y + crop.h);
+          ctx.moveTo(crop.x, crop.y + crop.h * t);
+          ctx.lineTo(crop.x + crop.w, crop.y + crop.h * t);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = ACCENT;
+        ctx.lineWidth = 1.5 / z;
+        ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
+        const hs = 8 / z;
+        for (const h of cropHandles(crop)) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+          ctx.strokeRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+        }
+        ctx.restore();
+      }
+    }
+
     const selected = getLayer(session.doc, session.doc.activeLayerId);
     if (selected?.kind === 'text' && selected.visible && (tool === 'text' || tool === 'move')) {
       const box = textBox(selected);

@@ -9,6 +9,10 @@ import { fitView, zoomAt, actualSize } from '../../../creative/view.js';
 import { createPointerController } from '../../../creative/pointerController.js';
 import { TOOLS } from '../../../creative/tools/index.js';
 import { shouldHandleShortcut } from '../../../creative/shortcuts.js';
+import { getLayer } from '../../../creative/document.js';
+import { setLayerProps, setActiveLayer } from '../../../creative/edits.js';
+import { fontCss, resolveFont, fontAvailable, textBox, layoutText, canvasMeasure } from '../../../creative/text.js';
+import { screenToDoc } from '../../../creative/view.js';
 
 let checkerTile = null;
 function checker(ctx) {
@@ -33,9 +37,16 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
   const panRef = useRef(null);
   const fittedFor = useRef(null);
   const [zoom, setZoom] = useState(1);
+  const [viewState, setViewState] = useState({ zoom: 1, panX: 0, panY: 0 });
   const [spaceDown, setSpaceDown] = useState(false);
   const activeId = useStudio(store, s => s.activeId);
   const tool = useStudio(store, s => s.tool);
+  const editingTextId = useStudio(store, s => s.editingTextId);
+  const textFocus = useStudio(store, s => s.textFocus);
+  const tab = useStudio(store, s => s.tab);
+  const storeVersion = useStudio(store, s => s.version);
+  const inlineRef = useRef(null);
+  const inlineDragId = useRef(0);
 
   const draw = useCallback(() => {
     frame.current = 0;
@@ -76,6 +87,7 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
   const setView = useCallback((next) => {
     viewRef.current = next;
     setZoom(next.zoom);
+    setViewState(next);
     onZoom?.(next.zoom);
     requestRender();
   }, [requestRender, onZoom]);
@@ -120,6 +132,22 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
 
   // Any change in the store (history, settings) redraws.
   useEffect(() => store.subscribe(() => requestRender()), [store, requestRender]);
+  // Worker-backed live adjustments request a frame as soon as strips complete.
+  useEffect(() => {
+    const comp = store.active()?.compositor;
+    return comp?.onAsyncReady?.(() => requestRender());
+  }, [activeId, store, requestRender, storeVersion]);
+  // Focus on-canvas text editor when activated.
+  useEffect(() => {
+    if (editingTextId && textFocus === editingTextId) {
+      const el = inlineRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+        store.update({ textFocus: null });
+      }
+    }
+  }, [editingTextId, textFocus, store]);
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
   // The pointer controller is made on first use, inside an event handler.
@@ -199,6 +227,54 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
 
   const cursor = spaceDown ? 'grab' : (TOOLS[tool]?.cursor || 'default');
 
+  const onDoubleClick = (e) => {
+    if (tool !== 'text' && tool !== 'move') return;
+    const session = store.active();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!session || !rect) return;
+    const p = screenToDoc(e, viewRef.current, rect);
+    const hit = [...session.doc.layers].reverse().find((l) => {
+      if (l.kind !== 'text' || !l.visible) return false;
+      const b = textBox(l);
+      return p.x >= b.x && p.y >= b.y && p.x <= b.x + Math.max(b.w, 24) && p.y <= b.y + Math.max(b.h, 24);
+    });
+    if (!hit) return;
+    setActiveLayer(session, hit.id, 'layer');
+    inlineDragId.current += 1;
+    store.update({ editingTextId: hit.id, textFocus: hit.id });
+  };
+
+  const session = store.active();
+  const editLayer = editingTextId && session ? getLayer(session.doc, editingTextId) : null;
+  const editingText = editLayer?.kind === 'text' && !editLayer.locked ? editLayer : null;
+  let inlineBox = null;
+  if (editingText) {
+    const family = resolveFont(editingText.fontFamily, fontAvailable).family;
+    const lay = layoutText({ ...editingText, fontFamily: family }, canvasMeasure);
+    const w = Math.max(120, Math.ceil(lay.width * viewState.zoom + 32));
+    const h = Math.max(40, Math.ceil(lay.height * viewState.zoom + 18));
+    inlineBox = {
+      left: viewState.panX + editingText.x * viewState.zoom,
+      top: viewState.panY + editingText.y * viewState.zoom,
+      width: w,
+      height: h,
+      font: fontCss({ ...editingText, fontSize: editingText.fontSize * viewState.zoom }, family),
+      lineHeight: editingText.lineHeight || 1.2,
+    };
+  }
+
+  const onInlineTextChange = (e) => {
+    if (!session || !editingText) return;
+    const value = e.target.value;
+    const patch = { text: value };
+    const oldName = (editingText.text || 'Text').split('\n')[0].slice(0, 40) || 'Text';
+    if (editingText.name === oldName) patch.name = value.split('\n')[0].slice(0, 40) || 'Text';
+    const r = setLayerProps(session, editingText.id, patch, {
+      tab, label: 'Edit text', mergeKey: `text-text:${editingText.id}:${inlineDragId.current}`, mergeWindowMs: 1000,
+    });
+    if (!r.ok) store.notify(r.reason);
+  };
+
   const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
   return (
     <div
@@ -216,8 +292,42 @@ export default function CanvasView({ store, rootRef, overlay = null, isActive = 
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onLostPointerCapture={onPointerCancel}
+        onDoubleClick={onDoubleClick}
         onContextMenu={e => e.preventDefault()}
       />
+      {editingText && inlineBox && (
+        <textarea
+          ref={inlineRef}
+          autoFocus
+          data-text-input=""
+          data-canvas-text-input=""
+          aria-label="Edit text on canvas"
+          value={editingText.text}
+          onChange={onInlineTextChange}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key === 'Enter')) {
+              e.preventDefault();
+              store.update({ editingTextId: null });
+            }
+          }}
+          onBlur={() => {
+            if (store.getState().editingTextId === editingText.id) store.update({ editingTextId: null });
+          }}
+          style={{
+            left: `${inlineBox.left}px`,
+            top: `${inlineBox.top}px`,
+            width: `${inlineBox.width}px`,
+            height: `${inlineBox.height}px`,
+            font: inlineBox.font,
+            lineHeight: inlineBox.lineHeight,
+            color: editingText.colour || '#000000',
+            textAlign: editingText.align || 'left',
+            textTransform: editingText.uppercase ? 'uppercase' : 'none',
+            transform: editingText.rotation ? `rotate(${editingText.rotation}deg)` : undefined,
+          }}
+          className="absolute z-20 resize-both bg-slate-950/65 backdrop-blur-[1px] border border-cyan-400 rounded px-1 py-0.5 outline-none select-text shadow-lg overflow-hidden"
+        />
+      )}
       <div className="absolute right-3 bottom-3 flex items-center gap-1 rounded-lg bg-slate-900/90 border border-slate-700/70 px-1.5 py-1 text-[11px] text-slate-300 shadow-lg">
         <span className="px-1.5 tabular-nums" aria-label="Zoom">{Math.round(zoom * 100)}%</span>
         <button type="button" onClick={fit} className="px-2 py-0.5 rounded-md hover:bg-slate-700/70" title="Fit the picture in the window">Fit</button>

@@ -141,6 +141,50 @@ export function surfaceFromPixels(pixels) {
   return s;
 }
 
+/** Bilinear RGBA resampling for raw pixel buffers (used in Node/ArraySurface fallback and oversized PSDs). */
+export function resamplePixels(pixels, width, height) {
+  checkSize(width, height);
+  const { width: sw, height: sh, data: src } = pixels;
+  if (sw === width && sh === height) return { width, height, data: src.slice() };
+  const dst = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const fy = (y + 0.5) * (sh / height) - 0.5;
+    const y0 = Math.max(0, Math.min(sh - 1, Math.floor(fy)));
+    const y1 = Math.max(0, Math.min(sh - 1, y0 + 1));
+    const wy = fy - Math.floor(fy);
+    for (let x = 0; x < width; x++) {
+      const fx = (x + 0.5) * (sw / width) - 0.5;
+      const x0 = Math.max(0, Math.min(sw - 1, Math.floor(fx)));
+      const x1 = Math.max(0, Math.min(sw - 1, x0 + 1));
+      const wx = fx - Math.floor(fx);
+      const o = (y * width + x) * 4;
+      const i00 = (y0 * sw + x0) * 4;
+      const i10 = (y0 * sw + x1) * 4;
+      const i01 = (y1 * sw + x0) * 4;
+      const i11 = (y1 * sw + x1) * 4;
+      for (let c = 0; c < 4; c++) {
+        const top = src[i00 + c] * (1 - wx) + src[i10 + c] * wx;
+        const bot = src[i01 + c] * (1 - wx) + src[i11 + c] * wx;
+        dst[o + c] = Math.round(top * (1 - wy) + bot * wy);
+      }
+    }
+  }
+  return { width, height, data: dst };
+}
+
+/** Resize a surface cleanly using Canvas2D when present, or bilinear fallback on ArraySurface. */
+export function resampleSurface(surface, width, height) {
+  const out = createSurface(width, height);
+  if (out.ctx && surface.canvas) {
+    out.ctx.imageSmoothingEnabled = true;
+    out.ctx.imageSmoothingQuality = 'high';
+    out.ctx.drawImage(surface.canvas, 0, 0, width, height);
+    return out;
+  }
+  out.write(0, 0, resamplePixels(surface.read(0, 0, surface.width, surface.height), width, height));
+  return out;
+}
+
 // PNG encoding and decoding for array surfaces (loaded only when one needs it).
 const loadPng = () => import('./io/png.js');
 

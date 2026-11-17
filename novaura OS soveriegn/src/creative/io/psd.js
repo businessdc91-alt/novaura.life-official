@@ -10,12 +10,13 @@
 // workers) it is given plain RGBA arrays.
 
 import { readPsd, writePsd, initializeCanvas } from 'ag-psd';
-import { MAX_SIDE, surfaceFromPixels, createSurface } from '../surface.js';
-import { createDocument, createLayer, removeLayerAt } from '../document.js';
+import { MAX_SIDE, surfaceFromPixels, createSurface, resamplePixels } from '../surface.js';
+import { createDocument, createLayer, removeLayerAt, buildLayerTree } from '../document.js';
 import { fromPsdBlend, toPsdBlend } from '../blendModes.js';
 import { defaultParams } from '../adjustments.js';
 import { rasterizeLayer, flatten as flattenDocument, compositeBelow as compositeBeneath } from '../compositor.js';
 import { adjustBelow as adjustBeneath } from '../adjustmentLayers.js';
+import { fitWithinLimit } from './raster.js';
 
 if (typeof document === 'undefined') {
   initializeCanvas(
@@ -96,39 +97,85 @@ function effectNames(effects) {
     .map(([k]) => words(k));
 }
 
+function attachPsdMask(doc, layer, psdMask, scale) {
+  if (!psdMask?.imageData?.width || !psdMask.imageData.height) return;
+  const raw = toRgba8(psdMask.imageData);
+  const mw = Math.min(MAX_SIDE, Math.max(1, Math.round(raw.width * scale)));
+  const mh = Math.min(MAX_SIDE, Math.max(1, Math.round(raw.height * scale)));
+  const scaled = (mw !== raw.width || mh !== raw.height) ? resamplePixels(raw, mw, mh) : raw;
+  const opaque = new Uint8ClampedArray(scaled.data);
+  for (let i = 3; i < opaque.length; i += 4) opaque[i] = 255;
+  const surface = surfaceFromPixels({ width: mw, height: mh, data: opaque });
+  const bufferId = globalThis.crypto.randomUUID();
+  doc.buffers.set(bufferId, surface);
+  layer.mask = {
+    x: Math.round((psdMask.left ?? 0) * scale),
+    y: Math.round((psdMask.top ?? 0) * scale),
+    width: mw, height: mh, bufferId,
+    defaultValue: psdMask.defaultColor === 0 ? 0 : 255,
+    enabled: !psdMask.disabled,
+  };
+}
+
 /** PSD bytes → { doc, report: string[] }. */
-export function readPsdFile(bytes, name = 'Photoshop file') {
+export function readPsdFile(bytes, name = 'Photoshop file', { preserveGroups = true } = {}) {
   const header = readHeader(bytes);
   if (UNREADABLE.has(header.mode)) throw new Error(`This PSD uses ${MODES[header.mode]} colour, which Creative Studio can't open yet.`);
-  if (header.width > MAX_SIDE || header.height > MAX_SIDE) {
-    throw new Error(`This PSD is ${header.width}×${header.height} px; Creative Studio opens up to 16384 px per side.`);
-  }
-  const psd = readPsd(bytes, { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
+  const fit = fitWithinLimit(header.width, header.height, MAX_SIDE);
+  const psd = readPsd(bytes, {
+    useImageData: true, skipThumbnail: true, skipLinkedFilesData: true,
+    skipCompositeImageData: fit.scale < 1,
+  });
+  const docFit = fitWithinLimit(psd.width, psd.height, MAX_SIDE);
+  const scale = docFit.scale;
   const report = [];
+  if (scale < 1) {
+    report.push(`Scaled down from ${psd.width}×${psd.height} to ${docFit.width}×${docFit.height} px to fit the 16384 px limit.`);
+  }
   if (header.mode !== 3 || header.depth !== 8) report.push(`Converted from ${MODES[header.mode] || 'its colour mode'} ${header.depth}-bit to 8-bit RGB.`);
 
-  const doc = createDocument({ name, width: psd.width, height: psd.height, background: 'transparent' });
+  const doc = createDocument({ name, width: docFit.width, height: docFit.height, background: 'transparent' });
   removeLayerAt(doc, 0);
   doc.buffers.clear();
 
   const add = (layer) => { doc.layers.push(layer); };
 
-  const walk = (children, inherited) => {
+  const walk = (children, inherited, parentId = null) => {
     for (const l of children || []) {
       const lname = l.name || 'Layer';
+      const p = l.protected || {};
       if (l.children) {
+        if (preserveGroups) {
+          const blend = !l.blendMode || l.blendMode === 'pass through'
+            ? { blend: 'pass-through', psdBlend: null }
+            : fromPsdBlend(l.blendMode);
+          const group = createLayer(doc, 'group', {
+            name: lname,
+            visible: !l.hidden,
+            opacity: quantise(l.opacity ?? 1),
+            locked: !!(p.transparency && p.composite && p.position),
+            expanded: l.opened !== false,
+            parentId,
+            ...blend,
+          });
+          attachPsdMask(doc, group, l.mask, scale);
+          walk(l.children, { hidden: false, opacity: 1 }, group.id);
+          add(group);
+          continue;
+        }
         if (l.blendMode && l.blendMode !== 'pass through') {
           report.push(`Group "${lname}": blend mode "${l.blendMode}" can't be kept; its layers use their own modes.`);
         }
-        walk(l.children, { hidden: inherited.hidden || !!l.hidden, opacity: inherited.opacity * (l.opacity ?? 1) });
+        walk(l.children, { hidden: inherited.hidden || !!l.hidden, opacity: inherited.opacity * (l.opacity ?? 1) }, null);
         continue;
       }
-      const p = l.protected || {};
+
       const common = {
         name: lname,
         visible: !(inherited.hidden || l.hidden),
         opacity: quantise(inherited.opacity * (l.opacity ?? 1)),
         locked: !!(p.transparency && p.composite && p.position),
+        parentId,
         ...fromPsdBlend(l.blendMode || 'normal'),
       };
       const effects = effectNames(l.effects);
@@ -145,29 +192,30 @@ export function readPsdFile(bytes, name = 'Photoshop file') {
           layer = createLayer(doc, 'pixel', { ...common, visible: false, surface: createSurface(1, 1), x: 0, y: 0 });
         }
       } else {
-        const image = l.imageData && l.imageData.width && l.imageData.height ? toRgba8(l.imageData) : null;
-        const surface = image ? surfaceFromPixels(image) : createSurface(1, 1);
+        const raw = l.imageData && l.imageData.width && l.imageData.height ? toRgba8(l.imageData) : null;
+        let surface = createSurface(1, 1);
+        if (raw) {
+          const rw = Math.min(MAX_SIDE, Math.max(1, Math.round(raw.width * scale)));
+          const rh = Math.min(MAX_SIDE, Math.max(1, Math.round(raw.height * scale)));
+          const scaled = (rw !== raw.width || rh !== raw.height) ? resamplePixels(raw, rw, rh) : raw;
+          surface = surfaceFromPixels(scaled);
+        }
         if (l.text?.text && !lname.includes(l.text.text)) common.name = `${lname} — "${l.text.text.slice(0, 40)}"`;
-        layer = createLayer(doc, 'pixel', { ...common, surface, x: l.left ?? 0, y: l.top ?? 0 });
+        layer = createLayer(doc, 'pixel', {
+          ...common, surface,
+          x: Math.round((l.left ?? 0) * scale),
+          y: Math.round((l.top ?? 0) * scale),
+        });
       }
-      if (l.mask?.imageData?.width && l.mask.imageData.height) {
-        const grey = toRgba8(l.mask.imageData);
-        const opaque = new Uint8ClampedArray(grey.data);
-        for (let i = 3; i < opaque.length; i += 4) opaque[i] = 255;
-        const surface = surfaceFromPixels({ width: grey.width, height: grey.height, data: opaque });
-        const bufferId = globalThis.crypto.randomUUID();
-        doc.buffers.set(bufferId, surface);
-        layer.mask = {
-          x: l.mask.left ?? 0, y: l.mask.top ?? 0, width: grey.width, height: grey.height, bufferId,
-          defaultValue: l.mask.defaultColor === 0 ? 0 : 255, enabled: !l.mask.disabled,
-        };
-      }
+      attachPsdMask(doc, layer, l.mask, scale);
       add(layer);
     }
   };
-  walk(psd.children, { hidden: false, opacity: 1 });
+  walk(psd.children, { hidden: false, opacity: 1 }, null);
   if (!doc.layers.length && psd.imageData) {
-    add(createLayer(doc, 'pixel', { name: 'Background', surface: surfaceFromPixels(toRgba8(psd.imageData)) }));
+    const raw = toRgba8(psd.imageData);
+    const scaled = scale < 1 ? resamplePixels(raw, docFit.width, docFit.height) : raw;
+    add(createLayer(doc, 'pixel', { name: 'Background', surface: surfaceFromPixels(scaled) }));
   }
   doc.activeLayerId = doc.layers.at(-1)?.id ?? null;
   doc.version = 0;
@@ -212,7 +260,8 @@ export function writePsdFile(doc, {
   exactLook = false, rasterize = rasterizeLayer, flatten = flattenDocument,
   compositeBelow = compositeBeneath, adjustBelow = adjustBeneath,
 } = {}) {
-  const children = doc.layers.map((layer) => {
+  const tree = buildLayerTree(doc.layers);
+  const toPsdLayer = (layer) => {
     const out = { name: layer.name, opacity: layer.opacity, hidden: !layer.visible, blendMode: toPsdBlend(layer) };
     if (layer.locked) out.protected = { ...LOCK_ALL };
     if (layer.mask) {
@@ -221,6 +270,12 @@ export function writePsdFile(doc, {
         left: m.x, top: m.y, right: m.x + m.width, bottom: m.y + m.height,
         defaultColor: m.defaultValue, disabled: m.enabled === false, imageData: pixelsOf(doc.buffers.get(m.bufferId)),
       };
+    }
+    if (layer.kind === 'group') {
+      out.blendMode = layer.blend === 'pass-through' ? 'pass through' : toPsdBlend(layer);
+      out.opened = layer.expanded !== false;
+      out.children = (tree.get(layer.id) || []).map(toPsdLayer);
+      return out;
     }
     if (layer.kind === 'adjust') {
       const live = !exactLook && TO_PSD[layer.adjust]?.(layer.params);
@@ -232,6 +287,7 @@ export function writePsdFile(doc, {
     if (layer.kind === 'pixel') return { ...out, left: layer.x, top: layer.y, imageData: pixelsOf(doc.buffers.get(layer.bufferId)) };
     const { surface, x, y } = rasterize(doc, layer);
     return { ...out, left: x, top: y, imageData: pixelsOf(surface) };
-  });
+  };
+  const children = (tree.get(null) || []).map(toPsdLayer);
   return writePsd({ width: doc.width, height: doc.height, children, imageData: pixelsOf(flatten(doc)) }, { generateThumbnail: false, noBackground: true });
 }

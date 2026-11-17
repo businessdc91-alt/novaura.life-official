@@ -47,20 +47,33 @@ test('a mask with defaultColor 0 reads with defaultValue 0', () => {
   assert.deepEqual([...surfaceOf(doc, layer, 'mask').read(1, 1, 1, 1).data], [180, 180, 180, 255]);
 });
 
-test('a hidden group hides its children; group opacity 0.5 multiplies', () => {
-  const { doc, report } = readPsdFile(psdBytes([
+test('groups import as real folder layers preserving visibility, opacity and parentId', () => {
+  const bytes = psdBytes([
     { name: 'Hidden group', hidden: true, blendMode: 'pass through', children: [{ name: 'In hidden', left: 0, top: 0, imageData: px(1, 1, [1, 1, 1, 255]) }] },
     { name: 'Half group', opacity: 0.5, blendMode: 'pass through', children: [{ name: 'In half', left: 0, top: 0, opacity: 0.5, imageData: px(1, 1, [2, 2, 2, 255]) }] },
-  ]));
-  assert.deepEqual(doc.layers.map(l => l.name), ['In hidden', 'In half']);
-  assert.equal(byName(doc, 'In hidden').visible, false);
-  assert.ok(Math.abs(byName(doc, 'In half').opacity - 0.25) < 0.01);
+  ]);
+  const { doc, report } = readPsdFile(bytes);
+  const g1 = byName(doc, 'Hidden group');
+  const g2 = byName(doc, 'Half group');
+  assert.equal(g1.kind, 'group');
+  assert.equal(g1.visible, false);
+  assert.equal(byName(doc, 'In hidden').parentId, g1.id);
+  assert.equal(g2.kind, 'group');
+  assert.ok(Math.abs(g2.opacity - 0.5) < 0.01);
+  assert.equal(byName(doc, 'In half').parentId, g2.id);
   assert.deepEqual(report, []);
 });
 
-test('a group blend mode other than pass through is reported', () => {
-  const { report } = readPsdFile(psdBytes([{ name: 'Mult', blendMode: 'multiply', children: [{ name: 'Inside', left: 0, top: 0, imageData: px(1, 1, [9, 9, 9, 255]) }] }]));
-  assert.deepEqual(report, ['Group "Mult": blend mode "multiply" can\'t be kept; its layers use their own modes.']);
+test('a group blend mode like multiply is kept directly on the group layer (and preserveGroups:false flattens with report)', () => {
+  const bytes = psdBytes([{ name: 'Mult', blendMode: 'multiply', children: [{ name: 'Inside', left: 0, top: 0, imageData: px(1, 1, [9, 9, 9, 255]) }] }]);
+  const { doc, report } = readPsdFile(bytes);
+  const g = byName(doc, 'Mult');
+  assert.equal(g.kind, 'group');
+  assert.equal(g.blend, 'multiply');
+  assert.deepEqual(report, []);
+
+  const legacy = readPsdFile(bytes, 'Legacy', { preserveGroups: false });
+  assert.deepEqual(legacy.report, ['Group "Mult": blend mode "multiply" can\'t be kept; its layers use their own modes.']);
 });
 
 test('a levels adjustment becomes a levels adjust layer with the same values', () => {

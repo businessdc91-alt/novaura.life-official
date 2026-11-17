@@ -1,21 +1,22 @@
 // PhotoPanel.jsx — The Photo tab: adjustment layers you can change or remove later.
 
 import React, { useRef, useState } from 'react';
-import { Move, Pipette, SlidersHorizontal, Wand2 } from 'lucide-react';
+import { Move, Pipette, SlidersHorizontal, Wand2, Crop, SquareDashed } from 'lucide-react';
 import { useStudio } from './useStudio.js';
 import CurvesEditor from './CurvesEditor.jsx';
 import { getLayer } from '../../../creative/document.js';
-import { addLayer, setLayerProps } from '../../../creative/edits.js';
+import {
+  addLayer, setLayerProps, upscaleDocument, clearSelection, invertSelection, featherSelection, selectionToMask,
+} from '../../../creative/edits.js';
 import { ADJUSTMENTS, defaultParams } from '../../../creative/adjustments.js';
 import { FILTERS, defaultFilterParams } from '../../../creative/filters/kernels.js';
 import { applyFilter } from '../../../creative/applyFilter.js';
-import { upscaleDocument } from '../../../creative/edits.js';
 import { openImageFile, documentFromImage, placeImage, scaledNotice } from '../../../creative/io/raster.js';
 import { removeBackgroundOnLayer } from '../../../creative/removeBackground.js';
 
 const IMAGE_TYPES = 'image/png,image/jpeg,image/webp,image/gif,image/bmp,image/svg+xml,.svg';
 
-function ImageSection({ store, session }) {
+function ImageSection({ store, session, onOpenResize }) {
   const openRef = useRef(null);
   const placeRef = useRef(null);
   const [tolerance, setTolerance] = useState(40);
@@ -62,6 +63,10 @@ function ImageSection({ store, session }) {
           const r = upscaleDocument(session, 2, { tab: 'photo' });
           if (!r.ok) store.notify(r.reason);
         }}>2× Upscale</button>
+      </div>
+      <div className="flex gap-1.5">
+        <button type="button" data-action="image-size" className={button} onClick={() => onOpenResize?.('image')}>Image size…</button>
+        <button type="button" data-action="canvas-size" className={button} onClick={() => onOpenResize?.('canvas')}>Canvas size…</button>
       </div>
       <p className="text-[10px] text-slate-500">Open starts a new document; Place adds the image as a layer.</p>
     </Section>
@@ -176,11 +181,12 @@ function AdjustmentSettings({ store, session, layer }) {
   );
 }
 
-export default function PhotoPanel({ store }) {
+export default function PhotoPanel({ store, onOpenResize }) {
   useStudio(store, s => s.version);
   const tool = useStudio(store, s => s.tool);
   const session = store.active();
   const layer = session ? getLayer(session.doc, session.doc.activeLayerId) : null;
+  const runSel = (r) => { if (r && !r.ok) store.notify(r.reason); session?.compositor?.invalidate(); };
 
   const add = (type) => {
     const r = addLayer(session, 'adjust', { adjust: type, params: defaultParams(type) }, { tab: 'photo', label: `Add ${ADJUSTMENTS[type].label}` });
@@ -191,7 +197,7 @@ export default function PhotoPanel({ store }) {
     <aside className="w-60 shrink-0 border-r border-slate-800 bg-slate-900/50 p-3 space-y-4 overflow-y-auto" aria-label="Photo tools">
       <Section title="Tools">
         <div className="grid grid-cols-2 gap-1.5">
-          {[['move', 'Move', Move], ['eyedropper', 'Eyedropper', Pipette]].map(([id, label, Icon]) => (
+          {[['move', 'Move', Move], ['eyedropper', 'Eyedropper', Pipette], ['crop', 'Crop', Crop], ['wand', 'Magic Wand', Wand2], ['marquee', 'Marquee', SquareDashed]].map(([id, label, Icon]) => (
             <button key={id} type="button" data-tool={id} aria-pressed={tool === id} onClick={() => store.setTool(id)}
               className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-semibold ${tool === id ? 'bg-purple-600 text-white' : 'bg-slate-950 text-slate-400 hover:text-white'}`}>
               <Icon className="w-3.5 h-3.5" /> {label}
@@ -200,7 +206,18 @@ export default function PhotoPanel({ store }) {
         </div>
       </Section>
 
-      {session && <ImageSection store={store} session={session} />}
+      {session?.doc.selection && (
+        <Section title="Selection">
+          <div className="grid grid-cols-2 gap-1">
+            <button type="button" onClick={() => runSel(clearSelection(session, { tab: 'photo' }))} className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10.5px]">Deselect</button>
+            <button type="button" onClick={() => runSel(invertSelection(session, { tab: 'photo' }))} className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10.5px]">Invert</button>
+            <button type="button" onClick={() => runSel(featherSelection(session, 4, { tab: 'photo' }))} className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10.5px]">Feather 4 px</button>
+            <button type="button" onClick={() => runSel(selectionToMask(session, { tab: 'photo' }))} className="py-1 rounded bg-purple-700 hover:bg-purple-600 text-white text-[10.5px] font-semibold">To mask</button>
+          </div>
+        </Section>
+      )}
+
+      {session && <ImageSection store={store} session={session} onOpenResize={onOpenResize} />}
 
       <Section title="Add an adjustment layer">
         <div className="grid grid-cols-2 gap-1">

@@ -21,14 +21,17 @@ export const text = {
     if (layer?.kind === 'text' && inside(textBox(layer), p)) {
       const allowed = canEdit(layer, 'move');
       if (!allowed.ok) { ctx.notify(allowed.reason); drag = null; return; }
-      drag = { layerId: layer.id, sx: p.x, sy: p.y, x0: layer.x, y0: layer.y, id: ++dragCount };
+      drag = { layerId: layer.id, sx: p.x, sy: p.y, x0: layer.x, y0: layer.y, id: ++dragCount, moved: false };
       return;
     }
     drag = { create: true };
   },
   move(ctx, p) {
     if (!drag || drag.create) return;
-    const r = setLayerProps(ctx.session, drag.layerId, { x: drag.x0 + Math.round(p.x - drag.sx), y: drag.y0 + Math.round(p.y - drag.sy) }, {
+    const dx = Math.round(p.x - drag.sx);
+    const dy = Math.round(p.y - drag.sy);
+    if (Math.hypot(dx, dy) >= 2) drag.moved = true;
+    const r = setLayerProps(ctx.session, drag.layerId, { x: drag.x0 + dx, y: drag.y0 + dy }, {
       tab: ctx.tab, label: 'Move layer', mergeKey: `text-move:${drag.layerId}:${drag.id}`,
     });
     if (!r.ok) ctx.notify(r.reason);
@@ -39,12 +42,16 @@ export const text = {
     const was = drag;
     drag = null;
     if (!was) return;
-    if (!was.create) { if (p) text.move(ctx, p); return; }
+    if (!was.create) {
+      if (p && !was.moved) ctx.store.update({ editingTextId: was.layerId, textFocus: was.layerId });
+      else if (p) text.move(ctx, p);
+      return;
+    }
     if (!p) return;
     const { colours } = ctx.store.getState();
     const r = addLayer(ctx.session, 'text', { ...TEXT_DEFAULTS, colour: colours.primary, x: Math.round(p.x), y: Math.round(p.y) }, { tab: ctx.tab, label: 'Add text' });
     if (!r.ok) { ctx.notify(r.reason); return; }
-    ctx.store.update({ textFocus: r.layer.id });
+    ctx.store.update({ textFocus: r.layer.id, editingTextId: r.layer.id });
     ctx.compositor?.invalidate();
     ctx.requestRender();
   },
