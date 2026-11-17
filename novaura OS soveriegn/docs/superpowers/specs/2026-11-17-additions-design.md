@@ -1,7 +1,6 @@
 # Additions: user apps inside Sovereign — Design
 
-**Status:** draft for owner review (2026-11-17). Nothing here is built yet.
-**Owner decisions needed:** see the last section.
+**Status:** approved by the owner 2026-11-17; the decisions are recorded in the last section. Nothing here is built yet.
 
 ## What this is
 
@@ -26,11 +25,11 @@ Additions run in OS windows. They can use OS services the person allows (their A
 1. **All user apps and Cybeni previews share one origin** (`http://cyprev.localhost`, framed with `allow-same-origin`). Any one of them can read or change the others' saved data (localStorage, IndexedDB). That includes a GitHub project imported into the Forge.
 2. **`PREVIEW_CSP` lets app code connect to every port on this machine** (`http://localhost:*`, `http://127.0.0.1:*`) and to any `https:` host. Local servers such as LM Studio and Ollama are in reach. Whether a request takes effect depends on each server's CORS settings. Data can also leave the machine to any website.
 
-These are acceptable while a person builds their own app in Cybeni. They are not acceptable for long-lived apps that people install and share. Additions close both gaps for installed apps (see Runtime). Narrowing `PREVIEW_CSP` for Cybeni previews themselves is a separate follow-up change.
+These are acceptable while a person builds their own app in Cybeni. They are not acceptable for long-lived apps that people install and share. Additions close both gaps for installed apps (see Runtime). Narrowing `PREVIEW_CSP` for Cybeni previews themselves is a separate change. It is approved, but it starts only after the owner's go-ahead, once Gemini's recommendations for it have been reviewed.
 
 ## Goals
 
-- Add an app from four places: Cybeni, the Forge, a `.novapp` file, or a request to a companion.
+- Add an app from.four places: Cybeni, the Forge, a `.novapp` file, or a request to a companion.
 - Additions can use OS services only through a small, versioned API, and only with permissions the person granted.
 - Additions survive OS updates. OS updates may change any internal code, but never API v1.
 - An addition can never reach:
@@ -98,7 +97,9 @@ The bridge script `__novaura/v1.js` is injected into every addition session by t
 
 - 50 requests per second per addition;
 - messages up to 16 MB, with larger data in chunks;
-- for `ai.chat`, no limit on a local model. On a paid cloud provider, the default is 200k tokens per hour per addition, which the person can change on the permissions page.
+- for `ai.chat`, the limit depends on where the model runs:
+  - **a local model, or the person's own cloud API key:** no limit from Sovereign. Every cloud key is the person's own, so the provider's limits on that key apply.
+  - **the NovAura decentralized inference network (community nodes):** 200k tokens per hour per addition, so the nodes don't get overloaded. The person can lower this limit but not raise it.
 
 **Stability rule.** A v1 method never changes behavior. New methods may be added to v1. A breaking change means `v2.js` beside `v1.js`, and v1 stays for at least 6 releases. An addition declares `apiVersion` in its manifest and gets that bridge.
 
@@ -183,7 +184,7 @@ Apps added before this change are moved over on first launch:
 3. Give it a manifest with no permissions and no network.
 4. Mark it "added before permissions" so the person can review it.
 
-If an old app needs the network, it shows one banner that opens its permissions page. (Owner decision 2.)
+If an old app needs the network, it shows one banner that opens its permissions page.
 
 ## Build order
 
@@ -234,10 +235,10 @@ Each step ships on its own and keeps the full test suite green.
 - Sharing additions over the mesh. A marketplace with royalties on the Template Library license pattern, with the 10% platform fee.
 - More API: `clipboard`, `ai.embed`, `companion.ask` (ask a companion something, with consent each time), and per-app channels over the mesh.
 
-## Owner decisions
+## Owner decisions (answered 2026-11-17)
 
-1. **Names:** "Additions" in the UI and `.novapp` for the file?
-2. **Existing "my apps":** move them over automatically (recommended, as above) or leave them as they are with a banner?
-3. **AI budget:** no limit on local models, and 200k tokens an hour per addition on paid cloud providers. Is that right?
-4. **Companion installs:** always one click by the person (recommended), or may a companion install an addition it built without asking?
-5. **Cybeni previews:** narrow `PREVIEW_CSP` (no blanket local ports) as a separate change now, or after Additions ship?
+1. **Names:** "Additions" in the UI, and `.novapp` for the file.
+2. **Existing "my apps":** move them over automatically, as described above.
+3. **AI budget:** no limit from Sovereign on local models or on the person's own cloud API keys (the provider's limits apply). 200k tokens an hour per addition on the decentralized inference network.
+4. **Companion installs:** always one click by the person. A companion never installs or grants permissions on its own.
+5. **Cybeni previews:** tighten `PREVIEW_CSP`, as a separate change. Gemini is adding its own recommendations for it first. Review those, and check in with the owner before starting.
