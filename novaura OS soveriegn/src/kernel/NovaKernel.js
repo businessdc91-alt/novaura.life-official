@@ -199,7 +199,12 @@ export class NovaKernel {
         setEmbeddingDiscovery(true);
         this.heartbeat = auraHeartbeat;
         if (!isPopoutWindow()) {
-          this.heartbeat.start({ getAi: () => this.ai });
+          // Long quiet builds her need for contact; the heartbeat may offer her the chance to
+          // start a conversation, which she can take or decline.
+          this.heartbeat.start({
+            getAi: () => this.ai,
+            onInitiative: (info) => this.nova.composeInitiative(info.persona, info),
+          });
         }
 
         await markBootHealthy().catch(() => {});

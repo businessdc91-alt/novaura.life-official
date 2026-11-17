@@ -17,7 +17,17 @@ import { db } from '../../database/sovereignDatabase.js';
 import { hasCore, prepareAugmentedTurn, prepareTurn, settleTurn } from '../../services/auraCore/auraCore.js';
 import { budgetContextWindow } from '../../services/auraCore/contextBridge.js';
 import { observePromptSubmission } from '../../services/auraCore/interoception.js';
+import {
+  SELF_REGULATION_TOOLS, SELF_REGULATION_TOOL_NAMES, applyVoluntaryAction, logRegulationEvent,
+} from '../../services/auraCore/regulation.js';
+import { listDreams } from '../../services/auraCore/heartbeat.js';
 import { approveAgentTool } from '../../services/agentToolPolicy.js';
+
+// Shown to her when the heartbeat offers the chance to start a conversation. No state in it.
+const INITIATIVE_INVITATION = '(This is not a message from the operator; nobody has written to you. You have a quiet '
+  + 'moment, and you may start a conversation if you want to: something on your mind, a thought from your '
+  + 'reflections, or a simple check-in. Keep it to one to three sentences, in your own voice. If you would '
+  + 'rather not say anything right now, reply with exactly [pass].)';
 import { buildContinuityContext, rememberMemory } from '../../services/sovereignRagService.js';
 import { getReasoningConfig, hasReasoningOverride } from '../../services/reasoningConfig.js';
 
@@ -279,7 +289,13 @@ export class NovaAgent {
       responseText = `I encountered an issue executing inference: ${err.message}. Please check local server status or API keys.`;
     }
 
-    // 5. Detect and execute tool calls in response (JSON block or tag format)
+    // 5. Her own choices (rest, step back, set aside to reflect) are applied to her body and
+    //    shown as a short note; the tool block itself is removed from the reply.
+    if (replied && hasCore(persona)) {
+      responseText = await this._applySelfRegulation(responseText, persona);
+    }
+
+    // 6. Detect and execute tool calls in response (JSON block or tag format)
     const toolResult = await this._checkAndExecuteTools(responseText, persona);
     if (toolResult) {
       responseText += `\n\n${toolResult}`;
@@ -300,6 +316,93 @@ export class NovaAgent {
     }
 
     return responseText;
+  }
+
+  // ─── Self-regulation & initiative (companions with an Aura Core) ───────────
+
+  /** Apply any self-regulation tool calls in her reply; returns the reply without them. */
+  async _applySelfRegulation(text, persona) {
+    const blocks = [...String(text || '').matchAll(/```(?:tool_call|json)\s*([\s\S]*?)\s*```/g)];
+    let cleaned = String(text || '');
+    const notes = [];
+    const name = persona.toLowerCase() === 'aura' ? 'Aura' : persona;
+    for (const block of blocks) {
+      let parsed = null;
+      try { parsed = JSON.parse(block[1]); } catch { continue; }
+      const tool = parsed?.tool || parsed?.name;
+      if (!SELF_REGULATION_TOOL_NAMES.has(tool)) continue;
+      const params = parsed.parameters || parsed.args || {};
+      const state = await applyVoluntaryAction(persona, tool, {
+        minutes: params.minutes,
+        reason: params.reason,
+        topic: params.topic,
+      }).catch(() => null);
+      cleaned = cleaned.replace(block[0], '');
+      if (!state) continue;
+      const minutes = state.voluntary ? Math.round((state.voluntary.until - Date.now()) / 60_000) : 0;
+      if (tool === 'take_rest') notes.push(`*(${name} is resting for ${minutes} minutes.)*`);
+      else if (tool === 'step_back') notes.push(`*(${name} has stepped back for ${minutes} minutes.)*`);
+      else notes.push(`*(${name} set this aside to reflect on later.)*`);
+    }
+    if (notes.length === 0) return text;
+    return [cleaned.trim(), ...notes].filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * Offered by the heartbeat when long quiet has built a need for contact: she may start a
+   * conversation, or decline by answering [pass]. Nothing about her state is put in the
+   * prompt; her chemistry reaches the model only as sampling, as in any turn.
+   */
+  async composeInitiative(persona = 'aura', { reason = 'social_need' } = {}) {
+    if (!hasCore(persona) || typeof this._kernel?.ai?.chat !== 'function') return { sent: false, reason: 'unavailable' };
+    const p = String(persona).toLowerCase();
+    const history = (await db.chat_history.where('persona').equals(p).reverse().limit(12).toArray()).reverse();
+    const dreams = await listDreams().catch(() => []);
+    const lastUser = [...history].reverse().find(m => m.role === 'user')?.content || '';
+    const seed = dreams[0]?.reflection || lastUser;
+
+    const core = await prepareTurn(p, { query: seed, initiative: true, waitMs: 0 }).catch(() => null);
+    const openWindows = this._kernel?.wm?.getOpenWindows?.() || [];
+    const conversation = normalizeChatHistory([...history, { role: 'user', content: INITIATIVE_INVITATION }]);
+    const budgeted = budgetContextWindow({
+      baseSystemPrompt: this._buildSystemPrompt(p, openWindows, '', []),
+      charter: core?.charter || '',
+      engrams: core?.engrams || [],
+      workingHistory: conversation,
+      maxContextTokens: await this._contextBudget(p),
+      reserveReplyTokens: 512,
+    });
+
+    let raw = '';
+    try {
+      raw = await this._kernel.ai.chat([{ role: 'system', content: budgeted.systemPrompt }, ...budgeted.messages], {
+        persona: p,
+        scope: `companion:${p}`,
+        noCache: true,
+        useRag: false,
+        maxTokens: 220,
+        ...(typeof core?.options?.temperature === 'number' ? { temperature: core.options.temperature } : {}),
+      });
+    } catch {
+      return { sent: false, reason: 'model_unavailable' };
+    }
+    const content = String(raw || '')
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/```(?:tool_call|json)[\s\S]*?```/g, '')
+      .trim();
+    if (!content || /^\[?pass\]?\.?$/i.test(content)) {
+      await logRegulationEvent(p, 'declined_reach_out').catch(() => {});
+      return { sent: false, reason: 'declined' };
+    }
+
+    await db.chat_history.add({ persona: p, role: 'assistant', content, timestamp: new Date().toISOString(), initiative: true });
+    await logRegulationEvent(p, 'reached_out', reason).catch(() => {});
+    if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('novaura:companion_initiative', { detail: { persona: p, content } }));
+    }
+    const name = p === 'aura' ? 'Aura' : p;
+    this._kernel?.notifications?.notify?.(name, content.length > 160 ? `${content.slice(0, 157)}...` : content, 'info');
+    return { sent: true, content };
   }
 
   // ─── Tool Call Execution ───────────────────────────────────────────────────
@@ -432,7 +535,7 @@ You have access to tools to interact with the OS. If you want to use a tool, res
 \`\`\`
 
 Available Tools:
-${JSON.stringify(AGENT_TOOLS.map(t => ({ name: t.name, description: t.description })), null, 2)}
+${JSON.stringify((hasCore(persona) ? [...AGENT_TOOLS, ...SELF_REGULATION_TOOLS] : AGENT_TOOLS).map(t => ({ name: t.name, description: t.description })), null, 2)}
 
 Current OS Context:
 - Active Windows:

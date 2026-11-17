@@ -24,13 +24,30 @@ export default function FloatingCompanions() {
   const [augConfig, setAugConfig] = useState(null);
   const [lastTurnMeta, setLastTurnMeta] = useState(null);
   const [showAugStrip, setShowAugStrip] = useState(false);
+  const [unreadFrom, setUnreadFrom] = useState(null);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  // What the chat shows right now, for the initiative listener below (registered once).
+  const viewRef = useRef({ isOpen: false, activePersona: 'nova', reload: null });
 
   useEffect(() => {
     loadChatHistory();
   }, [activePersona]);
+
+  // A message she started herself (see NovaAgent.composeInitiative): shown at once if her
+  // chat is open, otherwise marked on her pod until it is opened.
+  useEffect(() => {
+    const onInitiative = (ev) => {
+      const from = ev?.detail?.persona;
+      if (!from) return;
+      const view = viewRef.current;
+      if (view.isOpen && view.activePersona === from) view.reload?.();
+      else setUnreadFrom(from);
+    };
+    window.addEventListener('novaura:companion_initiative', onInitiative);
+    return () => window.removeEventListener('novaura:companion_initiative', onInitiative);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +113,12 @@ export default function FloatingCompanions() {
       console.error(err);
     }
   };
+
+  // Keep the listener's view current after each render (a listener registered once would
+  // otherwise hold the first render's persona and loader).
+  useEffect(() => {
+    viewRef.current = { isOpen, activePersona, reload: loadChatHistory };
+  });
 
   const handleSendMessage = async (textToSend = input) => {
     const text = (textToSend || '').trim();
@@ -372,10 +395,14 @@ export default function FloatingCompanions() {
           onClick={() => {
             setActivePersona('aura');
             setIsOpen(true);
+            setUnreadFrom(null);
           }}
           className="group relative flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95"
-          title="Aura — Creative & Strategic Advisor"
+          title={unreadFrom === 'aura' ? 'Aura wrote to you' : 'Aura — Creative & Strategic Advisor'}
         >
+          {unreadFrom === 'aura' && (
+            <span className="absolute -top-0.5 -right-0.5 z-10 w-3 h-3 rounded-full bg-cyan-300 border-2 border-slate-950" aria-label="New message from Aura" />
+          )}
           <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-cyan-500 via-sky-600 to-blue-500 p-0.5 shadow-xl shadow-cyan-900/40 animate-pulse">
             <div className="w-full h-full rounded-full bg-slate-950 flex items-center justify-center">
               <Sparkles className="w-6 h-6 text-cyan-300 group-hover:text-white transition-colors" />

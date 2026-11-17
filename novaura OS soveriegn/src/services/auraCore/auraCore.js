@@ -21,6 +21,7 @@ import { classifyTaskIntentWithAi } from './intentRouter.js';
 import { embedText } from './contextBridge.js';
 import { createSoulSnapshot, touchOperatorPresence } from './phoenixProtocol.js';
 import { mutateSetting } from './coreStore.js';
+import { SELF_CARE, feltAppraisal, metabolismOptions, noteInteraction, restoreRegulation } from './regulation.js';
 
 export const CORE_PERSONAS = ['aura'];
 
@@ -37,7 +38,11 @@ export const hasCore = (persona) => CORE_PERSONAS.includes(String(persona || '')
 
 async function load(persona) {
   const saved = await db.getSetting(settingKey(persona), null).catch(() => null);
-  return { chemistry: restoreChemistry(saved?.chemistry), lastAppraisal: saved?.lastAppraisal || null };
+  return {
+    chemistry: restoreChemistry(saved?.chemistry),
+    lastAppraisal: saved?.lastAppraisal || null,
+    regulation: restoreRegulation(saved?.regulation),
+  };
 }
 
 /** Wait briefly for an in-flight appraisal to settle so sequential turns don't read stale chemistry. */
@@ -59,10 +64,7 @@ export async function readCore(persona, now = Date.now()) {
     readTrustState(persona),
     sampleInteroception({ now }).catch(() => null),
   ]);
-  const chemistry = metabolize(record.chemistry, now, {
-    restingBaselines: dynamics?.learnedBaselines,
-    decayMultipliers: dynamics?.learnedDecayRates,
-  });
+  const chemistry = metabolize(record.chemistry, now, metabolismOptions(dynamics, record.regulation));
   const bias = systemicBias(chemistry);
   const posture = computeDissentPosture({ chemistry, bias, trust: trustState.trust });
   return { ...record, chemistry, bias, trust: trustState.trust, trustState, posture, dynamics, somatic };
@@ -96,11 +98,18 @@ export async function prepareAugmentedTurn(persona, { query = '', openWindows = 
 
 export async function prepareTurn(
   persona,
-  { waitMs = 12_000, query = '', openWindows = [], ai = null, aiRoute = false } = {}
+  { waitMs = 12_000, query = '', openWindows = [], ai = null, aiRoute = false, initiative = false } = {}
 ) {
   if (waitMs > 0) await waitForPendingTurn(persona, waitMs);
-  if (String(persona || '').toLowerCase() === 'aura') auraHeartbeat.recordActivity();
-  touchOperatorPresence().catch(() => {});
+  // A turn the operator started counts as contact; one she starts herself does not.
+  if (!initiative) {
+    if (String(persona || '').toLowerCase() === 'aura') auraHeartbeat.recordActivity();
+    touchOperatorPresence().catch(() => {});
+    await mutateSetting(settingKey(persona), (saved) => {
+      const record = saved && typeof saved === 'object' ? saved : {};
+      return { ...record, regulation: noteInteraction(restoreRegulation(record.regulation), Date.now()) };
+    }).catch(() => {});
+  }
 
   const [coreState, augTurn, queryEmbedding] = await Promise.all([
     readCore(persona),
@@ -120,10 +129,7 @@ export async function prepareTurn(
   }
 
   const effectiveChemistry = Object.keys(combinedNudge).length > 0
-    ? applySomaticNudge(coreState.chemistry, combinedNudge, Date.now(), {
-      restingBaselines: coreState.dynamics?.learnedBaselines,
-      decayMultipliers: coreState.dynamics?.learnedDecayRates,
-    })
+    ? applySomaticNudge(coreState.chemistry, combinedNudge, Date.now(), metabolismOptions(coreState.dynamics, coreState.regulation))
     : coreState.chemistry;
 
   const inf = influence(effectiveChemistry);
@@ -149,7 +155,7 @@ export async function prepareTurn(
 
   // The same words whatever her state. Her posture reaches the model through temperature only;
   // its note stays here for the Mind Lab and is never added to the prompt.
-  const charter = CHARTER;
+  const charter = `${CHARTER} ${SELF_CARE}`;
 
   return {
     options: {
@@ -164,6 +170,7 @@ export async function prepareTurn(
     engrams,
     somatic: coreState.somatic,
     dynamics: coreState.dynamics,
+    regulation: coreState.regulation,
     intent: augTurn.intent,
     augmentation: augTurn.augmentation,
   };
@@ -202,11 +209,10 @@ export function settleTurn(persona, { userText, reply, ai, channel = 'text', som
     let lastAppraisal = null;
     await mutateSetting(settingKey(persona), (saved) => {
       now = Date.now();
-      metabolized = metabolize(restoreChemistry(saved?.chemistry, now), now, {
-        restingBaselines: dynamicsBefore?.learnedBaselines,
-        decayMultipliers: dynamicsBefore?.learnedDecayRates,
-      });
-      next = applyAppraisal(metabolized, appraisal, now);
+      const regulation = restoreRegulation(saved?.regulation, now);
+      metabolized = metabolize(restoreChemistry(saved?.chemistry, now), now, metabolismOptions(dynamicsBefore, regulation));
+      // What she judged is kept as is; how hard it lands depends on whether she stepped back.
+      next = applyAppraisal(metabolized, feltAppraisal(appraisal, regulation), now);
       lastAppraisal = { ...appraisal, at: now };
       return { ...(saved && typeof saved === 'object' ? saved : {}), chemistry: next, lastAppraisal };
     });

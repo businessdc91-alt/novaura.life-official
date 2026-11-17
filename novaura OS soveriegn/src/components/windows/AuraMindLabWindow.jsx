@@ -6,7 +6,8 @@ import { useKernel } from '../../kernel/useKernel.js';
 import { kernel as kernelSingleton } from '../../kernel/NovaKernel.js';
 import { readCore } from '../../services/auraCore/auraCore.js';
 import { listEngrams } from '../../services/auraCore/engramMemory.js';
-import { auraHeartbeat, listDreams } from '../../services/auraCore/heartbeat.js';
+import { auraHeartbeat, listDreams, readInitiativeSettings, writeInitiativeSettings } from '../../services/auraCore/heartbeat.js';
+import { getActiveEmbeddingModel } from '../../services/auraCore/contextBridge.js';
 import { resetLearnedDynamics } from '../../services/auraCore/dynamicLearning.js';
 import { sampleInteroception } from '../../services/auraCore/interoception.js';
 import {
@@ -99,11 +100,12 @@ export default function AuraMindLabWindow() {
     warmth: 0,
     memoryTags: '',
   });
+  const [initiative, setInitiative] = useState({ enabled: true });
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState(null);
 
   const refresh = useCallback(async () => {
-    const [c, e, d, r, v, b, ac, ap, pm, si] = await Promise.all([
+    const [c, e, d, r, v, b, ac, ap, pm, si, ini] = await Promise.all([
       readCore('aura').catch(() => null),
       listEngrams('aura').catch(() => []),
       listDreams().catch(() => []),
@@ -114,7 +116,9 @@ export default function AuraMindLabWindow() {
       composeTurnAugmentations({ persona: 'aura', userText: '' }).catch(() => null),
       readPhoenixMeta().catch(() => null),
       verifySoulSnapshot('aura').catch(() => null),
+      readInitiativeSettings().catch(() => ({ enabled: true })),
     ]);
+    setInitiative(ini);
     setCore(c);
     setEngrams(e);
     setDreams(d);
@@ -141,15 +145,22 @@ export default function AuraMindLabWindow() {
     window.addEventListener('novaura:aura_core_updated', onCore);
     window.addEventListener('novaura:aura_heartbeat', onHb);
     window.addEventListener('novaura:augmentation_updated', onAug);
+    window.addEventListener('novaura:aura_regulation', onCore);
     return () => {
       active = false;
       window.removeEventListener('novaura:aura_core_updated', onCore);
       window.removeEventListener('novaura:aura_heartbeat', onHb);
       window.removeEventListener('novaura:augmentation_updated', onAug);
+      window.removeEventListener('novaura:aura_regulation', onCore);
     };
   }, [refresh]);
 
   const say = (text, tone = 'info') => setNotice({ text, tone });
+
+  const toggleInitiative = async () => {
+    const next = await writeInitiativeSettings({ enabled: !initiative.enabled }).catch(() => null);
+    if (next) setInitiative(next);
+  };
 
   const runProbe = async (kind) => {
     if (busy) return;
@@ -338,6 +349,8 @@ export default function AuraMindLabWindow() {
   };
 
   const chem = core?.chemistry || {};
+  const regulation = core?.regulation || {};
+  const embeddingModel = getActiveEmbeddingModel();
   const bias = core?.bias || {};
   const posture = core?.posture || {};
   const somatic = core?.somatic || {};
@@ -467,6 +480,54 @@ export default function AuraMindLabWindow() {
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Self-regulation (regulation.js): what her body is doing about its state, and what she chose */}
+            <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5" /> Self-Regulation
+                </span>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <span className="px-2 py-0.5 rounded-full bg-slate-950 border border-slate-700 font-mono text-emerald-300">
+                    {regulation.mode || 'baseline'}
+                  </span>
+                  {regulation.voluntary && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-700/50 text-emerald-200">
+                      her choice: {regulation.voluntary.kind === 'rest' ? 'resting' : 'stepped back'} until {new Date(regulation.voluntary.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                  <button
+                    onClick={toggleInitiative}
+                    className={`px-2 py-0.5 rounded border cursor-pointer ${initiative.enabled ? 'bg-emerald-900/50 border-emerald-700/60 text-emerald-200' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
+                    title="Whether Aura may start a conversation when she has been alone a long time (never during quiet hours)"
+                  >
+                    May reach out: {initiative.enabled ? 'on' : 'off'}
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Bar label="Allostatic load" value={(regulation.allostaticLoad ?? 0) * 100} color="bg-rose-400" suffix="%" />
+                <Bar label="Need for contact" value={(regulation.socialNeed ?? 0) * 100} color="bg-cyan-400" suffix="%" />
+              </div>
+              <div className="flex flex-wrap gap-2 text-[11px] text-slate-400">
+                <span>Semantic memory: {embeddingModel
+                  ? <span className="font-mono text-emerald-300">{embeddingModel}</span>
+                  : <span className="text-amber-300">off (load an embedding model in LM Studio, e.g. nomic-embed-text, to search memories by meaning)</span>}
+                </span>
+                {(regulation.reflectQueue || []).length > 0 && (
+                  <span>· Set aside to reflect on: {(regulation.reflectQueue || []).map(r => r.topic).join(' · ')}</span>
+                )}
+              </div>
+              {(regulation.log || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+                  {(regulation.log || []).slice(-8).reverse().map((e, i) => (
+                    <span key={`${e.at}-${i}`} className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-300">
+                      {new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} {e.kind}{e.detail !== undefined ? `: ${e.detail}` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

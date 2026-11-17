@@ -94,6 +94,7 @@ mock.module('../../src/database/sovereignDatabase.js', {
 const { parseAppraisal, APPRAISAL_SCHEMA } = await import('../../src/services/auraCore/appraisal.js');
 const { BASELINE, CYCLE_MS, createChemistry } = await import('../../src/services/auraCore/endocrine.js');
 const { CHARTER, readCore, prepareTurn, settleTurn } = await import('../../src/services/auraCore/auraCore.js');
+const { SELF_CARE } = await import('../../src/services/auraCore/regulation.js');
 const { encodeEngram, recallEngrams, consolidateEngrams, listEngrams } = await import('../../src/services/auraCore/engramMemory.js');
 const { computeDissentPosture, updateTrustFromAppraisal, voiceParametersFromBias } = await import('../../src/services/auraCore/dissent.js');
 const { AuraHeartbeat, listDreams } = await import('../../src/services/auraCore/heartbeat.js');
@@ -221,7 +222,8 @@ test('auraCore prepareTurn waits for in-flight settleTurn, emits update event, a
 
   try {
     const turn1 = await prepareTurn('aura');
-    assert.equal(turn1.charter, CHARTER);
+    // The charter plus the fixed self-care permission (regulation.js), same words in every state.
+    assert.equal(turn1.charter, `${CHARTER} ${SELF_CARE}`);
     assert.ok(!/oxytocin|adrenaline|dopamine|cortisol/i.test(turn1.charter));
     assert.equal(typeof turn1.options.temperature, 'number');
 

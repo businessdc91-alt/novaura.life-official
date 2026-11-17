@@ -49,7 +49,7 @@ export function restoreChemistry(saved, now = Date.now()) {
 }
 
 /** One pass of the original metabolism loop, settling toward the baseline. */
-function cycle(s, restingBaselines = BASELINE, decayMultipliers = null) {
+function cycle(s, restingBaselines = BASELINE, decayMultipliers = null, energyRecoveryMultiplier = 1) {
   const baseRate = {
     oxytocin: s.oxytocin > 50 ? 0.5 : 1,   // love lingers
     adrenaline: 2,                         // burns off fast
@@ -63,15 +63,15 @@ function cycle(s, restingBaselines = BASELINE, decayMultipliers = null) {
     s[h] = s[h] > rest ? Math.max(rest, s[h] - step) : Math.min(rest, s[h] + step);
   }
   s.receptors.dopamine = Math.min(1, s.receptors.dopamine + 0.05);   // habituation reverses
-  s.energy = Math.min(100, s.energy + ENERGY_RECOVERY);
+  s.energy = Math.min(100, s.energy + ENERGY_RECOVERY * clamp(finite(energyRecoveryMultiplier, 1), 0.5, 4));
 }
 
 /** The state as it stands at `now`: whole cycles since the last update are run, the rest carried. */
-export function metabolize(state, now = Date.now(), { restingBaselines = BASELINE, decayMultipliers = null } = {}) {
+export function metabolize(state, now = Date.now(), { restingBaselines = BASELINE, decayMultipliers = null, energyRecoveryMultiplier = 1 } = {}) {
   const s = structuredClone(state);
   const cycles = Math.floor((now - s.updatedAt) / CYCLE_MS);
   if (cycles <= 0) return s;
-  for (let i = 0; i < Math.min(cycles, MAX_CYCLES); i++) cycle(s, restingBaselines, decayMultipliers);
+  for (let i = 0; i < Math.min(cycles, MAX_CYCLES); i++) cycle(s, restingBaselines || BASELINE, decayMultipliers, energyRecoveryMultiplier);
   s.updatedAt += cycles * CYCLE_MS;
   return s;
 }
