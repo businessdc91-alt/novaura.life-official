@@ -2,14 +2,26 @@
 // (Port of Aura_ContextManager.py + Torch/Firebase-free local embeddings for Aura_RAGSystem.py).
 // Budgets working conversation turns cleanly against permanent engrams and RAG hits so local
 // models preserve recent dialogue intact without truncation or SHA-256 fake vector noise.
+//
+// Embeddings come from a local model the person already runs, in this order:
+//   1. LM Studio, only an embedding model that is already loaded. LM Studio can load a model
+//      on request and may unload the chat model to make room, so we never ask it to.
+//   2. Ollama, a model whose name marks it as an embedding model.
+// The built-in llama.cpp server is skipped: it holds one model at a time, so an embedding
+// request would swap out her chat model.
+// Discovery is off until the app turns it on (NovaKernel does at boot), so tests and library
+// use never reach a live local server.
 
 import { probeLocalAi, queryLocalAi } from '../nativeService.js';
 
 const EMBED_CACHE = new Map();
 const MAX_EMBED_CACHE = 240;
 const OFFLINE_BACKOFF_MS = 45_000;
+const BACKEND_TTL_MS = 5 * 60_000;
+const EMBED_NAME = /embed|(^|[-_/])bge|minilm|(^|[-_/])e5[-_]|(^|[-_/])gte[-_]|nomic/i;
 
-let cachedEmbedBackend = null; // { runtime, port, model, checkedAt }
+let discoveryEnabled = false;
+let cachedEmbedBackend = null; // { runtime, port, model, id, checkedAt }
 let lastOfflineAt = 0;
 
 export function estimateTokens(text = '') {
@@ -45,104 +57,107 @@ function hashCacheKey(text) {
   return `${text.length}:${h >>> 0}`;
 }
 
-function storeEmbedCache(key, vector) {
+function storeEmbedCache(key, value) {
   if (EMBED_CACHE.size >= MAX_EMBED_CACHE) {
     const oldest = EMBED_CACHE.keys().next().value;
     if (oldest !== undefined) EMBED_CACHE.delete(oldest);
   }
-  EMBED_CACHE.set(key, vector);
+  EMBED_CACHE.set(key, value);
+}
+
+/** Turn local-embedding discovery on or off (the app turns it on at boot). */
+export function setEmbeddingDiscovery(enabled) {
+  discoveryEnabled = Boolean(enabled);
+  if (!discoveryEnabled) cachedEmbedBackend = null;
+}
+
+export function isEmbeddingDiscoveryEnabled() {
+  return discoveryEnabled;
+}
+
+async function findLmStudioEmbedder(now) {
+  const lm = await probeLocalAi(1234, '/v1/models').catch(() => null);
+  if (!lm?.online) return null;
+  // The native endpoint says which models are embedding models and which are loaded.
+  const res = await queryLocalAi(1234, '/api/v0/models', 'GET').catch(() => null);
+  const rows = Array.isArray(res?.data) ? res.data : [];
+  const loaded = rows.find(m => m?.id && (m.type === 'embeddings' || EMBED_NAME.test(m.id)) && m.state === 'loaded');
+  if (!loaded) return null;
+  return { runtime: 'lmstudio', port: 1234, model: loaded.id, id: `lmstudio:${loaded.id}`, checkedAt: now };
+}
+
+async function findOllamaEmbedder(now) {
+  const ol = await probeLocalAi(11434, '/api/tags').catch(() => null);
+  if (!ol?.online || !Array.isArray(ol.models)) return null;
+  const model = ol.models.find(m => EMBED_NAME.test(String(m)));
+  if (!model) return null;
+  return { runtime: 'ollama', port: 11434, model, id: `ollama:${model}`, checkedAt: now };
 }
 
 async function discoverEmbeddingEndpoint() {
   const now = Date.now();
-  if (cachedEmbedBackend && (now - cachedEmbedBackend.checkedAt < 60_000)) {
+  if (cachedEmbedBackend && (now - cachedEmbedBackend.checkedAt < BACKEND_TTL_MS)) {
     return cachedEmbedBackend;
   }
   if (lastOfflineAt && (now - lastOfflineAt < OFFLINE_BACKOFF_MS)) {
     return null;
   }
+  cachedEmbedBackend = await findLmStudioEmbedder(now) || await findOllamaEmbedder(now);
+  if (!cachedEmbedBackend) lastOfflineAt = now;
+  return cachedEmbedBackend;
+}
 
-  // 1. Ollama dedicated embedding models
-  try {
-    const ol = await probeLocalAi(11434, '/api/tags');
-    if (ol?.online && Array.isArray(ol.models)) {
-      const embedModel = ol.models.find(m => /embed|bge|minilm|e5/i.test(m));
-      if (embedModel) {
-        cachedEmbedBackend = { runtime: 'ollama', port: 11434, model: embedModel, checkedAt: now };
-        return cachedEmbedBackend;
-      }
-    }
-  } catch {}
-
-  // 2. LM Studio loaded embedding models
-  try {
-    const lm = await probeLocalAi(1234, '/v1/models');
-    if (lm?.online && Array.isArray(lm.models)) {
-      const embedModel = lm.models.find(m => /embed|bge|minilm|e5/i.test(m));
-      if (embedModel) {
-        cachedEmbedBackend = { runtime: 'lmstudio', port: 1234, model: embedModel, checkedAt: now };
-        return cachedEmbedBackend;
-      }
-    }
-  } catch {}
-
-  lastOfflineAt = now;
-  return null;
+/** The embedding model in use right now ("lmstudio:<id>" / "ollama:<id>"), or null. */
+export function getActiveEmbeddingModel() {
+  return cachedEmbedBackend?.id || null;
 }
 
 /**
- * Generate a real local semantic embedding when an embedding model is loaded on Ollama/LM Studio,
- * or return null cleanly (never fabricating SHA-256 hash vectors).
+ * A real local semantic embedding as { vector, model }, or null when no embedding model is
+ * running (never a fabricated hash vector). Vectors from different models are not comparable,
+ * so callers store `model` beside the vector.
  */
-export async function tryEmbedText(text = '', { allowProbe = false, embedFn = null } = {}) {
+export async function embedText(text = '', { allowProbe = discoveryEnabled, embedFn = null, model = 'custom' } = {}) {
   const clean = String(text || '').trim().slice(0, 2000);
   if (!clean) return null;
 
-  const key = hashCacheKey(clean);
-  if (EMBED_CACHE.has(key)) {
-    return EMBED_CACHE.get(key);
-  }
-
   if (typeof embedFn === 'function') {
     const vec = await embedFn(clean).catch(() => null);
-    if (Array.isArray(vec) && vec.length > 0) {
-      storeEmbedCache(key, vec);
-      return vec;
-    }
-    return null;
+    return Array.isArray(vec) && vec.length > 0 ? { vector: vec, model } : null;
   }
-
   if (!allowProbe) return null;
 
   const backend = await discoverEmbeddingEndpoint();
   if (!backend) return null;
 
+  const key = `${backend.id}|${hashCacheKey(clean)}`;
+  if (EMBED_CACHE.has(key)) return EMBED_CACHE.get(key);
+
   try {
+    let vec = null;
     if (backend.runtime === 'ollama') {
-      const res = await queryLocalAi(backend.port, '/api/embeddings', 'POST', {
-        model: backend.model,
-        prompt: clean,
-      });
-      if (Array.isArray(res?.embedding) && res.embedding.length > 0) {
-        storeEmbedCache(key, res.embedding);
-        return res.embedding;
-      }
+      const res = await queryLocalAi(backend.port, '/api/embeddings', 'POST', { model: backend.model, prompt: clean });
+      vec = res?.embedding;
     } else {
-      const res = await queryLocalAi(backend.port, '/v1/embeddings', 'POST', {
-        model: backend.model,
-        input: clean,
-      });
-      const vec = res?.data?.[0]?.embedding;
-      if (Array.isArray(vec) && vec.length > 0) {
-        storeEmbedCache(key, vec);
-        return vec;
-      }
+      const res = await queryLocalAi(backend.port, '/v1/embeddings', 'POST', { model: backend.model, input: clean });
+      vec = res?.data?.[0]?.embedding;
+    }
+    if (Array.isArray(vec) && vec.length > 0) {
+      const out = { vector: vec, model: backend.id };
+      storeEmbedCache(key, out);
+      return out;
     }
   } catch {
     lastOfflineAt = Date.now();
     cachedEmbedBackend = null;
   }
   return null;
+}
+
+/** The vector alone (see embedText). */
+export async function tryEmbedText(text = '', options = {}) {
+  const out = await embedText(text, options);
+  return out ? out.vector : null;
 }
 
 export function resetEmbeddingDiscovery() {
@@ -152,13 +167,15 @@ export function resetEmbeddingDiscovery() {
 }
 
 /**
- * Budget permanent memories (engrams), cognitive augmentations, and working conversation history
- * inside the model's context ceiling while keeping the latest user turns intact.
+ * Budget permanent memories (engrams), long-term RAG memories, cognitive augmentations, and
+ * working conversation history inside the model's context ceiling while keeping the latest
+ * user turns intact.
  */
 export function budgetContextWindow({
   baseSystemPrompt = '',
   charter = '',
   augmentationBlock = '',
+  continuityBlock = '',
   engrams = [],
   workingHistory = [],
   maxContextTokens = 6144,
@@ -177,6 +194,26 @@ export function budgetContextWindow({
     }
   }
 
+  // Long-term RAG memories: up to ~20% of the budget, whole lines only, most relevant first.
+  let continuityText = '';
+  let continuityLines = 0;
+  if (continuityBlock) {
+    const cap = Math.floor(promptBudget * 0.2);
+    const kept = [];
+    let cost = 0;
+    for (const line of String(continuityBlock).split('\n')) {
+      const c = estimateTokens(line) + 1;
+      if (cost + c > cap || usedTokens + cost + c >= promptBudget * 0.7) break;
+      kept.push(line);
+      cost += c;
+      if (line.startsWith('•')) continuityLines++;
+    }
+    if (continuityLines > 0) {
+      continuityText = kept.join('\n');
+      usedTokens += cost;
+    }
+  }
+
   // Reserve up to ~25% of total prompt budget for permanent engram recall, greedy by relevance order
   const memoryCap = Math.max(120, Math.floor(promptBudget * 0.25));
   let memoryUsed = 0;
@@ -192,11 +229,15 @@ export function budgetContextWindow({
     }
   }
 
+  const engramLine = (e) => {
+    const text = String(e?.thought || e).slice(0, 220);
+    return e?.kind === 'reflection' ? `- (your own earlier reflection) ${text}` : `- ${text}`;
+  };
   const engramText = keptEngrams.length
-    ? `\nAssociative continuity (recalled impressions):\n${keptEngrams.map(e => `- ${String(e.thought || e).slice(0, 220)}`).join('\n')}\n`
+    ? `\nAssociative continuity (recalled impressions):\n${keptEngrams.map(engramLine).join('\n')}\n`
     : '';
 
-  const systemPrompt = [fixedSections, ...selectedAug, engramText].filter(Boolean).join('\n\n').trim();
+  const systemPrompt = [fixedSections, ...selectedAug, continuityText, engramText].filter(Boolean).join('\n\n').trim();
   const sysTokens = estimateTokens(systemPrompt);
   let remainingForHistory = Math.max(128, promptBudget - sysTokens);
 
@@ -232,6 +273,7 @@ export function budgetContextWindow({
       estimatedTokens: usedTokens,
       budgetTokens: promptBudget,
       engramsIncluded: keptEngrams.length,
+      memoriesIncluded: continuityLines,
       historyKept: keptHistory.length,
       historyDropped: dropped,
     },
@@ -241,8 +283,11 @@ export function budgetContextWindow({
 export default {
   estimateTokens,
   cosineSimilarity,
+  embedText,
   tryEmbedText,
+  setEmbeddingDiscovery,
+  isEmbeddingDiscoveryEnabled,
+  getActiveEmbeddingModel,
   resetEmbeddingDiscovery,
   budgetContextWindow,
 };
-

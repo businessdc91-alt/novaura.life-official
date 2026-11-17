@@ -18,7 +18,7 @@ import { hasCore, prepareAugmentedTurn, prepareTurn, settleTurn } from '../../se
 import { budgetContextWindow } from '../../services/auraCore/contextBridge.js';
 import { observePromptSubmission } from '../../services/auraCore/interoception.js';
 import { approveAgentTool } from '../../services/agentToolPolicy.js';
-import { rememberMemory } from '../../services/sovereignRagService.js';
+import { buildContinuityContext, rememberMemory } from '../../services/sovereignRagService.js';
 import { getReasoningConfig, hasReasoningOverride } from '../../services/reasoningConfig.js';
 
 /**
@@ -153,6 +153,18 @@ export class NovaAgent {
     // Initial warmup
   }
 
+  /**
+   * Prompt budget for a companion turn. The built-in server runs with a 32K context, so it gets
+   * room for more memories and history; LM Studio and Ollama often load models at 4-8K, so
+   * they keep the conservative default. `companion:context_tokens` overrides both.
+   */
+  async _contextBudget(persona) {
+    const override = Number(await db.getSetting?.('companion:context_tokens', null).catch(() => null));
+    if (Number.isFinite(override) && override >= 2048) return Math.min(override, 131_072);
+    const chain = this._kernel?.ai?.getPersonaProviderChain?.(persona) || [];
+    return chain[0] === 'builtin' ? 16_384 : 6144;
+  }
+
   _pushEvent(event) {
     this._recentEvents.push(event);
     if (this._recentEvents.length > 30) this._recentEvents.shift();
@@ -201,14 +213,22 @@ export class NovaAgent {
       ? { intent: core.intent, augmentation: core.augmentation, options: core.options }
       : await prepareAugmentedTurn(persona, { query: userText, openWindows }).catch(() => null);
 
+    // Long-term memories for this companion only, minus the engrams already recalled above,
+    // budgeted with everything else (the AI layer is told not to add RAG again on top).
+    const continuity = await buildContinuityContext(userText, {
+      persona: String(persona || 'nova').toLowerCase(),
+      excludeEngramIds: (core?.engrams || []).map(e => e.id),
+    }).catch(() => ({ contextString: '' }));
+
     const baseSystemPrompt = this._buildSystemPrompt(persona, openWindows, '', []);
     const budgeted = budgetContextWindow({
       baseSystemPrompt,
       charter: core?.charter || '',
       augmentationBlock: augTurn?.augmentation?.directiveBlock || '',
+      continuityBlock: continuity?.contextString || '',
       engrams: core?.engrams || [],
       workingHistory: conversation,
-      maxContextTokens: 6144,
+      maxContextTokens: await this._contextBudget(persona),
       reserveReplyTokens: 1024,
     });
 
@@ -243,6 +263,7 @@ export class NovaAgent {
         scope,
         onToken,
         noCache: true,
+        useRag: false,
         ...(typeof core?.options?.temperature === 'number' ? { temperature: core.options.temperature } : {}),
         ...(augTurn?.options?.temperatureDelta && !core ? { temperature: Math.max(0.2, Math.min(1.0, 0.7 + augTurn.options.temperatureDelta)) } : {}),
         ...(shouldAutoSteerEffort ? { reasoningEffort: suggestedEffort } : {}),

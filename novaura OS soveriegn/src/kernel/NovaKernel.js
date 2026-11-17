@@ -26,6 +26,7 @@ import { interAppSecurityBroker } from './InterAppSecurityBroker.js';
 import { getSemanticsEngine } from './SemanticsEngine.js';
 import { db } from '../database/sovereignDatabase.js';
 import { auraHeartbeat } from '../services/auraCore/heartbeat.js';
+import { setEmbeddingDiscovery } from '../services/auraCore/contextBridge.js';
 import { markBootHealthy, recordBootAttempt, recordCrashIncident } from '../services/auraCore/phoenixProtocol.js';
 
 export const BOOT_PHASES = [
@@ -194,6 +195,8 @@ export class NovaKernel {
         this.nova.init(this);
         await this.nova.boot();
 
+        // Semantic memory: use a local embedding model when one is already running.
+        setEmbeddingDiscovery(true);
         this.heartbeat = auraHeartbeat;
         if (!isPopoutWindow()) {
           this.heartbeat.start({ getAi: () => this.ai });

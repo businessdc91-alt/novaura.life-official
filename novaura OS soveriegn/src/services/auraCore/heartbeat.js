@@ -4,7 +4,10 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { applySomaticNudge, CYCLE_MS, metabolize, restoreChemistry, systemicBias } from './endocrine.js';
-import { consolidateEngrams, encodeReflection, listEngrams, replayEngrams, selectReplayCandidates } from './engramMemory.js';
+import {
+  backfillEngramEmbeddings, consolidateEngrams, encodeReflection, listEngrams, replayEngrams, selectReplayCandidates,
+} from './engramMemory.js';
+import { backfillMemoryEmbeddings } from '../sovereignRagService.js';
 import { influence } from './influence.js';
 import { getLearnedProfile } from './dynamicLearning.js';
 import { sampleInteroception } from './interoception.js';
@@ -172,6 +175,12 @@ export class AuraHeartbeat {
   async runConsolidationAndDream({ now = Date.now(), ai = null, allowModelDream = true, chemistry = null } = {}) {
     this._lastConsolidationAt = now;
     const result = await consolidateEngrams(this.persona, now);
+    // While idle, give older memories semantic vectors (a no-op without an embedding model).
+    const backfill = await Promise.all([
+      backfillEngramEmbeddings(this.persona, { limit: 8 }).catch(() => null),
+      backfillMemoryEmbeddings({ limit: 12 }).catch(() => null),
+    ]);
+    result.embedded = (backfill[0]?.embedded || 0) + (backfill[1]?.embedded || 0);
     const engrams = await listEngrams(this.persona);
     // Sleep replays what mattered: the most salient recent memories, not merely the last few.
     const replayed = selectReplayCandidates(engrams, 5);

@@ -15,6 +15,7 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { mutateSetting } from './coreStore.js';
+import { embedText } from './contextBridge.js';
 
 export const MAX_ENGRAMS = 250;
 // The newest few are never evicted: a memory gets a chance to be recalled or consolidated first.
@@ -394,6 +395,32 @@ export function selectReplayCandidates(engrams = [], limit = 5, window = 30) {
     .map(x => x.e);
 }
 
+/**
+ * Give memories saved without a semantic vector (or with one from another model) a vector
+ * from the embedding model running now, a few at a time. The heartbeat runs this while she
+ * is idle, so older memories become recallable by meaning, not only by shared words.
+ */
+export async function backfillEngramEmbeddings(persona = 'aura', { limit = 8 } = {}) {
+  const probe = await embedText('memory').catch(() => null);
+  if (!probe) return { embedded: 0, pending: 0, model: null };
+  const missing = (await listEngrams(persona)).filter(e => (
+    !Array.isArray(e.embedding) || e.embedding.length === 0 || (e.embeddingModel && e.embeddingModel !== probe.model)
+  ));
+  const vectors = new Map();
+  for (const e of missing.slice(0, Math.max(0, limit))) {
+    const out = await embedText(String(e.thought || '')).catch(() => null);
+    if (out && out.model === probe.model) vectors.set(e.id, out);
+  }
+  if (vectors.size > 0) {
+    await mutateSetting(engramKey(persona), (saved) => (
+      Array.isArray(saved)
+        ? saved.map(e => (vectors.has(e.id) ? { ...e, embedding: vectors.get(e.id).vector, embeddingModel: vectors.get(e.id).model } : e))
+        : undefined
+    ), []);
+  }
+  return { embedded: vectors.size, pending: Math.max(0, missing.length - vectors.size), model: probe.model };
+}
+
 function cosineVec(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || !a.length || a.length !== b.length) return 0;
   let dot = 0;
@@ -567,6 +594,7 @@ export default {
   encodeReflection,
   replayEngrams,
   selectReplayCandidates,
+  backfillEngramEmbeddings,
   recallEngrams,
   consolidateEngrams,
   retentionScore,

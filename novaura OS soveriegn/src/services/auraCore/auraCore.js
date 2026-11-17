@@ -18,7 +18,7 @@ import { extractSomaticMarker, sampleInteroception } from './interoception.js';
 import { getLearnedProfile, observeTurnDynamics, predictTriggerNudge } from './dynamicLearning.js';
 import { composeTurnAugmentations } from './augmentationEngine.js';
 import { classifyTaskIntentWithAi } from './intentRouter.js';
-import { tryEmbedText } from './contextBridge.js';
+import { embedText } from './contextBridge.js';
 import { createSoulSnapshot, touchOperatorPresence } from './phoenixProtocol.js';
 import { mutateSetting } from './coreStore.js';
 
@@ -96,7 +96,7 @@ export async function prepareAugmentedTurn(persona, { query = '', openWindows = 
 
 export async function prepareTurn(
   persona,
-  { waitMs = 12_000, query = '', openWindows = [], ai = null, aiRoute = false, allowEmbedProbe = false } = {}
+  { waitMs = 12_000, query = '', openWindows = [], ai = null, aiRoute = false } = {}
 ) {
   if (waitMs > 0) await waitForPendingTurn(persona, waitMs);
   if (String(persona || '').toLowerCase() === 'aura') auraHeartbeat.recordActivity();
@@ -105,7 +105,7 @@ export async function prepareTurn(
   const [coreState, augTurn, queryEmbedding] = await Promise.all([
     readCore(persona),
     prepareAugmentedTurn(persona, { query, openWindows, ai, aiRoute }),
-    query ? tryEmbedText(query, { allowProbe: allowEmbedProbe }).catch(() => null) : Promise.resolve(null),
+    query ? embedText(query).catch(() => null) : Promise.resolve(null),
   ]);
 
   // Apply gentle bounded hardware interoception + learned contextual anticipation to a working turn snapshot
@@ -140,7 +140,8 @@ export async function prepareTurn(
       query,
       chemistry: effectiveChemistry,
       somatic: extractSomaticMarker(coreState.somatic, effectiveChemistry),
-      queryEmbedding,
+      queryEmbedding: queryEmbedding?.vector || null,
+      queryEmbeddingModel: queryEmbedding?.model || null,
       preferredTags: augTurn.augmentation.preferredTags,
       limit: 4,
     }).catch(() => [])
@@ -170,7 +171,7 @@ export async function prepareTurn(
  * Her appraisal of the exchange, then the chemistry it produces. Turns for one persona settle in
  * order, so a quick second message never loses the first one's effect.
  */
-export function settleTurn(persona, { userText, reply, ai, channel = 'text', somatic = null, allowEmbedProbe = false } = {}) {
+export function settleTurn(persona, { userText, reply, ai, channel = 'text', somatic = null } = {}) {
   if (!ai || typeof ai.chat !== 'function') return Promise.resolve(null);
   const run = async () => {
     const answer = await ai.chat(appraisalMessages(userText, reply), {
@@ -218,7 +219,7 @@ export function settleTurn(persona, { userText, reply, ai, channel = 'text', som
         appraisal,
         now,
       }).catch(() => dynamicsBefore),
-      tryEmbedText(`${userText} ${reply}`, { allowProbe: allowEmbedProbe }).catch(() => null),
+      embedText(`${userText} ${reply}`).catch(() => null),
     ]);
 
     const somaticMarker = extractSomaticMarker(liveSomatic, next);
@@ -229,7 +230,8 @@ export function settleTurn(persona, { userText, reply, ai, channel = 'text', som
       appraisal,
       chemistry: next,
       somatic: somaticMarker,
-      embedding: engramEmbedding,
+      embedding: engramEmbedding?.vector || null,
+      embeddingModel: engramEmbedding?.model || null,
       channel,
       now,
     }).catch(() => null);

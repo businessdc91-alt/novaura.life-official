@@ -155,7 +155,8 @@ export class AISubsystem {
       try {
         const { buildContinuityContext } = await import('../../services/sovereignRagService.js');
         const lastUser = messages[messages.length - 1]?.content || '';
-        const { contextString } = await buildContinuityContext(lastUser);
+        // Scoped to the persona: a companion's own engram memories never reach anyone else.
+        const { contextString } = await buildContinuityContext(lastUser, { persona: options.persona || null });
         if (contextString) {
           effectiveMessages = [
             { role: 'system', content: contextString },
