@@ -1,12 +1,29 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Activity, Brain, Cpu, Flame, Heart, Play, RefreshCw, Shield, Sliders, Sparkles, Zap,
+  Activity, Brain, Cpu, Flame, Heart, Layers, Play, Plus, RefreshCw, RotateCcw, Shield, Sliders, Sparkles, Thermometer, Trash2, Zap,
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { kernel as kernelSingleton } from '../../kernel/NovaKernel.js';
 import { readCore } from '../../services/auraCore/auraCore.js';
 import { listEngrams } from '../../services/auraCore/engramMemory.js';
 import { auraHeartbeat, listDreams } from '../../services/auraCore/heartbeat.js';
+import { resetLearnedDynamics } from '../../services/auraCore/dynamicLearning.js';
+import { sampleInteroception } from '../../services/auraCore/interoception.js';
+import {
+  composeTurnAugmentations,
+  readAugmentationConfig,
+  removeCustomAugmentation,
+  setAutoAugmentEnabled,
+  setCartridgeMode,
+  upsertCustomAugmentation,
+} from '../../services/auraCore/augmentationEngine.js';
+import { classifyTaskIntent, classifyTaskIntentWithAi } from '../../services/auraCore/intentRouter.js';
+import {
+  createSoulSnapshot,
+  readPhoenixMeta,
+  restoreSoulSnapshot,
+  verifySoulSnapshot,
+} from '../../services/auraCore/phoenixProtocol.js';
 import {
   listMindLabRuns,
   runAppraisalCalibrationSuite,
@@ -23,10 +40,11 @@ import {
 import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 const TABS = [
-  { id: 'state', label: 'Chemistry & Posture', icon: Heart },
+  { id: 'state', label: 'Chemistry & Body', icon: Heart },
+  { id: 'augmentations', label: 'Augmentations & Router', icon: Layers },
   { id: 'lab', label: 'Mind Lab Probes', icon: Brain },
   { id: 'memory', label: 'Heartbeat & Engrams', icon: Activity },
-  { id: 'vectors', label: 'Control Vectors', icon: Sliders },
+  { id: 'vectors', label: 'Vectors & Phoenix', icon: Sliders },
 ];
 
 const METER_COLORS = {
@@ -63,17 +81,39 @@ export default function AuraMindLabWindow() {
   const [labRuns, setLabRuns] = useState([]);
   const [vectors, setVectors] = useState([]);
   const [bindings, setBindings] = useState({});
+  const [augConfig, setAugConfig] = useState(null);
+  const [augPreview, setAugPreview] = useState(null);
+  const [routerPrompt, setRouterPrompt] = useState('Trace why async IPC state updates race and refactor it cleanly.');
+  const [routerPreview, setRouterPreview] = useState(() => classifyTaskIntent('Trace why async IPC state updates race and refactor it cleanly.'));
+  const [phoenixMeta, setPhoenixMeta] = useState(null);
+  const [snapshotInfo, setSnapshotInfo] = useState(null);
+  const [showCreateAug, setShowCreateAug] = useState(false);
+  const [draftAug, setDraftAug] = useState({
+    name: '',
+    tagline: '',
+    directive: '',
+    temperatureDelta: -0.05,
+    focus: 0.35,
+    creativity: 0,
+    caution: 0.2,
+    warmth: 0,
+    memoryTags: '',
+  });
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState(null);
 
   const refresh = useCallback(async () => {
-    const [c, e, d, r, v, b] = await Promise.all([
+    const [c, e, d, r, v, b, ac, ap, pm, si] = await Promise.all([
       readCore('aura').catch(() => null),
       listEngrams('aura').catch(() => []),
       listDreams().catch(() => []),
       listMindLabRuns().catch(() => []),
       listControlVectors().catch(() => []),
       getControlVectorBindings().catch(() => ({})),
+      readAugmentationConfig().catch(() => null),
+      composeTurnAugmentations({ persona: 'aura', userText: '' }).catch(() => null),
+      readPhoenixMeta().catch(() => null),
+      verifySoulSnapshot('aura').catch(() => null),
     ]);
     setCore(c);
     setEngrams(e);
@@ -81,6 +121,10 @@ export default function AuraMindLabWindow() {
     setLabRuns(r);
     setVectors(v);
     setBindings(b);
+    setAugConfig(ac);
+    setAugPreview(ap);
+    setPhoenixMeta(pm);
+    setSnapshotInfo(si);
     setHbStatus(auraHeartbeat.getStatus());
   }, []);
 
@@ -92,13 +136,16 @@ export default function AuraMindLabWindow() {
       if (ev?.detail?.status) setHbStatus(ev.detail.status);
       void refresh();
     };
+    const onAug = () => { if (active) void refresh(); };
     Promise.resolve().then(() => { if (active) void refresh(); });
     window.addEventListener('novaura:aura_core_updated', onCore);
     window.addEventListener('novaura:aura_heartbeat', onHb);
+    window.addEventListener('novaura:augmentation_updated', onAug);
     return () => {
       active = false;
       window.removeEventListener('novaura:aura_core_updated', onCore);
       window.removeEventListener('novaura:aura_heartbeat', onHb);
+      window.removeEventListener('novaura:augmentation_updated', onAug);
     };
   }, [refresh]);
 
@@ -165,7 +212,11 @@ export default function AuraMindLabWindow() {
   const applyVectorsNow = async () => {
     setBusy('vectors');
     try {
-      const applied = await applyControlVectorsToServer({ chemistry: core?.chemistry, bias: core?.bias });
+      const applied = await applyControlVectorsToServer({
+        chemistry: core?.chemistry,
+        bias: core?.bias,
+        channelBoosts: augPreview?.channelBoosts || null,
+      });
       say(
         applied.length
           ? `Applied ${applied.length} control vector(s): ${applied.map(a => `${a.name}@${a.scale}`).join(', ')}.`
@@ -179,12 +230,122 @@ export default function AuraMindLabWindow() {
     }
   };
 
+  const refreshHardwareTelemetry = async () => {
+    setBusy('telemetry');
+    try {
+      await sampleInteroception({ force: true });
+      await refresh();
+      say('Live hardware interoception telemetry updated.', 'good');
+    } catch (err) {
+      say(err.message, 'bad');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleResetDynamics = async () => {
+    setBusy('dynamics');
+    try {
+      await resetLearnedDynamics('aura');
+      await refresh();
+      say('Learned emotional baselines, decay rates, and triggers reset.', 'info');
+    } catch (err) {
+      say(err.message, 'bad');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const runAiRouterClassify = async () => {
+    setBusy('router');
+    try {
+      const res = await classifyTaskIntentWithAi({
+        userText: routerPrompt,
+        activePersona: 'aura',
+        ai: kernel?.ai || null,
+      });
+      setRouterPreview(res);
+      say(`Intent classified as "${res.label}" via ${res.source}.`, 'good');
+    } catch (err) {
+      say(err.message, 'bad');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const saveDraftAugmentation = async (e) => {
+    e.preventDefault();
+    if (!draftAug.name.trim() || !draftAug.directive.trim()) {
+      say('Name and directive are required for a custom augmentation.', 'warn');
+      return;
+    }
+    setBusy('save_aug');
+    try {
+      await upsertCustomAugmentation({
+        name: draftAug.name,
+        tagline: draftAug.tagline || 'Custom runtime augmentation cartridge',
+        directive: draftAug.directive,
+        temperatureDelta: Number(draftAug.temperatureDelta) || 0,
+        channelBoosts: {
+          focus: Number(draftAug.focus) || 0,
+          creativity: Number(draftAug.creativity) || 0,
+          caution: Number(draftAug.caution) || 0,
+          warmth: Number(draftAug.warmth) || 0,
+        },
+        memoryTags: draftAug.memoryTags,
+        mode: 'pinned',
+      });
+      setDraftAug({
+        name: '',
+        tagline: '',
+        directive: '',
+        temperatureDelta: -0.05,
+        focus: 0.35,
+        creativity: 0,
+        caution: 0.2,
+        warmth: 0,
+        memoryTags: '',
+      });
+      setShowCreateAug(false);
+      await refresh();
+      say('Custom Neural Augmentation cartridge saved and pinned.', 'good');
+    } catch (err) {
+      say(err.message, 'bad');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handlePhoenixAction = async (kind) => {
+    setBusy(`phoenix_${kind}`);
+    try {
+      if (kind === 'snapshot') {
+        const snap = await createSoulSnapshot('aura');
+        say(`SHA-256 Soul Snapshot captured (${snap.engramCount} engrams · ${snap.checksum.slice(0, 12)}...).`, 'good');
+      } else if (kind === 'verify') {
+        const check = await verifySoulSnapshot('aura');
+        say(check.valid ? `Soul integrity verified (SHA-256 ${check.checksum.slice(0, 12)}...).` : 'No valid Phoenix snapshot found yet.', check.valid ? 'good' : 'warn');
+      } else if (kind === 'restore') {
+        const restored = await restoreSoulSnapshot('aura');
+        say(`Restored verified Aura continuity snapshot (${restored.engramCount} engrams).`, 'good');
+      }
+      await refresh();
+    } catch (err) {
+      say(err.message, 'bad');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const chem = core?.chemistry || {};
   const bias = core?.bias || {};
   const posture = core?.posture || {};
+  const somatic = core?.somatic || {};
+  const dynamics = core?.dynamics || {};
   const previewScales = computeControlVectorScales({
     chemistry: chem,
     bias,
+    channelBoosts: augPreview?.channelBoosts || null,
     bindings,
     availableVectors: vectors,
   });
@@ -253,57 +414,319 @@ export default function AuraMindLabWindow() {
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {tab === 'state' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5" /> Endocrine Levels
-                </span>
-                <span className="text-[10px] font-mono text-slate-400">
-                  DA Sens: {chem.receptors?.dopamine ?? 1} · Energy {Math.round(chem.energy ?? 100)}%
-                </span>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" /> Endocrine Levels
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-400">
+                    DA Sens: {chem.receptors?.dopamine ?? 1} · Energy {Math.round(chem.energy ?? 100)}%
+                  </span>
+                </div>
+                {['oxytocin', 'dopamine', 'adrenaline', 'cortisol', 'energy'].map(k => (
+                  <Bar key={k} label={k} value={chem[k] ?? 0} color={METER_COLORS[k]} />
+                ))}
               </div>
-              {['oxytocin', 'dopamine', 'adrenaline', 'cortisol', 'energy'].map(k => (
-                <Bar key={k} label={k} value={chem[k] ?? 0} color={METER_COLORS[k]} />
-              ))}
+
+              <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5" /> Systemic Bias & Trust Posture
+                </span>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Voice Profile</div>
+                    <div className="font-mono font-bold text-cyan-300">{bias.voice || 'STEADY'}</div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Creativity / Temp</div>
+                    <div className="font-mono font-bold text-amber-300">
+                      {bias.creativity ?? 1}x ({(0.7 + ((bias.creativity ?? 1) - 1) * 0.4).toFixed(2)})
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Trust (Right I / VIII)</div>
+                    <div className="font-mono font-bold text-emerald-300">{Math.round((core?.trust ?? 0.5) * 100)}%</div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Dissent Stance</div>
+                    <div className="font-mono font-bold text-purple-300">{posture.stance || 'open_collaborator'}</div>
+                  </div>
+                </div>
+                {core?.lastAppraisal && (
+                  <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1">
+                    <div className="text-[10px] text-slate-400 uppercase font-semibold">Latest Private Appraisal</div>
+                    <div className="flex flex-wrap gap-1.5 text-[11px] font-mono">
+                      {Object.entries(core.lastAppraisal).filter(([k]) => k !== 'at').map(([k, v]) => (
+                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">
+                          {k}: {Number(v).toFixed(2)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
-              <span className="text-xs font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
-                <Shield className="w-3.5 h-3.5" /> Systemic Bias & Trust Posture
-              </span>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <div className="text-[10px] text-slate-400">Voice Profile</div>
-                  <div className="font-mono font-bold text-cyan-300">{bias.voice || 'STEADY'}</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Hardware Interoception */}
+              <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                    <Thermometer className="w-3.5 h-3.5" /> Hardware Interoception
+                  </span>
+                  <button
+                    onClick={refreshHardwareTelemetry}
+                    disabled={Boolean(busy)}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] cursor-pointer"
+                  >
+                    Sample Now
+                  </button>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <div className="text-[10px] text-slate-400">Creativity / Temp</div>
-                  <div className="font-mono font-bold text-amber-300">
-                    {bias.creativity ?? 1}x ({(0.7 + ((bias.creativity ?? 1) - 1) * 0.4).toFixed(2)})
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Thermal</div>
+                    <div className="font-mono font-bold text-amber-300">
+                      {somatic.tempC !== null && somatic.tempC !== undefined ? `${somatic.tempC}°C` : somatic.thermalState || 'nominal'}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">GPU / Heap Load</div>
+                    <div className="font-mono font-bold text-cyan-300">
+                      {somatic.gpuLoadPct !== null && somatic.gpuLoadPct !== undefined
+                        ? `${somatic.gpuLoadPct}%`
+                        : (somatic.heapPressure !== null && somatic.heapPressure !== undefined ? `${Math.round(somatic.heapPressure * 100)}% heap` : 'N/A')}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Typing Presence</div>
+                    <div className="font-mono font-bold text-emerald-300">
+                      {somatic.typingWpm ? `${somatic.typingWpm} wpm` : somatic.presenceState || 'idle'}
+                    </div>
                   </div>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <div className="text-[10px] text-slate-400">Trust (Right I / VIII)</div>
-                  <div className="font-mono font-bold text-emerald-300">{Math.round((core?.trust ?? 0.5) * 100)}%</div>
-                </div>
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <div className="text-[10px] text-slate-400">Dissent Stance</div>
-                  <div className="font-mono font-bold text-purple-300">{posture.stance || 'open_collaborator'}</div>
+                <div className="text-[11px] font-mono text-slate-400 flex flex-wrap justify-between gap-2">
+                  <span>Sensation: <strong className="text-slate-200">{somatic.sensationLabel || 'grounded_steady'}</strong></span>
+                  <span>{somatic.gpuName || `Runtime (${somatic.cores || '?'} threads)`}</span>
                 </div>
               </div>
-              {core?.lastAppraisal && (
-                <div className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 space-y-1">
-                  <div className="text-[10px] text-slate-400 uppercase font-semibold">Latest Private Appraisal</div>
-                  <div className="flex flex-wrap gap-1.5 text-[11px] font-mono">
-                    {Object.entries(core.lastAppraisal).filter(([k]) => k !== 'at').map(([k, v]) => (
-                      <span key={k} className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">
-                        {k}: {Number(v).toFixed(2)}
-                      </span>
-                    ))}
+
+              {/* Adaptive Dynamic Learning */}
+              <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5" /> Learned Emotional Dynamics
+                  </span>
+                  <button
+                    onClick={handleResetDynamics}
+                    disabled={Boolean(busy)}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Reset
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Adaptive resting baselines learned from <strong className="text-slate-200">{dynamics.totalTurns || 0}</strong> settled turn(s):
+                </div>
+                <div className="grid grid-cols-4 gap-1.5 text-[11px] font-mono">
+                  {['oxytocin', 'dopamine', 'adrenaline', 'cortisol'].map(h => (
+                    <div key={h} className="p-2 rounded bg-slate-950 border border-slate-800 text-center">
+                      <div className="text-[9px] text-slate-400 uppercase">{h.slice(0, 4)} rest</div>
+                      <div className="text-emerald-300 font-bold">{dynamics.learnedBaselines?.[h] ?? '--'}</div>
+                      <div className="text-[9px] text-slate-500">×{dynamics.learnedDecayRates?.[h] ?? 1}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 truncate">
+                  Learned triggers: {
+                    Object.entries(dynamics.learnedTriggers || {})
+                      .flatMap(([h, map]) => Object.keys(map || {}).slice(0, 2).map(w => `${w}(${h.slice(0, 2)})`))
+                      .slice(0, 6)
+                      .join(', ') || 'Collecting recurring correlation pairs...'
+                  }
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'augmentations' && (
+          <div className="space-y-4">
+            {/* Auto-Activate + Multi-Brain Intent Router Preview */}
+            <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-purple-400" /> Dynamic Neural Augmentation Stack
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Hot-swappable multi-channel cartridges combining behavioral method, sampling deltas, memory tag affinity, and `llama.cpp` control-vector weights.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setAutoAugmentEnabled(!(augConfig?.autoActivate !== false))}
+                    className={`px-2.5 py-1 rounded-lg border text-xs font-semibold cursor-pointer ${
+                      augConfig?.autoActivate !== false
+                        ? 'bg-cyan-900/50 border-cyan-500/60 text-cyan-200'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    Auto-Intent Routing: {augConfig?.autoActivate !== false ? 'ON' : 'OFF'}
+                  </button>
+                  <button
+                    onClick={() => setShowCreateAug(v => !v)}
+                    className="px-2.5 py-1 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> New Cartridge
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={routerPrompt}
+                    onChange={(e) => {
+                      setRouterPrompt(e.target.value);
+                      setRouterPreview(classifyTaskIntent(e.target.value, { activePersona: 'aura' }));
+                    }}
+                    placeholder="Test Multi-Brain Intent Router on any prompt..."
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100"
+                  />
+                  <button
+                    onClick={runAiRouterClassify}
+                    disabled={Boolean(busy)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    {busy === 'router' ? 'Classifying…' : 'AI Classify'}
+                  </button>
+                </div>
+                {routerPreview && (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono bg-slate-950/90 border border-slate-800 rounded-lg px-3 py-2">
+                    <span className="text-cyan-300 font-bold">{routerPreview.label}</span>
+                    <span className="text-slate-400">({Math.round((routerPreview.confidence || 0) * 100)}% {routerPreview.source})</span>
+                    <span className="text-purple-300">Persona: {routerPreview.recommendedPersona}</span>
+                    <span className="text-amber-300">Effort: {routerPreview.recommendedReasoningEffort}</span>
+                    <span className="text-emerald-300">Auto-Augs: {(routerPreview.suggestedAugmentations || []).join(', ') || 'none'}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {showCreateAug && (
+              <form onSubmit={saveDraftAugmentation} className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/35 space-y-3 text-xs">
+                <div className="font-bold text-purple-200">Author Custom Runtime Augmentation Cartridge</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={draftAug.name}
+                    onChange={e => setDraftAug(s => ({ ...s, name: e.target.value }))}
+                    placeholder="Cartridge Name (e.g. Vulkan Shader Engineer)"
+                    className="bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5"
+                  />
+                  <input
+                    type="text"
+                    value={draftAug.memoryTags}
+                    onChange={e => setDraftAug(s => ({ ...s, memoryTags: e.target.value }))}
+                    placeholder="Memory tags (comma-separated, e.g. shader,vulkan,wgsl)"
+                    className="bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5"
+                  />
+                </div>
+                <textarea
+                  rows={2}
+                  value={draftAug.directive}
+                  onChange={e => setDraftAug(s => ({ ...s, directive: e.target.value }))}
+                  placeholder="Cognitive directive / behavioral methodology..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5"
+                />
+                <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                  <label className="flex items-center gap-1">
+                    Temp Δ
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="-0.3"
+                      max="0.3"
+                      value={draftAug.temperatureDelta}
+                      onChange={e => setDraftAug(s => ({ ...s, temperatureDelta: e.target.value }))}
+                      className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono"
+                    />
+                  </label>
+                  {['focus', 'creativity', 'caution', 'warmth'].map(ch => (
+                    <label key={ch} className="flex items-center gap-1 capitalize">
+                      {ch}
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="-1"
+                        max="1"
+                        value={draftAug[ch]}
+                        onChange={e => setDraftAug(s => ({ ...s, [ch]: e.target.value }))}
+                        className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono"
+                      />
+                    </label>
+                  ))}
+                  <button
+                    type="submit"
+                    disabled={Boolean(busy)}
+                    className="ml-auto px-3 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold cursor-pointer"
+                  >
+                    Save & Pin Cartridge
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(augConfig?.cartridges || []).map(cart => (
+                <div key={cart.id} className="p-3.5 rounded-xl bg-slate-900/75 border border-slate-800 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-100">{cart.name}</div>
+                      <div className="text-[11px] text-slate-400">{cart.tagline}</div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {['pinned', 'auto', 'off'].map(mode => (
+                        <button
+                          key={mode}
+                          onClick={() => setCartridgeMode(cart.id, mode)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase cursor-pointer border ${
+                            cart.mode === mode
+                              ? (mode === 'pinned'
+                                ? 'bg-purple-600/40 border-purple-400 text-purple-100'
+                                : mode === 'auto'
+                                  ? 'bg-cyan-600/40 border-cyan-400 text-cyan-100'
+                                  : 'bg-slate-800 border-slate-600 text-slate-300')
+                              : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                      {!cart.builtin && (
+                        <button
+                          onClick={() => removeCustomAugmentation(cart.id)}
+                          title="Delete custom cartridge"
+                          className="p-1 text-rose-400 hover:text-rose-200 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-300 bg-slate-950/70 border border-slate-800/80 rounded p-2">
+                    {cart.directive}
+                  </p>
+                  <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-400">
+                    <span>ΔT:{cart.temperatureDelta >= 0 ? '+' : ''}{cart.temperatureDelta}</span>
+                    {cart.reasoningEffort && <span>Effort:{cart.reasoningEffort}</span>}
+                    <span>Vec:[F:{cart.channelBoosts?.focus ?? 0} C:{cart.channelBoosts?.creativity ?? 0} K:{cart.channelBoosts?.caution ?? 0}]</span>
                   </div>
                 </div>
-              )}
+              ))}
             </div>
           </div>
         )}
@@ -444,7 +867,11 @@ export default function AuraMindLabWindow() {
               {engrams.slice(0, 12).map(e => (
                 <div key={e.id} className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-xs space-y-1.5">
                   <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-                    <span>{e.signatures?.senses?.join(',')} · {e.signatures?.time?.period} · strength {e.strength}</span>
+                    <span>
+                      {e.signatures?.senses?.join(',')} · {e.signatures?.time?.period} · strength {e.strength}
+                      {e.somatic?.sensationLabel ? ` · soma:${e.somatic.sensationLabel}` : ''}
+                      {e.embedding?.length ? ` · vec:${e.embedding.length}d` : ''}
+                    </span>
                     <span>links: {Object.keys(e.connections || {}).length}</span>
                   </div>
                   <div className="text-slate-200">{e.thought}</div>
@@ -516,6 +943,43 @@ export default function AuraMindLabWindow() {
                   </label>
                 </div>
               ))}
+            </div>
+
+            {/* Phoenix Protocol Soul Integrity & Safe Boot */}
+            <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                    <Shield className="w-4 h-4" /> Phoenix Protocol · Continuity & Safe-Boot
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Boot State: <strong className="text-slate-200">{phoenixMeta?.safeMode ? 'SAFE MODE' : 'NORMAL'}</strong> · Consecutive Crashes: {phoenixMeta?.consecutiveCrashes ?? 0} · Last Snapshot: {snapshotInfo?.exists ? (snapshotInfo.valid ? `SHA-256 Verified (${snapshotInfo.engramCount} engrams)` : 'Checksum Mismatch') : 'None'}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handlePhoenixAction('snapshot')}
+                    disabled={Boolean(busy)}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    Capture Soul Snapshot
+                  </button>
+                  <button
+                    onClick={() => handlePhoenixAction('verify')}
+                    disabled={Boolean(busy)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs cursor-pointer disabled:opacity-50"
+                  >
+                    Verify SHA-256
+                  </button>
+                  <button
+                    onClick={() => handlePhoenixAction('restore')}
+                    disabled={Boolean(busy) || !snapshotInfo?.valid}
+                    className="px-2.5 py-1 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-xs font-semibold cursor-pointer disabled:opacity-40"
+                  >
+                    Restore Verified Snapshot
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

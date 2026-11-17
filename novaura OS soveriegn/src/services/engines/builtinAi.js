@@ -172,17 +172,17 @@ export async function saveControlVectorBindings(bindings) {
   emit();
 }
 
-export function computeControlVectorScales({ chemistry, bias, bindings = {}, availableVectors = [] } = {}) {
+export function computeControlVectorScales({ chemistry, bias, channelBoosts = null, bindings = {}, availableVectors = [] } = {}) {
   const available = new Set(availableVectors.map(v => v.name));
   const oxDelta = ((chemistry?.oxytocin ?? 25) - 25) / 50;
   const crDelta = ((bias?.creativity ?? 1) - 1);
   const coDelta = ((chemistry?.cortisol ?? 15) - 15) / 50;
   const foDelta = ((chemistry?.adrenaline ?? 5) - 5) / 40 - ((chemistry?.energy ?? 100) < 35 ? 0.35 : 0);
   const channels = {
-    warmth: oxDelta,
-    creativity: crDelta,
-    caution: coDelta,
-    focus: foDelta,
+    warmth: oxDelta + (Number(channelBoosts?.warmth) || 0),
+    creativity: crDelta + (Number(channelBoosts?.creativity) || 0),
+    caution: coDelta + (Number(channelBoosts?.caution) || 0),
+    focus: foDelta + (Number(channelBoosts?.focus) || 0),
   };
   const active = [];
   for (const [channel, spec] of Object.entries(bindings)) {
@@ -198,19 +198,25 @@ export function computeControlVectorScales({ chemistry, bias, bindings = {}, ava
 
 let starting = null;
 /** Start the server (if needed), load the default model, and resolve once it answers. */
-export function startBuiltinAi({ controlVectors = null } = {}) {
+export function startBuiltinAi({ controlVectors = null, channelBoosts = null } = {}) {
   starting ||= (async () => {
     const cfg = await getBuiltinConfig();
     if (!cfg.installDir) throw new Error('Set up the built-in AI first.');
     let activeVectors = controlVectors;
     if (!activeVectors) {
-      const [avail, bindings, coreSaved] = await Promise.all([
+      const [avail, bindings, coreSaved, augComposition] = await Promise.all([
         listControlVectors(),
         getControlVectorBindings(),
         db.getSetting('aura_core:aura', null).catch(() => null),
+        channelBoosts
+          ? Promise.resolve({ channelBoosts })
+          : import('../auraCore/augmentationEngine.js')
+              .then(m => m.composeTurnAugmentations({ persona: 'aura' }))
+              .catch(() => ({ channelBoosts: null })),
       ]);
       activeVectors = computeControlVectorScales({
         chemistry: coreSaved?.chemistry,
+        channelBoosts: channelBoosts || augComposition?.channelBoosts || null,
         bindings,
         availableVectors: avail,
       }).map(({ name, scale }) => ({ name, scale }));
@@ -244,13 +250,13 @@ export async function stopBuiltinAi() {
   emit();
 }
 
-export async function applyControlVectorsToServer({ chemistry, bias } = {}) {
+export async function applyControlVectorsToServer({ chemistry, bias, channelBoosts = null } = {}) {
   const [avail, bindings, st] = await Promise.all([
     listControlVectors(),
     getControlVectorBindings(),
     builtinStatus(),
   ]);
-  const computed = computeControlVectorScales({ chemistry, bias, bindings, availableVectors: avail });
+  const computed = computeControlVectorScales({ chemistry, bias, channelBoosts, bindings, availableVectors: avail });
   const args = computed.map(({ name, scale }) => ({ name, scale }));
   if (st.running) {
     await stopBuiltinAi();

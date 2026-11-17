@@ -26,6 +26,7 @@ import { interAppSecurityBroker } from './InterAppSecurityBroker.js';
 import { getSemanticsEngine } from './SemanticsEngine.js';
 import { db } from '../database/sovereignDatabase.js';
 import { auraHeartbeat } from '../services/auraCore/heartbeat.js';
+import { markBootHealthy, recordBootAttempt, recordCrashIncident } from '../services/auraCore/phoenixProtocol.js';
 
 export const BOOT_PHASES = [
   { id: 0,  name: 'KERNEL_INIT',  label: 'Initializing Sovereign subsystems...' },
@@ -175,10 +176,12 @@ export class NovaKernel {
         this._log(9, `Scheduler active. ${this.scheduler.getAll().length} tasks registered.`);
       });
 
-      // Phase 10 — Crash Handler
-      await this._phase(10, () => {
+      // Phase 10 — Crash Handler & Phoenix Safe-Boot
+      await this._phase(10, async () => {
         this.crash.init(this);
-        this._log(10, 'Crash guard active with instant repair capability.');
+        this.phoenixStatus = await recordBootAttempt().catch(() => null);
+        const modeTag = this.phoenixStatus?.safeMode ? 'SAFE_MODE' : (this.phoenixStatus?.lighthouseMode ? 'LIGHTHOUSE_RECOVERY' : 'STANDARD');
+        this._log(10, `Crash guard & Phoenix Protocol armed (${modeTag}).`);
       });
 
       // Phase 11 — Core Services & Desktop Launch
@@ -196,6 +199,7 @@ export class NovaKernel {
           this.heartbeat.start({ getAi: () => this.ai });
         }
 
+        await markBootHealthy().catch(() => {});
         this._log(11, `Sovereign Desktop ready in ${Date.now() - this._bootStart}ms.`);
       });
 
@@ -203,9 +207,11 @@ export class NovaKernel {
       this.ipc.emit('system:ready', {
         bootTime: Date.now() - this._bootStart,
         bootLog: this.bootLog,
+        phoenix: this.phoenixStatus || null,
       });
     } catch (fatalErr) {
       this.bootPhase = 'failed';
+      recordCrashIncident(fatalErr.message).catch(() => {});
       this._log(99, `FATAL BOOT ERROR: ${fatalErr.message}`);
       console.error('[NovaKernel] Fatal boot failure:', fatalErr);
       this.ipc.emit('system:error', { error: fatalErr });

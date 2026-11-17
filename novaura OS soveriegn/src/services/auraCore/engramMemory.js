@@ -135,6 +135,8 @@ export async function encodeEngram({
   reply = '',
   appraisal = null,
   chemistry = null,
+  somatic = null,
+  embedding = null,
   channel = 'text',
   person = 'operator',
   now = Date.now(),
@@ -158,6 +160,8 @@ export async function encodeEngram({
     sentiment: signatures.sentiment,
     signatures,
     sparsePattern,
+    ...(somatic ? { somatic } : {}),
+    ...(Array.isArray(embedding) && embedding.length > 0 ? { embedding } : {}),
     connections: {},
   };
 
@@ -194,15 +198,34 @@ export async function encodeEngram({
   return engram;
 }
 
+function cosineVec(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || a.length !== b.length) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = Number(a[i]) || 0;
+    const y = Number(b[i]) || 0;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  return na > 0 && nb > 0 ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+}
+
 /**
  * 5-phase biological retrieval from 05_Aura_Nova.py:
- * 1a) sparse + pattern matching, 1b) emotional gating, 1c) temporal reinstatement,
+ * 1a) sparse + pattern + optional semantic embedding + augmentation tag matching,
+ * 1b) emotional & somatic gating, 1c) temporal reinstatement,
  * 2a) thought+feeling coherence, 2b) associative confidence filter.
  */
 export async function recallEngrams({
   persona = 'aura',
   query = '',
   chemistry = null,
+  somatic = null,
+  queryEmbedding = null,
+  preferredTags = [],
   limit = 4,
   now = Date.now(),
 } = {}) {
@@ -211,6 +234,7 @@ export async function recallEngrams({
 
   const qPattern = encodeSparsePattern(query);
   const qTokens = new Set(extractPatterns(query, 12));
+  const tagSet = new Set((preferredTags || []).map(t => String(t).toLowerCase()));
   const currentIntensity = clamp01(
     (Math.abs(Number(chemistry?.oxytocin ?? 25) - 25) +
       Math.abs(Number(chemistry?.dopamine ?? 40) - 40) +
@@ -221,17 +245,25 @@ export async function recallEngrams({
 
   const scored = [];
   for (const eng of engrams) {
-    // 1a. Pattern & token overlap
+    // 1a. Pattern, token, augmentation tag & optional local semantic embedding overlap
     const sparseSim = qPattern.length ? patternSimilarity(qPattern, eng.sparsePattern || []) : 0;
     const patterns = eng.signatures?.logical_patterns || [];
     let tokenHits = 0;
-    for (const p of patterns) if (qTokens.has(p)) tokenHits++;
-    const patternScore = sparseSim * 10 + tokenHits * 2.5;
+    let tagHits = 0;
+    for (const p of patterns) {
+      if (qTokens.has(p)) tokenHits++;
+      if (tagSet.has(String(p).toLowerCase())) tagHits++;
+    }
+    const embedSim = (queryEmbedding && eng.embedding)
+      ? Math.max(0, cosineVec(queryEmbedding, eng.embedding))
+      : 0;
+    const patternScore = sparseSim * 10 + tokenHits * 2.5 + embedSim * 9 + tagHits * 1.2;
     if (query && patternScore <= 0 && (eng.signatures?.personal_meaning ?? 0) < 0.7) continue;
 
-    // 1b. Emotional resonance with current chemistry
+    // 1b. Emotional + somatic state resonance
     const emDiff = Math.abs((eng.signatures?.emotions ?? 0.3) - currentIntensity);
-    const emotionalScore = (1 - emDiff) * 4;
+    const somaticMatch = somatic && eng.somatic?.sensationLabel && eng.somatic.sensationLabel === somatic.sensationLabel ? 1.2 : 0;
+    const emotionalScore = (1 - emDiff) * 4 + somaticMatch;
 
     // 1c. Context reinstatement (recency + matching day period)
     const ageHours = Math.max(0, (now - (eng.createdAt || now)) / 3_600_000);

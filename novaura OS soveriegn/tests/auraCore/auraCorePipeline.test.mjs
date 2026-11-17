@@ -99,6 +99,41 @@ const { computeDissentPosture, updateTrustFromAppraisal, voiceParametersFromBias
 const { AuraHeartbeat, listDreams } = await import('../../src/services/auraCore/heartbeat.js');
 const { runShuffledChemistryProbe, runAppraisalCalibrationSuite, runPreferenceConsistencyProbe, listMindLabRuns } = await import('../../src/services/auraCore/mindLab.js');
 const { computeControlVectorScales } = await import('../../src/services/engines/builtinAi.js');
+const {
+  recordTypingPulse,
+  interpretTelemetrySnapshot,
+  resetInteroceptionCache,
+} = await import('../../src/services/auraCore/interoception.js');
+const {
+  getLearnedProfile,
+  observeTurnDynamics,
+  predictTriggerNudge,
+  resetLearnedDynamics,
+} = await import('../../src/services/auraCore/dynamicLearning.js');
+const {
+  budgetContextWindow,
+  tryEmbedText,
+  resetEmbeddingDiscovery,
+} = await import('../../src/services/auraCore/contextBridge.js');
+const {
+  classifyTaskIntent,
+  classifyTaskIntentWithAi,
+} = await import('../../src/services/auraCore/intentRouter.js');
+const {
+  readAugmentationConfig,
+  setCartridgeMode,
+  upsertCustomAugmentation,
+  removeCustomAugmentation,
+  composeTurnAugmentations,
+} = await import('../../src/services/auraCore/augmentationEngine.js');
+const {
+  MAX_CONSECUTIVE_CRASHES,
+  recordBootAttempt,
+  markBootHealthy,
+  createSoulSnapshot,
+  verifySoulSnapshot,
+  restoreSoulSnapshot,
+} = await import('../../src/services/auraCore/phoenixProtocol.js');
 const { getReasoningConfig, setReasoningConfig, clearReasoningOverride, resolveReasoningParams } = await import('../../src/services/reasoningConfig.js');
 const { NovaAgent, normalizeChatHistory } = await import('../../src/kernel/subsystems/NovaAgent.js');
 const { LocalModelSubsystem } = await import('../../src/kernel/subsystems/LocalModelSubsystem.js');
@@ -627,4 +662,218 @@ test('9-signature engrams, trust-shaped dissent, heartbeat dreaming, Mind Lab pr
   });
   assert.equal(cvScales.length, 1);
   assert.deepEqual(cvScales[0], { name: 'aura_warmth.gguf', scale: 0.5, channel: 'warmth' });
+});
+
+test('Hardware interoception, learned emotional dynamics, semantic context bridge, intent router, runtime augmentations, and Phoenix protocol work end to end', async () => {
+  resetStores();
+  resetInteroceptionCache();
+  resetEmbeddingDiscovery();
+  const baseNow = 1_796_000_000_000;
+
+  // 1. Interoception: thermal pressure + typing WPM cadence -> bounded somatic nudges
+  for (let i = 0; i < 10; i++) recordTypingPulse(baseNow + i * 250);
+  const somaHot = interpretTelemetrySnapshot(
+    {
+      gpu: { name: 'RTX Test', temp_c: 86, load_pct: 92, vram_used_mb: 7500, vram_total_mb: 8192, power_w: 240 },
+      ram_total_mb: 32768,
+      ram_free_mb: 16000,
+    },
+    null,
+    baseNow + 2500
+  );
+  assert.equal(somaHot.thermalState, 'throttled');
+  assert.equal(somaHot.sensationLabel, 'thermal_strain');
+  assert.ok(somaHot.typingWpm > 0);
+  assert.ok(somaHot.nudge.cortisol > 0 && somaHot.nudge.adrenaline > 0);
+
+  // 2. Dynamic Learning: repeated observations adapt resting baselines, median decay rates & keyword triggers
+  for (let i = 0; i < 6; i++) {
+    await observeTurnDynamics({
+      persona: 'aura',
+      userText: 'architecture breakthrough refactor ship clean interface',
+      prevChemistry: { oxytocin: 26, adrenaline: 12, dopamine: 44, cortisol: 14 },
+      nextChemistry: { oxytocin: 48, adrenaline: 14, dopamine: 72 - i * 2, cortisol: 12 },
+      appraisal: { pleasant: 0.9, novel: 0.8, progress: 0.9, conflict: 0, closeness: 0.85, effort: 0.4 },
+      now: baseNow + i * 3_600_000,
+    });
+  }
+  const learned = await getLearnedProfile('aura');
+  assert.equal(learned.totalTurns, 6);
+  assert.ok(learned.learnedBaselines.dopamine > BASELINE.dopamine, 'high dopamine history raises learned resting baseline');
+  assert.ok(Object.keys(learned.learnedTriggers.dopamine).includes('architecture'));
+  const nudge = predictTriggerNudge(learned, 'let us design clean architecture');
+  assert.ok(nudge.dopamine > 0);
+  await resetLearnedDynamics('aura');
+  assert.equal((await getLearnedProfile('aura')).totalTurns, 0);
+
+  // 3. Context Bridge: token budgeting & semantic embedding similarity
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.endsWith('/api/tags')) {
+      return new Response(JSON.stringify({ models: [{ name: 'nomic-embed-text:latest' }] }), { status: 200 });
+    }
+    if (u.endsWith('/api/embeddings')) {
+      const body = JSON.parse(init.body || '{}');
+      const v = /shader|vulkan/i.test(body.prompt) ? [1, 0, 0] : [0, 1, 0];
+      return new Response(JSON.stringify({ embedding: v }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch URL: ${u}`);
+  };
+
+  try {
+    const embShader = await tryEmbedText('vulkan compute shader pipeline', { allowProbe: true });
+    assert.deepEqual(embShader, [1, 0, 0]);
+    const embStory = await tryEmbedText('quiet tavern dialogue lore', { allowProbe: true });
+    assert.deepEqual(embStory, [0, 1, 0]);
+
+    const engShader = await encodeEngram({
+      persona: 'aura',
+      userText: 'gpu compute pipeline',
+      reply: 'descriptors bound cleanly',
+      embedding: [1, 0, 0],
+      somatic: { sensationLabel: 'focused_compute', gpuTempC: 64, typingWpm: 45 },
+      now: baseNow,
+    });
+    assert.equal(engShader.somatic.sensationLabel, 'focused_compute');
+
+    const semanticHits = await recallEngrams({
+      persona: 'aura',
+      query: 'unrelated query tokens',
+      queryEmbedding: [1, 0, 0],
+      somatic: { sensationLabel: 'focused_compute' },
+      limit: 2,
+      now: baseNow + 1000,
+    });
+    assert.equal(semanticHits[0]?.id, engShader.id, 'semantic embedding vector must surface matching engram');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  const budgeted = budgetContextWindow({
+    baseSystemPrompt: 'System identity.',
+    charter: 'Charter text.',
+    augmentationBlock: 'Active augmentation.',
+    engrams: [eng => eng, { thought: 'memory alpha' }],
+    workingHistory: [
+      { role: 'user', content: 'old message '.repeat(120) },
+      { role: 'assistant', content: 'old reply '.repeat(120) },
+      { role: 'user', content: 'latest user ask' },
+    ],
+    maxContextTokens: 1300,
+    reserveReplyTokens: 900,
+  });
+  assert.ok(budgeted.messages.some(m => m.content === 'latest user ask'), 'latest user turn must be preserved under tight token budget');
+  assert.ok(budgeted.stats.historyDropped >= 1, 'older oversized turns should drop gracefully');
+
+  // 4. Multi-Brain Intent Router & Runtime Augmentations + Control Vector Boosts + NovaAgent Integration
+  const codeIntent = classifyTaskIntent('Debug async race condition in Tauri IPC stack trace and refactor schema');
+  assert.equal(codeIntent.route, 'code_architecture');
+  assert.ok(codeIntent.suggestedAugmentations.includes('precision_debugger'));
+
+  const aiRouted = await classifyTaskIntentWithAi({
+    userText: 'Build a dark tavern chapter opening with strong atmosphere',
+    ai: { async chat() { return '{"route":"creative_synthesis","confidence":0.95,"reasoning":"Narrative chapter"}'; } },
+  });
+  assert.equal(aiRouted.route, 'creative_synthesis');
+  assert.equal(aiRouted.source, 'ai_classifier');
+
+  await upsertCustomAugmentation({
+    id: 'vulkan_lens',
+    name: 'Vulkan Kernel Lens',
+    directive: 'Inspect GPU synchronization barriers cleanly.',
+    temperatureDelta: -0.1,
+    channelBoosts: { focus: 0.5, caution: 0.25 },
+    memoryTags: ['vulkan', 'barrier'],
+    mode: 'pinned',
+  });
+  let augCfg = await readAugmentationConfig();
+  assert.ok(augCfg.cartridges.some(c => c.id === 'vulkan_lens' && c.mode === 'pinned'));
+
+  const composed = await composeTurnAugmentations({
+    persona: 'aura',
+    userText: 'Debug failing async Rust build error',
+  });
+  assert.ok(composed.active.some(a => a.id === 'vulkan_lens'));
+  assert.ok(composed.active.some(a => a.id === 'precision_debugger'));
+  assert.ok(composed.channelBoosts.focus >= 0.8);
+  assert.match(composed.directiveBlock, /Vulkan Kernel Lens/);
+
+  const augVectors = computeControlVectorScales({
+    chemistry: { oxytocin: 25, adrenaline: 5, dopamine: 40, cortisol: 15, energy: 100 },
+    channelBoosts: composed.channelBoosts,
+    bindings: { focus: { file: 'focus.gguf', gain: 1.0 } },
+    availableVectors: [{ name: 'focus.gguf', path: 'C:/cv/focus.gguf', bytes: 1024 }],
+  });
+  assert.ok(augVectors[0].scale >= 0.8, 'augmentation channelBoosts must drive --control-vector-scaled output');
+
+  await setCartridgeMode('vulkan_lens', 'off');
+  await removeCustomAugmentation('vulkan_lens');
+  augCfg = await readAugmentationConfig();
+  assert.ok(!augCfg.cartridges.some(c => c.id === 'vulkan_lens'));
+
+  // Test NovaAgent end-to-end with auto-effort steering vs explicit user submenu override
+  const seenAgentCalls = [];
+  const turnedMeta = [];
+  const onMeta = (ev) => turnedMeta.push(ev.detail);
+  window.addEventListener('novaura:companion_turn_meta', onMeta);
+  try {
+    const mockKernel = {
+      ipc: makeIpc(),
+      wm: { getOpenWindows: () => [] },
+      ai: {
+        async chat(msgs, opts) {
+          seenAgentCalls.push({ msgs, opts });
+          if (opts?.jsonSchema) return '{"pleasant":0.8,"novel":0.7,"progress":0.9,"conflict":0,"closeness":0.8,"effort":0.4}';
+          return 'Root cause traced.';
+        },
+      },
+    };
+    const agent = new NovaAgent();
+    agent.init(mockKernel);
+    clearReasoningOverride('companion:nova');
+    await agent.sendMessage('Debug failing unit test in async function', 'nova');
+    assert.equal(seenAgentCalls[0].opts.reasoningEffort, 'high', 'un-overridden Nova turn adopts high effort for debugging intent');
+    assert.ok(turnedMeta.length >= 1 && turnedMeta[0].intent.route === 'code_architecture');
+
+    setReasoningConfig({ think: true, reasoningEffort: 'low' }, 'companion:nova');
+    await agent.sendMessage('Debug another complex schema bug', 'nova');
+    assert.equal(seenAgentCalls[1].opts.reasoningEffort, undefined, 'explicit user submenu override prevents auto effort override');
+  } finally {
+    window.removeEventListener('novaura:companion_turn_meta', onMeta);
+  }
+
+  // 5. Phoenix Protocol: crash safe-boot threshold, Lighthouse 72h, SHA-256 snapshot & tamper protection
+  for (let i = 0; i < MAX_CONSECUTIVE_CRASHES; i++) {
+    await recordBootAttempt(baseNow + i * 1000);
+  }
+  const triBoot = await recordBootAttempt(baseNow + 4000);
+  assert.equal(triBoot.safeMode, true);
+  await markBootHealthy(baseNow + 5000);
+  const lighthouseBoot = await recordBootAttempt(baseNow + 5000 + 75 * 3_600_000);
+  assert.equal(lighthouseBoot.safeMode, false);
+  assert.equal(lighthouseBoot.lighthouseMode, true);
+
+  await mockDb.setSetting('aura_core:aura', { chemistry: { ...createChemistry(baseNow), oxytocin: 77 } });
+  const snap = await createSoulSnapshot('aura', baseNow);
+  assert.equal(snap.ok, true);
+  const checkClean = await verifySoulSnapshot('aura');
+  assert.equal(checkClean.valid, true);
+
+  // Tamper test: modify snapshot payload without updating checksum -> verify & restore must catch it!
+  const storedBundle = await mockDb.getSetting('aura_core:phoenix_snapshot:aura');
+  await mockDb.setSetting('aura_core:phoenix_snapshot:aura', {
+    ...storedBundle,
+    payload: { ...storedBundle.payload, persona: 'tampered' },
+  });
+  const checkTampered = await verifySoulSnapshot('aura');
+  assert.equal(checkTampered.valid, false);
+  await assert.rejects(() => restoreSoulSnapshot('aura'), /checksum mismatch/i);
+
+  // Valid bundle restores overwritten chemistry cleanly
+  await mockDb.setSetting('aura_core:phoenix_snapshot:aura', storedBundle);
+  await mockDb.setSetting('aura_core:aura', { chemistry: createChemistry(baseNow) });
+  await restoreSoulSnapshot('aura');
+  const restored = await mockDb.getSetting('aura_core:aura');
+  assert.equal(restored.chemistry.oxytocin, 77);
 });

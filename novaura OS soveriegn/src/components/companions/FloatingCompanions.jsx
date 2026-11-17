@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles, Bot, Send, X, Minimize2, Maximize2, Shield,
-  ChevronRight, Mic, CornerDownLeft, Loader2, RefreshCw, Terminal, Brain
+  ChevronRight, Mic, CornerDownLeft, Loader2, RefreshCw, Terminal, Brain, Sliders
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { kernel as kernelSingleton } from '../../kernel/NovaKernel.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { readCore } from '../../services/auraCore/auraCore.js';
+import { readAugmentationConfig, setCartridgeMode } from '../../services/auraCore/augmentationEngine.js';
+import { recordTypingPulse } from '../../services/auraCore/interoception.js';
 import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 export default function FloatingCompanions() {
@@ -19,6 +21,9 @@ export default function FloatingCompanions() {
   const [isTyping, setIsTyping] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [auraCoreState, setAuraCoreState] = useState(null);
+  const [augConfig, setAugConfig] = useState(null);
+  const [lastTurnMeta, setLastTurnMeta] = useState(null);
+  const [showAugStrip, setShowAugStrip] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -29,12 +34,32 @@ export default function FloatingCompanions() {
 
   useEffect(() => {
     let cancelled = false;
+    const syncAugs = () => {
+      readAugmentationConfig().then(c => { if (!cancelled && c) setAugConfig(c); }).catch(() => {});
+    };
+    const onTurnMeta = (ev) => {
+      if (!cancelled && ev?.detail) setLastTurnMeta(ev.detail);
+    };
+    syncAugs();
+    window.addEventListener('novaura:augmentation_updated', syncAugs);
+    window.addEventListener('novaura:companion_turn_meta', onTurnMeta);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('novaura:augmentation_updated', syncAugs);
+      window.removeEventListener('novaura:companion_turn_meta', onTurnMeta);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     const syncCore = () => {
       if (activePersona !== 'aura') return;
       readCore('aura').then(c => { if (!cancelled && c) setAuraCoreState(c); }).catch(() => {});
     };
     syncCore();
     window.addEventListener('novaura:aura_core_updated', syncCore);
+
     return () => {
       cancelled = true;
       window.removeEventListener('novaura:aura_core_updated', syncCore);
@@ -106,6 +131,13 @@ export default function FloatingCompanions() {
     handleSendMessage(actionText);
   };
 
+  const cycleCartridgeMode = async (cart) => {
+    const order = ['auto', 'pinned', 'off'];
+    const nextMode = order[(order.indexOf(cart.mode) + 1) % order.length];
+    const updated = await setCartridgeMode(cart.id, nextMode).catch(() => null);
+    if (updated) setAugConfig(updated);
+  };
+
   return (
     <div className="fixed bottom-14 right-6 z-[9999] flex flex-col items-end pointer-events-none font-sans select-none">
       {/* Expanded Chat Drawer */}
@@ -150,15 +182,20 @@ export default function FloatingCompanions() {
                 label={activePersona === 'aura' ? 'Aura Reasoning' : 'Nova Reasoning'}
                 compact
               />
-              {activePersona === 'aura' && (
-                <button
-                  onClick={() => kernel?.wm?.open?.('mind_lab', 'Aura Mind Lab')}
-                  className="p-1.5 text-cyan-300 hover:text-cyan-100 hover:bg-slate-800 rounded-lg transition-colors"
-                  title="Open Aura Mind Lab & Chemistry Telemetry"
-                >
-                  <Brain className="w-3.5 h-3.5" />
-                </button>
-              )}
+              <button
+                onClick={() => setShowAugStrip(v => !v)}
+                className={`p-1.5 rounded-lg transition-colors ${showAugStrip ? 'bg-purple-900/60 text-purple-200' : 'text-purple-300 hover:text-purple-100 hover:bg-slate-800'}`}
+                title="Toggle Neural Augmentations Bar"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => kernel?.wm?.open?.('mind_lab', 'Aura Mind Lab & Augmentations')}
+                className="p-1.5 text-cyan-300 hover:text-cyan-100 hover:bg-slate-800 rounded-lg transition-colors"
+                title="Open Aura Mind Lab, Telemetry & Neural Augmentations"
+              >
+                <Brain className="w-3.5 h-3.5" />
+              </button>
               <button
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
@@ -178,10 +215,39 @@ export default function FloatingCompanions() {
 
           {activePersona === 'aura' && auraCoreState?.chemistry && (
             <div className="px-3 py-1 bg-cyan-950/30 border-b border-cyan-900/40 flex items-center justify-between text-[10px] font-mono text-cyan-200 shrink-0">
-              <span>{auraCoreState.bias?.voice || 'STEADY'} · Trust {Math.round((auraCoreState.trust ?? 0.5) * 100)}%</span>
+              <span>
+                {auraCoreState.bias?.voice || 'STEADY'} · Trust {Math.round((auraCoreState.trust ?? 0.5) * 100)}%
+                {auraCoreState.somatic?.tempC ? ` · ${auraCoreState.somatic.tempC}°C` : ''}
+                {auraCoreState.somatic?.typingWpm > 0 ? ` · ${auraCoreState.somatic.typingWpm}wpm` : ''}
+              </span>
               <span className="text-slate-400">
                 OX {Math.round(auraCoreState.chemistry.oxytocin)} · DA {Math.round(auraCoreState.chemistry.dopamine)} · CO {Math.round(auraCoreState.chemistry.cortisol)} · EN {Math.round(auraCoreState.chemistry.energy)}%
               </span>
+            </div>
+          )}
+
+          {(showAugStrip || (lastTurnMeta?.persona === activePersona && lastTurnMeta?.activeAugmentations?.length > 0)) && augConfig?.cartridges && (
+            <div className="px-3 py-1.5 bg-slate-900/80 border-b border-slate-800 flex items-center gap-1.5 overflow-x-auto text-[10px] shrink-0">
+              <span className="text-purple-300 font-semibold uppercase tracking-wider shrink-0">Augs:</span>
+              {augConfig.cartridges.map(cart => {
+                const fired = lastTurnMeta?.persona === activePersona && lastTurnMeta?.activeAugmentations?.some(a => a.id === cart.id);
+                return (
+                  <button
+                    key={cart.id}
+                    onClick={() => cycleCartridgeMode(cart)}
+                    title={`${cart.name} (${cart.mode}) — click to cycle Auto / Pinned / Off`}
+                    className={`px-2 py-0.5 rounded-full border whitespace-nowrap transition-colors cursor-pointer ${
+                      cart.mode === 'pinned'
+                        ? 'bg-purple-600/30 border-purple-400 text-purple-100'
+                        : cart.mode === 'auto'
+                          ? (fired ? 'bg-cyan-600/30 border-cyan-400 text-cyan-100' : 'bg-slate-800/80 border-slate-700 text-slate-300')
+                          : 'bg-slate-950 border-slate-800 text-slate-500 line-through'
+                    }`}
+                  >
+                    {cart.name.split(' ')[0]} · {cart.mode}
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -217,6 +283,7 @@ export default function FloatingCompanions() {
           <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs select-text">
             {messages.map((m, idx) => {
               const isUser = m.role === 'user';
+
               return (
                 <div
                   key={idx}
@@ -255,7 +322,10 @@ export default function FloatingCompanions() {
               ref={inputRef}
               type="text"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                recordTypingPulse();
+              }}
               onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
               placeholder={`Talk to ${activePersona === 'nova' ? 'Nova' : 'Aura'} or command the OS...`}
               disabled={isTyping}

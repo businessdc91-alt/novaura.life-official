@@ -3,9 +3,12 @@
 // CPU threads, respects Right VII privacy, and cleanly settles energy + engrams during quiet time.
 
 import { db } from '../../database/sovereignDatabase.js';
-import { CYCLE_MS, metabolize, restoreChemistry, systemicBias } from './endocrine.js';
+import { applySomaticNudge, CYCLE_MS, metabolize, restoreChemistry, systemicBias } from './endocrine.js';
 import { consolidateEngrams, listEngrams } from './engramMemory.js';
 import { influence } from './influence.js';
+import { getLearnedProfile } from './dynamicLearning.js';
+import { sampleInteroception } from './interoception.js';
+import { LIGHTHOUSE_THRESHOLD_HOURS, readPhoenixMeta } from './phoenixProtocol.js';
 
 const DREAMS_KEY = 'aura_core:dreams';
 const MAX_DREAMS = 40;
@@ -97,10 +100,28 @@ export class AuraHeartbeat {
     this._lastTickAt = now;
     this._totalTicks++;
 
-    // 1. Load & metabolize chemistry on elapsed time; save back when a full cycle changed it
-    const saved = await db.getSetting(settingKey(this.persona), null).catch(() => null);
+    // 1. Load & metabolize chemistry against learned baselines + sample live hardware interoception
+    const [saved, dynamics, somatic, phoenixMeta] = await Promise.all([
+      db.getSetting(settingKey(this.persona), null).catch(() => null),
+      getLearnedProfile(this.persona).catch(() => null),
+      sampleInteroception({ now }).catch(() => null),
+      readPhoenixMeta().catch(() => null),
+    ]);
     const prior = restoreChemistry(saved?.chemistry, now);
-    const settled = metabolize(prior, now);
+    let settled = metabolize(prior, now, {
+      restingBaselines: dynamics?.learnedBaselines,
+      decayMultipliers: dynamics?.learnedDecayRates,
+    });
+    if (somatic?.nudge) {
+      settled = applySomaticNudge(settled, {
+        adrenaline: somatic.nudge.adrenaline * 0.4,
+        cortisol: somatic.nudge.cortisol * 0.4,
+        energy: somatic.nudge.energy * 0.4,
+      }, now, {
+        restingBaselines: dynamics?.learnedBaselines,
+        decayMultipliers: dynamics?.learnedDecayRates,
+      });
+    }
     if (settled.updatedAt > prior.updatedAt + CYCLE_MS / 2) {
       await db.setSetting(settingKey(this.persona), {
         ...(saved || {}),
@@ -109,10 +130,16 @@ export class AuraHeartbeat {
       this._emitCoreUpdated(settled, saved?.lastAppraisal || null);
     }
 
-    // 2. Track idle / boredom / rest state (block 02 + block 15)
+    // 2. Track idle / boredom / rest / Phoenix Lighthouse state (block 02, block 15, Phoenix)
     const idleMs = Math.max(0, now - this._lastActivityAt);
+    const lighthouseActive = phoenixMeta?.lastOperatorAt
+      ? ((now - phoenixMeta.lastOperatorAt) / 3_600_000) >= LIGHTHOUSE_THRESHOLD_HOURS
+      : false;
     const highEnergyLowDopamine = settled.energy >= 60 && settled.dopamine < 38;
-    if (idleMs >= this.idleThresholdMs) {
+    if (lighthouseActive) {
+      this._phase = 'lighthouse';
+      this._boredom = Math.max(0, this._boredom * 0.85);
+    } else if (idleMs >= this.idleThresholdMs) {
       this._boredom = Math.min(1, this._boredom + (highEnergyLowDopamine ? 0.12 : 0.04));
       this._phase = settled.energy < 40 ? 'resting' : 'dreaming';
     } else {
@@ -134,8 +161,8 @@ export class AuraHeartbeat {
       });
     }
 
-    this._emit('tick', { consolidation });
-    return { status: this.getStatus(), chemistry: settled, consolidation };
+    this._emit('tick', { consolidation, somatic });
+    return { status: this.getStatus(), chemistry: settled, consolidation, somatic };
   }
 
   async runConsolidationAndDream({ now = Date.now(), ai = null, allowModelDream = true, chemistry = null } = {}) {

@@ -1933,6 +1933,7 @@ pub fn run() {
             engines::engine_download_cancel,
             engines::engine_list_models,
             engines::engine_hardware,
+            engines::engine_live_telemetry,
             engines::engine_gpu_process_memory,
             cloud::cloud_ai_request,
             forge::forge_fetch_text,

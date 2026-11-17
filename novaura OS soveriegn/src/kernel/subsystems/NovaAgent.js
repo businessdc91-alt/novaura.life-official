@@ -14,9 +14,12 @@
  */
 
 import { db } from '../../database/sovereignDatabase.js';
-import { hasCore, prepareTurn, settleTurn } from '../../services/auraCore/auraCore.js';
+import { hasCore, prepareAugmentedTurn, prepareTurn, settleTurn } from '../../services/auraCore/auraCore.js';
+import { budgetContextWindow } from '../../services/auraCore/contextBridge.js';
+import { observePromptSubmission } from '../../services/auraCore/interoception.js';
 import { approveAgentTool } from '../../services/agentToolPolicy.js';
 import { rememberMemory } from '../../services/sovereignRagService.js';
+import { getReasoningConfig, hasReasoningOverride } from '../../services/reasoningConfig.js';
 
 /**
  * Strict chat templates (Gemma, Qwen, Llama 3) reject sequences that begin with
@@ -163,6 +166,8 @@ export class NovaAgent {
   async sendMessage(userText, persona = 'nova', onToken = null) {
     if (!userText || !userText.trim()) return '';
 
+    observePromptSubmission(userText);
+
     // 1. Save user message to private database
     await db.chat_history.add({
       persona,
@@ -186,28 +191,63 @@ export class NovaAgent {
       conversation.push({ role: 'user', content: userText.trim() });
     }
 
-    // 3. Construct system prompt with tools and context
+    // 3. Construct system prompt with tools, Aura Core, active Cognitive Augmentations, & budgeted context
     const openWindows = this._kernel?.wm?.getOpenWindows?.() || [];
-    // Aura Core: her chemistry shapes how she is sampled; it is never put into words.
-    const core = hasCore(persona) ? await prepareTurn(persona, { query: userText }).catch(() => null) : null;
-    const systemPrompt = this._buildSystemPrompt(persona, openWindows, core?.charter, core?.engrams);
+    const scope = `companion:${String(persona || 'nova').toLowerCase()}`;
+    const core = hasCore(persona)
+      ? await prepareTurn(persona, { query: userText, openWindows }).catch(() => null)
+      : null;
+    const augTurn = core
+      ? { intent: core.intent, augmentation: core.augmentation, options: core.options }
+      : await prepareAugmentedTurn(persona, { query: userText, openWindows }).catch(() => null);
+
+    const baseSystemPrompt = this._buildSystemPrompt(persona, openWindows, '', []);
+    const budgeted = budgetContextWindow({
+      baseSystemPrompt,
+      charter: core?.charter || '',
+      augmentationBlock: augTurn?.augmentation?.directiveBlock || '',
+      engrams: core?.engrams || [],
+      workingHistory: conversation,
+      maxContextTokens: 6144,
+      reserveReplyTokens: 1024,
+    });
+
+    if (typeof window !== 'undefined' && typeof CustomEvent === 'function' && augTurn) {
+      window.dispatchEvent(new CustomEvent('novaura:companion_turn_meta', {
+        detail: {
+          persona,
+          intent: augTurn.intent,
+          activeAugmentations: augTurn.augmentation?.active || [],
+          channelBoosts: augTurn.augmentation?.channelBoosts || null,
+          budgetStats: budgeted.stats,
+          somatic: core?.somatic || null,
+        },
+      }));
+    }
 
     const messages = [
-      { role: 'system', content: systemPrompt },
-      ...conversation,
+      { role: 'system', content: budgeted.systemPrompt },
+      ...budgeted.messages,
     ];
+
+    const reasoningCfg = getReasoningConfig(scope);
+    const suggestedEffort = augTurn?.options?.suggestedReasoningEffort;
+    const shouldAutoSteerEffort = !hasReasoningOverride(scope) && reasoningCfg.think && Boolean(suggestedEffort);
 
     // 4. Request inference from AISubsystem
     let responseText = '';
     let replied = false;
     try {
-      const rawReply = await this._kernel.ai.chat(messages, {
+      const chatOpts = {
         persona,
-        scope: `companion:${persona}`,
+        scope,
         onToken,
         noCache: true,
-        ...core?.options,
-      });
+        ...(typeof core?.options?.temperature === 'number' ? { temperature: core.options.temperature } : {}),
+        ...(augTurn?.options?.temperatureDelta && !core ? { temperature: Math.max(0.2, Math.min(1.0, 0.7 + augTurn.options.temperatureDelta)) } : {}),
+        ...(shouldAutoSteerEffort ? { reasoningEffort: suggestedEffort } : {}),
+      };
+      const rawReply = await this._kernel.ai.chat(messages, chatOpts);
       if (typeof rawReply === 'string' && rawReply.trim().length > 0) {
         responseText = rawReply;
         replied = true;
@@ -234,7 +274,7 @@ export class NovaAgent {
 
     // 7. Aura Core: she appraises the exchange privately; the reply isn't held up for it.
     if (core && replied) {
-      settleTurn(persona, { userText, reply: responseText, ai: this._kernel.ai, channel: 'text' })
+      settleTurn(persona, { userText, reply: responseText, ai: this._kernel.ai, channel: 'text', somatic: core.somatic })
         .catch(err => console.warn('[AuraCore] Appraisal failed:', err.message));
     }
 

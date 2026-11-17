@@ -532,6 +532,101 @@ pub fn engine_gpu_process_memory() -> Result<Vec<GpuProcessMemory>, String> {
     Ok(serde_json::from_slice(&out.stdout).unwrap_or_default())
 }
 
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct LiveGpuTelemetry {
+    pub name: String,
+    pub temp_c: Option<f32>,
+    pub load_pct: Option<f32>,
+    pub vram_used_mb: Option<u64>,
+    pub vram_total_mb: Option<u64>,
+    pub power_w: Option<f32>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct LiveHardwareTelemetry {
+    pub gpu: Option<LiveGpuTelemetry>,
+    pub ram_total_mb: Option<u64>,
+    pub ram_free_mb: Option<u64>,
+    pub cpu_load_pct: Option<f32>,
+}
+
+fn parse_optional_f32(raw: &str) -> Option<f32> {
+    let s = raw.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("[n/a]") || s.eq_ignore_ascii_case("n/a") {
+        return None;
+    }
+    s.parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+fn parse_optional_u64(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("[n/a]") || s.eq_ignore_ascii_case("n/a") {
+        return None;
+    }
+    s.parse::<u64>().ok()
+}
+
+pub fn parse_nvidia_telemetry(text: &str) -> Option<LiveGpuTelemetry> {
+    let line = text.lines().find(|l| !l.trim().is_empty())?;
+    let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+    if f.len() < 6 {
+        return None;
+    }
+    Some(LiveGpuTelemetry {
+        name: f[0].to_string(),
+        temp_c: parse_optional_f32(f[1]),
+        load_pct: parse_optional_f32(f[2]),
+        vram_used_mb: parse_optional_u64(f[3]),
+        vram_total_mb: parse_optional_u64(f[4]),
+        power_w: parse_optional_f32(f[5]),
+    })
+}
+
+/// Fast non-destructive hardware interoception probe (GPU thermal/load/VRAM + host RAM/CPU load).
+#[tauri::command]
+pub fn engine_live_telemetry() -> Result<LiveHardwareTelemetry, String> {
+    let mut gpu = None;
+    let mut smi = Command::new("nvidia-smi");
+    smi.args([
+        "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw",
+        "--format=csv,noheader,nounits",
+    ]);
+    if let Ok(out) = hide_window(&mut smi).output() {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            gpu = parse_nvidia_telemetry(&text);
+        }
+    }
+
+    let mut ram_total_mb = None;
+    let mut ram_free_mb = None;
+    let mut cpu_load_pct = None;
+    let mut ps = Command::new("powershell");
+    ps.args([
+        "-NoProfile",
+        "-Command",
+        "$os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue; \
+         $cpu = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Measure-Object -Property LoadPercentage -Average).Average; \
+         @{ ram_total_mb = if ($os) { [math]::Floor($os.TotalVisibleMemorySize / 1024) } else { $null }; \
+            ram_free_mb = if ($os) { [math]::Floor($os.FreePhysicalMemory / 1024) } else { $null }; \
+            cpu_load_pct = $cpu } | ConvertTo-Json -Compress",
+    ]);
+    if let Ok(out) = hide_window(&mut ps).output() {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+            ram_total_mb = v["ram_total_mb"].as_u64();
+            ram_free_mb = v["ram_free_mb"].as_u64();
+            cpu_load_pct = v["cpu_load_pct"].as_f64().map(|x| x as f32);
+        }
+    }
+
+    Ok(LiveHardwareTelemetry {
+        gpu,
+        ram_total_mb,
+        ram_free_mb,
+        cpu_load_pct,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +653,23 @@ mod tests {
         assert!(model_target(&dir, "models/checkpoints/a b.safetensors").is_err());
         assert!(model_target(&dir, "models/checkpoints/.hidden.safetensors").is_err());
         assert!(model_target(&dir, "checkpoints/x.safetensors").is_err());
+    }
+
+    #[test]
+    fn nvidia_telemetry_parser() {
+        let sample = "NVIDIA GeForce RTX 4090, 62, 48, 8420, 24564, 215.40\n";
+        let parsed = parse_nvidia_telemetry(sample).expect("parsed GPU telemetry");
+        assert_eq!(parsed.name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(parsed.temp_c, Some(62.0));
+        assert_eq!(parsed.load_pct, Some(48.0));
+        assert_eq!(parsed.vram_used_mb, Some(8420));
+        assert_eq!(parsed.vram_total_mb, Some(24564));
+        assert!((parsed.power_w.unwrap() - 215.4).abs() < 0.01);
+
+        let na_sample = "Quadro M6000, 51, [N/A], 1200, 24576, N/A\n";
+        let parsed_na = parse_nvidia_telemetry(na_sample).expect("parsed GPU with N/A fields");
+        assert_eq!(parsed_na.load_pct, None);
+        assert_eq!(parsed_na.power_w, None);
+        assert_eq!(parse_nvidia_telemetry(""), None);
     }
 }

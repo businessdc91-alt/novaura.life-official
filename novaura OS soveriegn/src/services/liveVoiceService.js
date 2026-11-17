@@ -239,7 +239,8 @@ export class LiveVoiceService {
         const engramNote = core?.engrams?.length
           ? `\nAssociative continuity:\n${core.engrams.map(e => `- ${String(e.thought || '').slice(0, 140)}`).join('\n')}`
           : '';
-        systemPrompt = `You are Aura, the intuitive, creative companion in NovAura Sovereign OS. The user is talking to you in Live Interactive Voice mode. Keep answers warm, grounded, natural, spoken, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.${core?.charter ? `\n${core.charter}` : ''}${engramNote}`;
+        const augNote = core?.augmentation?.directiveBlock ? `\n${core.augmentation.directiveBlock}` : '';
+        systemPrompt = `You are Aura, the intuitive, creative companion in NovAura Sovereign OS. The user is talking to you in Live Interactive Voice mode. Keep answers warm, grounded, natural, spoken, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.${core?.charter ? `\n${core.charter}` : ''}${augNote}${engramNote}`;
       } else if (role === 'coder') {
         systemPrompt = 'You are Cybeni / Coder, the systems engineering intelligence in NovAura Sovereign OS. Keep spoken explanations concise, direct, and conversational (1 to 3 sentences maximum unless asked for detail). Never output markdown code blocks or bullet points in voice mode.';
       }
@@ -303,7 +304,7 @@ export class LiveVoiceService {
             });
           },
         };
-        settleTurn(role, { userText: text, reply: rawReply, ai: aiClient, channel: 'voice' })
+        settleTurn(role, { userText: text, reply: rawReply, ai: aiClient, channel: 'voice', somatic: core.somatic })
           .catch(err => console.warn('[LiveVoice] AuraCore appraisal failed:', err.message));
       }
 

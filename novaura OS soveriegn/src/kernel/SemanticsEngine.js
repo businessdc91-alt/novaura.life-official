@@ -89,6 +89,34 @@ class SemanticsEngine {
       params: ['command'],
       handler: (params) => this._kernel?.ipc.emit('terminal:run_command', { command: params.command }),
     });
+
+    // Neural Augmentations & Multi-Brain Intent Router
+    this.register('augmentation:list', {
+      description: 'List active and configured Neural Augmentation Cartridges',
+      params: [],
+      handler: async () => {
+        const { readAugmentationConfig } = await import('../services/auraCore/augmentationEngine.js');
+        return readAugmentationConfig();
+      },
+    });
+
+    this.register('augmentation:set_mode', {
+      description: 'Pin, set auto, or disable a Cognitive Augmentation Cartridge',
+      params: ['id', 'mode'],
+      handler: async (params) => {
+        const { setCartridgeMode } = await import('../services/auraCore/augmentationEngine.js');
+        return setCartridgeMode(params.id, params.mode || 'pinned');
+      },
+    });
+
+    this.register('router:classify', {
+      description: 'Classify a prompt into a cognitive brain lane and matching augmentations',
+      params: ['prompt'],
+      handler: async (params) => {
+        const { classifyTaskIntent } = await import('../services/auraCore/intentRouter.js');
+        return classifyTaskIntent(params.prompt || '');
+      },
+    });
   }
 
   register(actionKey, definition) {
@@ -119,6 +147,7 @@ class SemanticsEngine {
       { id: 'sentinel', name: 'Sentinel Shield', description: 'Security, privacy and audit dashboard' },
       { id: 'hypervisor', name: 'Neural Hypervisor', description: 'Local model deck, Ollama/LM Studio monitor & hardware speedometer' },
       { id: 'media_foundry', name: 'Media Foundry', description: 'ComfyUI Forge lab, 1-click installer, model downloads & media studio' },
+      { id: 'mind_lab', name: 'Aura Mind Lab', description: 'Chemistry, hardware interoception, dynamic learning & neural augmentations' },
       { id: 'settings', name: 'Settings & Diagnostics', description: 'OS configuration, keys & system health' },
     ];
   }
@@ -151,6 +180,9 @@ class SemanticsEngine {
     if (text.includes('open disk') || text.includes('open drive') || text.includes('disk architect') || text.includes('clean disk') || text.includes('boot manager')) return this.executeAction('window:open', { type: 'disk_architect' });
     if (text.includes('open settings')) return this.executeAction('window:open', { type: 'settings' });
     if (text.includes('open shield') || text.includes('open sentinel')) return this.executeAction('window:open', { type: 'sentinel' });
+    if (text.includes('open mind lab') || text.includes('mind lab') || text.includes('open augmentations') || text.includes('neural augmentations')) {
+      return this.executeAction('window:open', { type: 'mind_lab' });
+    }
     if (text.includes('list windows')) return this.executeAction('window:list');
 
     // Default: ask Nova agent to parse and execute intent

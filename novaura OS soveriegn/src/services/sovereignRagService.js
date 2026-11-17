@@ -6,6 +6,7 @@
 // 4. Memory management (CRUD, keyword indexing, importance weighting, usage tracking)
 
 import { db } from '../database/sovereignDatabase.js';
+import { cosineSimilarity, tryEmbedText } from './auraCore/contextBridge.js';
 
 const OLLAMA_DEFAULT = 'http://localhost:11434';
 
@@ -154,6 +155,7 @@ export async function retrieveRelevantMemories(queryText, options = {}) {
     limit = 4,
     category = null,
     minScore = 0.12,
+    allowEmbedProbe = false,
   } = options;
 
   if (!queryText || !queryText.trim()) return [];
@@ -164,7 +166,7 @@ export async function retrieveRelevantMemories(queryText, options = {}) {
   const queryTokens = extractKeywords(queryText);
   if (queryTokens.length === 0) return [];
   const queryTf = computeTf(queryTokens);
-  const queryTokenSet = new Set(queryTokens);
+  const queryVec = await tryEmbedText(queryText, { allowProbe: allowEmbedProbe }).catch(() => null);
 
   const scoredMemories = [];
 
@@ -181,14 +183,17 @@ export async function retrieveRelevantMemories(queryText, options = {}) {
     }
     const overlapScore = matchCount / Math.max(1, queryTokens.length);
 
-    // 2. Vector Cosine Similarity of TF representation
-    const cosineSim = vectorCosine(queryTf, memTf);
+    // 2. Vector Cosine Similarity (real local embeddings when present, plus TF fallback)
+    const lexicalCosine = vectorCosine(queryTf, memTf);
+    const embedCosine = (queryVec && Array.isArray(mem.embedding))
+      ? Math.max(0, cosineSimilarity(queryVec, mem.embedding))
+      : 0;
 
     // 3. Importance Weighting Boost (importance is 1-5)
     const importanceWeight = (mem.importance || 3) * 0.05;
 
     // Combined Hybrid Score
-    const finalScore = (overlapScore * 0.55) + (cosineSim * 0.35) + importanceWeight;
+    const finalScore = (overlapScore * 0.45) + (lexicalCosine * 0.25) + (embedCosine * 0.45) + importanceWeight;
 
     if (finalScore >= minScore) {
       scoredMemories.push({

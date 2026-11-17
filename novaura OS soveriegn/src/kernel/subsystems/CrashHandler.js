@@ -5,6 +5,7 @@
  */
 
 import { db } from '../../database/sovereignDatabase.js';
+import { recordCrashIncident } from '../../services/auraCore/phoenixProtocol.js';
 
 const NOISE_PATTERNS = [
   /chrome-extension:\/\//,
@@ -165,7 +166,8 @@ class CrashHandler {
       instant: true,
     });
 
-    // Log to local private cloud DB audit table
+    // Log to local private cloud DB audit table & Phoenix Protocol crash ledger
+    recordCrashIncident(message).catch(() => {});
     try {
       await db.sentinel_audit.put({
         id: crashId,
