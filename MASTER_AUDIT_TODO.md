@@ -1059,6 +1059,31 @@ Owner direction: nothing on the mesh is capped at kilobytes, and people must be 
   - **10 Standalone Production Blueprints (`src/services/integrations/csharpAndCppStandaloneIntegrations.js`)**: Registered under `C# & C++ Standalone Apps` in `cybeniIntegrationsLibrary.js` — Win32 + Direct2D dark GUI, Dear ImGui + OpenGL3 Docking workstation, Raylib fixed-timestep 60Hz game core, C++20 ThreadPool systems CLI, Polyphonic Audio DSP WAV synth, C# WPF MVVM app, Dark WinForms tray utility (`csc.exe` & `.NET 8` compatible), ASP.NET Core 8 Minimal API + SQLite, Deterministic C# ECS core, and `.NET 8` NativeAOT Channel CLI. Multi-folder `integrationPath` preserves `native/cpp/` & `native/csharp/` structure.
   - **C++/C# Static Analyzer, Starters & Visual Twin (`nativeReference.js`, `starters.js`, `projectStore.js`, `previewBuilder.js`, `CodePane.jsx`)**: Language detection (`detectNativeLanguage`), string/comment/C++14-digit-separator-aware balanced delimiter checker (`checkBalancedDelimiters`), local `#include` & `main`/`Main` verification in `nativeStaticCheck` integrated into `staticCheck()`, C++20 & C# starters + React Visual Twin preview templates, Monaco syntax highlighting for C/C++/C#/PowerShell/XAML, and turnkey `CMakeLists.txt` / `.csproj` / `build.ps1` generation.
   - **Tauri Native Compiler Bridge & Repair Loop (`src-tauri/src/native_build.rs`, `src/services/cybeni/nativeCompiler.js`, `pipeline.js`, `CybeniBuilderWindow.jsx`, `PreviewPane.jsx`)**: `cybeni_native_toolchains` probes WinLibs MinGW `g++`/`clang++` and `dotnet`/`csc.exe`; `cybeni_native_compile` compiles inside isolated temp sandboxes with `-std=c++20` / `-D_WIN32_WINNT=0x0A00` / `-municode` / `-mwindows`, parses GCC & MSBuild diagnostics directly into `pipeline.js` `runtimeCheck` auto-repair loop, displays native diagnostics in `PreviewPane` Checks tab, and ships **Compile Standalone .exe (C++/C#)** in `CybeniBuilderWindow` Ship menu (returning downloadable `.exe` in Desktop or turnkey source bundle in browser).
+- [x] **Review of the two Cybeni entries above (Claude, 2026-11-17; commits `fb0c55c`, `06181d8`):**
+  - **Fixed, native builds (security):**
+    - **C#, the project's own build logic ran.** Cybeni's automatic check ran `dotnet build` on the project's own `.csproj`, so MSBuild `Exec` steps, `Directory.Build.*` files and NuGet package targets ran with no click. The project files can come from an imported repo or from a model that read one. Now Cybeni writes its own project file from a short list of settings, refuses NuGet packages, never writes MSBuild/NuGet control files into the build folder, and restores with no package sources.
+    - **C#, the build itself was broken.** On this machine restore failed (a missing `E:` NuGet source in the user config), and `PublishSingleFile` with no runtime identifier can't publish. It now targets the installed SDK, builds offline in about 4 s, and downloads as a zip of the exe plus the dll and runtime files it needs.
+    - **g++/csc, file names read as options.** A file named `@x.cpp` was read as a file of compiler options (`-wrapper` runs any program), and one starting with `-` was read as an option. Such names are refused, and g++ gets sources as `./path`.
+    - **Includes outside the project.** An `#include`/`#embed` of a path outside the project (absolute, a drive or share, or `..`) is refused.
+    - **No deadline.** Compiles had no time limit and blocked the async runtime. Every compile now has a deadline that kills the process tree, and runs on a blocking thread.
+  - **Fixed, Rust tests never ran.** A test binary that links Tauri cannot start on Windows (`0xC0000139`), so the existing Rust tests had never run. The rules now live in `src-tauri/src/native_build_rules.rs` and are tested on their own in `src-tauri/pure-tests` (`npm run tauri:test`). Result: 13/13 pass, and three deliberately broken rules were all caught.
+  - **Fixed, Cybeni apps:**
+    - **Shared data.** Every app shares the `cyprev` origin, so two apps shared `@cybeni/backend` tables and sign-ins. Data is now keyed per project, via `window.__cybeniAppId`, which is set by the preview builder.
+    - **Commands from any frame.** The backend obeyed data commands and AI replies from any frame. It now takes them only from the OS window.
+    - **No compiler installed.** With no C++/C# compiler, the native check threw, which failed the phase and skipped the preview check. It's now skipped with a note.
+  - **Checks:**
+    - `npm test` 525/525;
+    - `npm run tauri:test` 13/13;
+    - `tauri:check` clean;
+    - `vite build` green;
+    - headless Edge with real apps using `@cybeni/backend`: 7/7. Gemini's original runtime fails the two isolation checks in the same run.
+    - Gemini's Creative Studio claims re-run and confirmed: browser suites 93/93, PSD 3/3, real-UI smoke 86/86.
+  - **Open (minor):**
+    - an app's `ai.chat` in the builder has no rate limit and uses Cybeni's developer/architect model;
+    - "streaming" reports the whole reply once, at the end;
+    - images are only sent to local models;
+    - in-preview passwords use a demo-grade hash, so never hold real credentials there;
+    - Gemini's `novapp.json` (`novapp-v1`) is unsigned and enforced by nothing. It gets folded into the Additions spec format (`novapp/1`) when Additions is built.
 - [ ] Full browser bundling of external npm dependencies (`react`, `recharts`, etc.) for 100% air-gapped third-party library installs without `esm.sh` (React core/UI + `@cybeni/backend` + Tailwind utilities are offline-resilient).
 - [ ] Rerun the baseline with headroom (two models loaded max), then line-ups C (Qwen 35B-A3B architect), D (Bonsai), Coder-Next developer.
 
