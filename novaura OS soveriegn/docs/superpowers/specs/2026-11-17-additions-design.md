@@ -84,7 +84,7 @@ A page the frame navigates to never sees the nonce or the port.
 The bridge script `__novaura/v1.js` is injected into every addition session by the preview builder, before the app's scripts. It defines `window.novaura`. Every method returns a promise. A call to a permission the person has not granted rejects with `{ code: 'permission_denied' }`. It never prompts mid-call; prompting happens at install or from the permissions page.
 
 | Method | Permission | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `novaura.version` → `1`; `novaura.app` → `{ id, name, version, permissions }` | none | |
 | `storage.get / set / remove / keys / usage` | none (own data only) | Also backs the `localStorage` replacement |
 | `ui.theme()`, `ui.onThemeChange(fn)` | none | OS color tokens and light/dark, so additions match the OS |
@@ -139,7 +139,7 @@ The shared pieces of `novaTemplates.js` (safe paths, hashing, signature checks, 
 3. Write the files as a project in `projectStore` under a new slug.
 4. Save the `user_apps` entry with its manifest and granted permissions.
 
-A bundle signed by a `TRUSTED_AUTHORITIES` key shows as a NovAura Original. Any other bundle shows "from <publisher name>, not verified by NovAura".
+A bundle signed by a `TRUSTED_AUTHORITIES` key shows as a NovAura Original. Any other bundle shows "from (publisher's name), not verified by NovAura".
 
 **Updates:**
 
