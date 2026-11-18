@@ -4,6 +4,7 @@ import { APP_REGISTRY, useAppRegistryVersion } from '../config/appRegistry.js';
 
 export const CATEGORIES = [
   { id: 'all', label: 'All Applications' },
+  { id: 'additions', label: 'Additions' },
   { id: 'creator', label: 'Creator Studio' },
   { id: 'finance', label: 'Crypto & Assets' },
   { id: 'media', label: 'Media & Entertainment' },

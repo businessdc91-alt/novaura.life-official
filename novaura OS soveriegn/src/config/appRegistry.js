@@ -584,7 +584,7 @@ function imageIcon(url) {
   };
 }
 
-/** Replace the registered user apps. apps: [{ id, slug, name, color, iconUrl }] */
+/** Replace the registered user apps (additions). apps: [{ id, slug, name, color, iconUrl }] */
 export function registerUserApps(apps) {
   for (let i = APP_REGISTRY.length - 1; i >= 0; i--) {
     if (APP_REGISTRY[i].userApp) {
@@ -596,11 +596,11 @@ export function registerUserApps(apps) {
     const def = {
       id: a.id,
       label: a.name,
-      category: 'my apps',
+      category: 'additions',
       icon: a.iconUrl ? imageIcon(a.iconUrl) : Layers,
       color: a.color || '#7c3aed',
       title: a.name,
-      component: (props) => createElement(UserAppWindow, { ...props, slug: a.slug, name: a.name }),
+      component: (props) => createElement(UserAppWindow, { ...props, appId: a.id, slug: a.slug, name: a.name }),
       defaultSize: { width: 1000, height: 680 },
       userApp: true,
     };

@@ -55,12 +55,15 @@ export function createAdditionData(table) {
   }
 
   return {
-    async snapshotLocalStorage(appId) {
-      const [lo, hi] = range(appId, LS);
-      const rows = await table.where('[appId+key]').between(lo, hi).toArray();
-      const out = {};
-      for (const row of rows) out[row.key.slice(LS.length)] = String(row.value);
-      return out;
+    /** Waits behind writes already queued, so a relaunch sees what the app saved just before. */
+    snapshotLocalStorage(appId) {
+      return serial(appId, async () => {
+        const [lo, hi] = range(appId, LS);
+        const rows = await table.where('[appId+key]').between(lo, hi).toArray();
+        const out = {};
+        for (const row of rows) out[row.key.slice(LS.length)] = String(row.value);
+        return out;
+      });
     },
 
     /** Apply localStorage ops ({ op: 'set'|'remove'|'clear', key?, value? }) in order, all or nothing. */

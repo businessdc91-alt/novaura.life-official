@@ -92,3 +92,11 @@ test('clearApp leaves other additions alone', async () => {
   assert.equal(await data.usage('user_a'), 0);
   assert.equal(await data.get('user_b', 'k'), 'b');
 });
+
+test('a snapshot taken right after a write sees that write', async () => {
+  const { data } = fresh();
+  const write = data.writeLocalStorage('user_a', [{ op: 'set', key: 'last', value: 'saved just before relaunch' }]);
+  const snap = await data.snapshotLocalStorage('user_a');
+  await write;
+  assert.deepEqual(snap, { last: 'saved just before relaunch' });
+});
