@@ -141,3 +141,27 @@ test('an inline addition carries the same CSP as a meta tag, ahead of everything
   assert.ok(at > 0, 'no CSP meta tag');
   assert.ok(at < out.srcdoc.indexOf('window.__novauraBoot='), 'the policy must come before any script');
 });
+
+test('an app that keeps data in a browser database is flagged when it launches', async () => {
+  assert.equal((await launch()).out.browserDatabase, false);
+  const dexie = [...FILES, { path: 'db.js', content: "import Dexie from 'dexie';" }];
+  const { out } = await launch({}, { loadFiles: async () => dexie });
+  assert.equal(out.browserDatabase, true);
+});
+
+test('an encoded dot segment in a relaunch path is refused', async () => {
+  for (const bad of ['%2e%2e/other/index.html', '%2E%2E%2Fx', 'a%2fb', 'a%5cb']) {
+    assert.equal((await launch({}, { path: bad })).out.src, 'http://cyprev.localhost/sess0001abcd/index.html#nv=n0nce0001', bad);
+  }
+});
+
+test('every page of a multi-page addition loads boot and the bridge first', () => {
+  const files = [...FILES, { path: 'about.html', content: '<!doctype html><html><head><title>About</title></head><body><script>localStorage.getItem("x")</script></body></html>' }];
+  const out = buildPreview(files, { mode: 'addition', baseUrl: 'http://cyprev.localhost/s1234567/' });
+  const about = out.serverFiles.find((f) => f.path === 'about.html').content;
+  const boot = about.indexOf('<script src="http://cyprev.localhost/s1234567/__novaura/boot.js"></script>');
+  const bridge = about.indexOf('<script src="http://cyprev.localhost/s1234567/__novaura/v1.js"></script>');
+  assert.ok(boot > 0 && bridge > boot && bridge < about.indexOf('localStorage'), 'about.html runs without the bridge');
+  const server = buildPreview(files, { mode: 'server', baseUrl: 'http://cyprev.localhost/s1234567/' });
+  assert.ok(!server.serverFiles.find((f) => f.path === 'about.html').content.includes('__novaura'), 'previews are unchanged');
+});

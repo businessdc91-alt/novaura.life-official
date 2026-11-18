@@ -50,6 +50,13 @@ export function bridgeMain(limits) {
   // ── 1. Boot data ──────────────────────────────────────────────────────────
   const boot = w.__novauraBoot || null;
   try { delete w.__novauraBoot; } catch { w.__novauraBoot = undefined; }
+  // The web view may inject the OS's IPC handles into every frame. The CSP already
+  // blocks the IPC host; taking the handles away too means a widened policy alone
+  // could never hand an addition the OS's commands.
+  for (const name of ['__TAURI_INTERNALS__', '__TAURI__', 'ipc']) {
+    try { delete w[name]; } catch { /* keep going */ }
+    try { if (w[name] !== undefined) Object.defineProperty(w, name, { value: undefined, configurable: false, writable: false }); } catch { /* keep going */ }
+  }
 
   let nonce = null;
   try {

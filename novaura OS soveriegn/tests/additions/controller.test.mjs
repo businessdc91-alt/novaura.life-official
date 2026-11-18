@@ -18,7 +18,7 @@ function fakeFrame() {
   };
 }
 
-function setup({ addition = {} } = {}) {
+function setup({ addition = {}, launchExtra = {} } = {}) {
   let n = 0;
   let current = {
     id: 'user_notes', slug: 'notes', name: 'Notes',
@@ -34,7 +34,7 @@ function setup({ addition = {} } = {}) {
     getAddition: async (id) => (id === current.id ? structuredClone(current) : null),
     launch: async (a, { path }) => {
       n++;
-      const out = { session: `sess${n}aaaa`, nonce: `nonce${n}`, src: `http://cyprev.localhost/sess${n}aaaa/${path || 'index.html'}#nv=nonce${n}`, sandbox: 'allow-scripts allow-forms allow-modals', issues: [] };
+      const out = { session: `sess${n}aaaa`, nonce: `nonce${n}`, src: `http://cyprev.localhost/sess${n}aaaa/${path || 'index.html'}#nv=nonce${n}`, sandbox: 'allow-scripts allow-forms allow-modals', issues: [], ...launchExtra };
       log.launches.push({ addition: a, path, out });
       return out;
     },
@@ -170,5 +170,29 @@ test('the banner clears once its origin is granted', async () => {
   await settle();
   assert.equal(log.launches.length, 2);
   assert.deepEqual(log.states.at(-1).banner, null);
+  ctrl.dispose();
+});
+
+test('an app that keeps data in a browser database gets a notice in its window', async () => {
+  const { ctrl, frame, log } = setup({ launchExtra: { browserDatabase: true } });
+  await ctrl.start(frame);
+  assert.ok(log.states.some((s) => /browser database/i.test(s.notice || '')));
+  ctrl.dispose();
+  const plain = setup();
+  await plain.ctrl.start(plain.frame);
+  assert.ok(!plain.log.states.some((s) => s.notice));
+  plain.ctrl.dispose();
+});
+
+test('a removed addition stops running in its open window', async () => {
+  const { ctrl, frame, log, change } = setup();
+  await ctrl.start(frame);
+  change('user_notes', { id: 'user_removed' });
+  await settle();
+  assert.deepEqual(log.stops, ['sess1aaaa']);
+  assert.deepEqual(log.disposed, ['nonce1']);
+  assert.equal(frame.src, 'about:blank');
+  assert.ok(log.states.some((s) => /removed/i.test(s.error || '')));
+  assert.equal(log.launches.length, 1);
   ctrl.dispose();
 });

@@ -12,6 +12,9 @@
 import * as registryModule from './registry.js';
 import { getAdditionData } from './dataStore.js';
 import { localManifest } from './manifest.js';
+import { usesBrowserDatabase } from './detect.js';
+
+export { usesBrowserDatabase };
 
 const NAMESPACED = [
   { prefix: '__cybeni_db__:', rename: (rest) => `__cybeni_db__:${rest}` },
@@ -49,13 +52,6 @@ export function attributeLegacyStorage(snapshot, slugs) {
     for (const [k, v] of Object.entries(plain)) if (!(k in kv)) kv[k] = v;
   }
   return out;
-}
-
-const BROWSER_DB = /\bindexedDB\b|(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)['"](?:dexie|idb|idb-keyval|localforage)(?:\/[^'"]*)?['"]/;
-
-/** True when the app keeps data in a browser database, which an opaque-origin addition can't open. */
-export function usesBrowserDatabase(files) {
-  return (files || []).some((f) => typeof f?.content === 'string' && BROWSER_DB.test(f.content));
 }
 
 async function copyInto(data, addition, kv) {
@@ -105,9 +101,29 @@ export async function copyOldDataAgain(appId, deps) {
 const isTauri = () => typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 
 /**
+ * The old storage, as posted by `frame` with `token`. Rejects after `timeoutMs`, so a
+ * slow read fails the move (tried again next launch) instead of moving nothing.
+ */
+export function awaitLegacyStorage(win, frame, token, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const onMessage = (e) => {
+      if (e.source !== frame.contentWindow || e.data?.__novauraLegacyStorage !== token) return;
+      clearTimeout(timer);
+      win.removeEventListener('message', onMessage);
+      resolve(e.data.items && typeof e.data.items === 'object' ? e.data.items : {});
+    };
+    const timer = setTimeout(() => {
+      win.removeEventListener('message', onMessage);
+      reject(new Error("Couldn't read the old app data in time; moving older apps over will be tried again next launch."));
+    }, timeoutMs);
+    win.addEventListener('message', onMessage);
+  });
+}
+
+/**
  * Read the old shared preview origin's localStorage: publish a one-page preview
  * session and open it in a hidden frame on that origin, which posts its storage back
- * with a one-time token. Gives {} after 10 s.
+ * with a one-time token. Fails after 10 s.
  */
 export async function readSharedStorageViaCyprev({ timeoutMs = 10_000 } = {}) {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -124,22 +140,10 @@ export async function readSharedStorageViaCyprev({ timeoutMs = 10_000 } = {}) {
   frame.setAttribute('aria-hidden', 'true');
   frame.style.cssText = 'position:fixed;left:-12000px;top:0;width:10px;height:10px;border:0;opacity:0;pointer-events:none;';
   try {
-    return await new Promise((resolve) => {
-      const done = (items) => {
-        clearTimeout(timer);
-        window.removeEventListener('message', onMessage);
-        resolve(items);
-      };
-      const timer = setTimeout(() => done({}), timeoutMs);
-      const onMessage = (e) => {
-        if (e.source !== frame.contentWindow || e.data?.__novauraLegacyStorage !== token) return;
-        const items = e.data.items && typeof e.data.items === 'object' ? e.data.items : {};
-        done(items);
-      };
-      window.addEventListener('message', onMessage);
-      frame.src = `${protocolBase(session)}index.html`;
-      document.body.appendChild(frame);
-    });
+    const answer = awaitLegacyStorage(window, frame, token, timeoutMs);
+    frame.src = `${protocolBase(session)}index.html`;
+    document.body.appendChild(frame);
+    return await answer;
   } finally {
     frame.remove();
     invoke('cybeni_preview_clear', { session }).catch(() => {});

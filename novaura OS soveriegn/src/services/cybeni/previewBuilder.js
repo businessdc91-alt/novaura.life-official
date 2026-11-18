@@ -180,6 +180,13 @@ function pickEntryHtml(files) {
  * app name. options.inlineScripts ({ boot, bridge }) builds an addition as one inline
  * document instead (a plain browser in development).
  */
+/** Put `head` first inside the page's <head> (making one if needed). */
+function withHead(html, head) {
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, m => `${m}\n${head}`);
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, m => `${m}\n<head>${head}</head>`);
+  return `${head}\n${html}`;
+}
+
 export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = '', inlineScripts = null } = {}) {
   const addition = mode === 'addition';
   const served = mode === 'server' || (addition && !inlineScripts);
@@ -338,9 +345,7 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
   const previewOnly = addition ? '' : `${appIdScript}<script>${STORAGE_ISOLATION_SOURCE}</script>\n`;
   const testAgent = addition ? '' : `\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>`;
   const head = `${additionHead}${previewOnly}<script>${ERROR_REPORTER}</script>${testAgent}\n<script>${escapeScript(OFFLINE_TAILWIND_FALLBACK_SCRIPT)}</script>${assetBootstrap}\n<script type="importmap">${JSON.stringify({ imports })}</script>\n<script type="module">import '@cybeni/backend';</script>`;
-  if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => `${m}\n${head}`);
-  else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, m => `${m}\n<head>${head}</head>`);
-  else html = `${head}\n${html}`;
+  html = withHead(html, head);
 
   issues.push(...nativeStaticCheck(files));
 
@@ -348,7 +353,10 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
   if (served) {
     const serverFiles = [];
     for (const f of files) {
-      if (!modules.has(f.path) && f.path !== htmlPath) serverFiles.push({ path: f.path, content: f.content, mime: mimeFor(f.path) });
+      if (modules.has(f.path) || f.path === htmlPath) continue;
+      // Other pages of an addition need the bridge too (it asks for a relaunch onto them).
+      const page = addition && /\.html?$/i.test(f.path);
+      serverFiles.push({ path: f.path, content: page ? withHead(f.content, additionHead) : f.content, mime: mimeFor(f.path) });
     }
     for (const [path, code] of modules) serverFiles.push({ path, content: code, mime: 'text/javascript' });
     serverFiles.push({ path: 'index.html', content: html, mime: 'text/html' });

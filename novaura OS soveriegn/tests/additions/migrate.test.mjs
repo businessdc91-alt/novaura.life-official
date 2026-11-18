@@ -13,7 +13,7 @@ mock.module(new URL('../../src/database/sovereignDatabase.js', import.meta.url).
 
 const registry = await import('../../src/services/additions/registry.js');
 const { getAdditionData } = await import('../../src/services/additions/dataStore.js');
-const { attributeLegacyStorage, usesBrowserDatabase, migrateLegacyApps, copyOldDataAgain } = await import('../../src/services/additions/migrate.js');
+const { attributeLegacyStorage, usesBrowserDatabase, migrateLegacyApps, copyOldDataAgain, awaitLegacyStorage } = await import('../../src/services/additions/migrate.js');
 
 const SHARED = Object.freeze({
   theme: 'dark',
@@ -157,4 +157,18 @@ test('copying old data again brings back the old values for that app only', asyn
   assert.equal(snap.theme, 'dark');
   assert.equal(snap.mine, 'kept');
   assert.equal((await data.snapshotLocalStorage('user_habits')).theme, 'light');
+});
+
+test('reading the old storage gives up with an error, not an empty answer, so nothing is marked moved', async () => {
+  const win = new EventTarget();
+  const frame = { contentWindow: {} };
+  await assert.rejects(awaitLegacyStorage(win, frame, 'tok', 20), /old app data/i);
+  const answer = awaitLegacyStorage(win, frame, 'tok', 1000);
+  win.dispatchEvent(Object.assign(new Event('message'), { source: {}, data: { __novauraLegacyStorage: 'tok', items: { a: 'stranger' } } }));
+  win.dispatchEvent(Object.assign(new Event('message'), { source: frame.contentWindow, data: { __novauraLegacyStorage: 'wrong', items: { a: 'x' } } }));
+  win.dispatchEvent(Object.assign(new Event('message'), { source: frame.contentWindow, data: { __novauraLegacyStorage: 'tok', items: { a: '1' } } }));
+  assert.deepEqual(await answer, { a: '1' });
+  settings.set('user_apps', [entry('notes')]);
+  await assert.rejects(migrateLegacyApps(deps({ readSharedStorage: () => awaitLegacyStorage(win, frame, 'tok', 10) })));
+  assert.equal((await registry.getAddition('user_notes')).manifest, null);
 });

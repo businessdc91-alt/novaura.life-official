@@ -32,7 +32,7 @@ export function fakePort() {
  * A fake frame. `boot: null` means no boot data (a reload); `limits` are the
  * bridge's { chunkBytes, localStorageLimit, batchMs }.
  */
-export function makeFrame({ boot = defaultBoot(), hash = '#nv=n0nce', pathname = '/sess1234/index.html', limits = { chunkBytes: 64, localStorageLimit: 1000, batchMs: 50 } } = {}) {
+export function makeFrame({ boot = defaultBoot(), hash = '#nv=n0nce', pathname = '/sess1234/index.html', limits = { chunkBytes: 64, localStorageLimit: 1000, batchMs: 50 }, globals = {} } = {}) {
   let now = 0;
   let nextId = 1;
   const timers = new Map();
@@ -64,6 +64,7 @@ export function makeFrame({ boot = defaultBoot(), hash = '#nv=n0nce', pathname =
   win.window = win;
   win.self = win;
   if (boot === null) delete win.__novauraBoot;
+  Object.assign(win, globals);
   vm.createContext(win);
   vm.runInContext(bridgeSource(limits), win);
 

@@ -17,6 +17,7 @@ export default function UserAppWindow({ appId, slug, name, windowId, onClose }) 
   const closeRef = useRef(onClose);
   const [error, setError] = useState('');
   const [banner, setBanner] = useState(null);
+  const [notice, setNotice] = useState(null);
 
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
@@ -27,6 +28,7 @@ export default function UserAppWindow({ appId, slug, name, windowId, onClose }) 
       onState: (s) => {
         if ('error' in s) setError(s.error || '');
         if ('banner' in s) setBanner(s.banner || null);
+        if ('notice' in s) setNotice(s.notice || null);
       },
     });
     ctrlRef.current = ctrl;
@@ -51,6 +53,12 @@ export default function UserAppWindow({ appId, slug, name, windowId, onClose }) 
           <span className="flex-1">{banner.name} tried to connect to {banner.origin.replace(/^https:\/\//, '')}.</span>
           <button onClick={reviewPermissions} className="px-2.5 py-1 rounded-md bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400">Review</button>
           <button onClick={() => setBanner(null)} aria-label="Dismiss" title="Dismiss" className="p-1 rounded text-slate-400 hover:text-white"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+      {notice && !banner && (
+        <div role="note" className="absolute top-2 left-2 right-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/95 border border-slate-600/50 text-[12px] text-slate-200 shadow-lg">
+          <span className="flex-1">{notice}</span>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss" title="Dismiss" className="p-1 rounded text-slate-400 hover:text-white"><X className="w-3.5 h-3.5" /></button>
         </div>
       )}
       {error && <div className="absolute inset-0 flex items-center justify-center bg-slate-950 text-rose-300 text-[13px] p-6 text-center">{error}</div>}

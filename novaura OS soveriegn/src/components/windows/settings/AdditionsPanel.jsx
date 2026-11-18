@@ -120,7 +120,7 @@ function AdditionCard({ addition, view, focused, act }) {
       <div className="space-y-1.5">
         <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" /> Network</h4>
         {view.network.length === 0
-          ? <p className="text-xs text-slate-400">Connects to nothing outside this computer.</p>
+          ? <p className="text-xs text-slate-400">Can't load or fetch anything outside this computer.</p>
           : view.network.map((n) => (
             <label key={n.origin} className="flex items-center gap-2 text-xs text-slate-200">
               <input type="checkbox" checked={n.granted} onChange={(e) => toggleOrigin(n.origin, e.target.checked)} className="accent-cyan-500" />

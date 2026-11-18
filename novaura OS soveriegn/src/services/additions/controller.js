@@ -15,6 +15,8 @@ import { getAdditionData } from './dataStore.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+export const BROWSER_DATABASE_NOTICE = "This app keeps data in a browser database, which additions can't use, so parts of it may not work or may forget what you saved.";
+
 /** What a launch was built from; a change to any of it needs a relaunch. */
 const launchKey = (a) => JSON.stringify({
   grants: a.grants,
@@ -123,7 +125,7 @@ export function createAdditionController({ appId, deps, onState = () => {} }) {
     // A banner for an origin the person has since allowed has done its job.
     const granted = addition.grants?.network || [];
     const shown = [...banners].at(-1);
-    onState({ doc, error: '', issues: doc.issues || [], ...(shown && granted.includes(shown) ? { banner: null } : {}) });
+    onState({ doc, error: '', issues: doc.issues || [], notice: doc.browserDatabase ? BROWSER_DATABASE_NOTICE : null, ...(shown && granted.includes(shown) ? { banner: null } : {}) });
     return doc;
   }
 
@@ -136,10 +138,26 @@ export function createAdditionController({ appId, deps, onState = () => {} }) {
     return launchInto(gen, path);
   }
 
+  // The person removed it: stop it now, so it can't write again after its data was cleared.
+  function stopRemoved() {
+    generation++;
+    teardown();
+    key = null;
+    if (frame) {
+      frame.removeAttribute?.('srcdoc');
+      frame.src = 'about:blank';
+    }
+    onState({ doc: null, error: 'This addition was removed.' });
+  }
+
   const onChanged = (e) => {
     if (disposed || e.detail !== appId) return;
     Promise.resolve(deps.getAddition(appId))
-      .then((a) => { if (a && !disposed && launchKey(a) !== key) relaunch(); })
+      .then((a) => {
+        if (disposed) return;
+        if (!a) { stopRemoved(); return; }
+        if (launchKey(a) !== key) relaunch();
+      })
       .catch(() => {});
   };
 

@@ -1,6 +1,6 @@
 # Additions: user apps inside Sovereign — Design
 
-**Status:** approved by the owner 2026-11-17; the decisions are recorded in the last section. Nothing here is built yet.
+**Status:** approved by the owner 2026-11-17; the decisions are recorded in the last section. Steps 0–1 (runtime and basic API) built 2026-11-18 on branch `aura-core/regulation` (plan: `docs/superpowers/plans/2026-11-18-additions-runtime.md`); the live check in the installed app is still to do. Steps 2–4 are not built.
 
 ## What this is
 
@@ -227,6 +227,12 @@ Each step ships on its own and keeps the full test suite green.
   - the `localStorage` replacement survives a reload;
   - the contract fixture passes.
 - **Manual, once, owner-approved:** install an addition, run a real Sovereign update, and confirm the app and its data are still there.
+
+## Known limitations (found in review, 2026-11-18)
+
+- **WebRTC is not covered by the CSP.** Chromium does not apply CSP to `RTCPeerConnection`, so an addition with no network grants could still reach a TURN/STUN server it names and send data in the request. Needs a decision before untrusted additions are common: a WebView2 setting that disables WebRTC for the addition frames, or an honest line in the install card.
+- **Self-navigation is stopped by the OS window, not the addition CSP.** CSP does not govern a frame navigating itself (`location.href = …`). What keeps an addition from loading an outside page or a local port in its own frame is the OS window's `frame-src` in `tauri.conf.json` (`'self' blob: data:` plus the `cyprev`/`cygame` hosts). Widening that list (for example to `https:`) opens additions; the live check confirms it.
+- **Apps that keep data in a browser database** (IndexedDB, Dexie, idb, localforage) can't keep it in an addition; the window says so when such an app opens.
 
 ## Later
 

@@ -248,3 +248,10 @@ test('an inline frame with no hash takes its nonce from the boot data', () => {
   const hashWins = makeFrame({ boot: defaultBoot({ nonce: 'inl1ne' }), hash: '#nv=fr0mhash' });
   assert.equal(hashWins.posted[0].msg.nonce, 'fr0mhash');
 });
+
+test("the OS's IPC handles are taken off the page before the app runs", () => {
+  const f = makeFrame({ globals: { __TAURI_INTERNALS__: { invoke() {} }, ipc: { postMessage() {} }, __TAURI__: {} } });
+  assert.equal(f.win.__TAURI_INTERNALS__, undefined);
+  assert.equal(f.win.ipc, undefined);
+  assert.equal(f.win.__TAURI__, undefined);
+});

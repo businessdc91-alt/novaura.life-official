@@ -8,6 +8,7 @@
 import { buildPreview } from '../cybeni/previewBuilder.js';
 import { NOVAURA_V1_SOURCE } from './bridgeSource.js';
 import { additionCsp } from './network.js';
+import { usesBrowserDatabase } from './detect.js';
 
 /** Never allow-same-origin: each running addition gets its own opaque origin. */
 export const ADDITION_SANDBOX = 'allow-scripts allow-forms allow-modals';
@@ -28,6 +29,8 @@ export function bootScript({ app, snapshot, theme, hostOrigin, nonce }) {
 function entryFor(path) {
   const p = String(path || '');
   if (!p || p.startsWith('/') || !/^[A-Za-z0-9\-._~!$&'()*+,;=:@%/?]+$/.test(p)) return 'index.html';
+  // Encoded dots and slashes could still climb out of the addition's folder.
+  if (/%2e|%2f|%5c/i.test(p)) return 'index.html';
   const [route] = p.split('?');
   if (!route) return `index.html${p}`;
   // No ':' in the route, so it can never read as a scheme, and no dot segments.
@@ -52,13 +55,14 @@ export async function launchAddition(addition, { data, invoke, loadFiles, hostOr
     permissions: [...(addition.grants?.permissions || [])],
   };
   const nonce = newNonce();
+  const browserDatabase = usesBrowserDatabase(files);
 
   if (!invoke) {
     // Development in a plain browser: the same policy, as a meta tag.
     const boot = bootScript({ app, snapshot, theme, hostOrigin, nonce });
     const csp = additionCsp(addition.grants?.network || []);
     const out = buildPreview(files, { mode: 'addition', inlineScripts: { boot, bridge: NOVAURA_V1_SOURCE, csp } });
-    return { session: null, nonce, srcdoc: out.html, sandbox: ADDITION_SANDBOX, issues: out.issues };
+    return { session: null, nonce, srcdoc: out.html, sandbox: ADDITION_SANDBOX, issues: out.issues, browserDatabase };
   }
 
   const session = newSession();
@@ -71,7 +75,7 @@ export async function launchAddition(addition, { data, invoke, loadFiles, hostOr
     network: [...(addition.grants?.network || [])],
     once: [BOOT_PATH],
   });
-  return { session, nonce, src: `${base}${entryFor(path)}#nv=${nonce}`, sandbox: ADDITION_SANDBOX, issues: out.issues };
+  return { session, nonce, src: `${base}${entryFor(path)}#nv=${nonce}`, sandbox: ADDITION_SANDBOX, issues: out.issues, browserDatabase };
 }
 
 /** Drop a launch's files from memory. Best effort: the window may already be gone. */
