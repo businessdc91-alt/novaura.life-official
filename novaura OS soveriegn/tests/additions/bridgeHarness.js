@@ -58,6 +58,8 @@ export function makeFrame({ boot = defaultBoot(), hash = '#nv=n0nce', pathname =
     URL,
     console,
     __novauraBoot: boot,
+    stopped: 0,
+    stop() { win.stopped++; },
   };
   win.window = win;
   win.self = win;

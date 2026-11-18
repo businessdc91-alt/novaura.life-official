@@ -378,6 +378,9 @@ export function bridgeMain(limits) {
     } else {
       const path = String(w.location.pathname || '').split('/').slice(2).join('/') + String(w.location.search || '');
       w.parent.postMessage({ __novaura: 'relaunch', path }, '*');
+      // Without its data the app must not start (it could save over what it had, or
+      // reload itself again); stop loading until the OS relaunches it.
+      if (typeof w.stop === 'function') w.stop();
     }
   } catch { /* no parent to talk to */ }
 }

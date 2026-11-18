@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "tauri:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode check",
     "tauri:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode test",
+    "test:additions": "node scripts/browser-test.mjs --vite=http://localhost:5199/ tests/additions/browser/runtime.browser.mjs tests/additions/browser/additions.browser.mjs",
     "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode dev",
     "tauri:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode build -Bundles nsis",
     "tauri:build:exe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-gnu.ps1 -Mode build -Bundles none"

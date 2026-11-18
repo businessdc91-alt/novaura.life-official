@@ -10,6 +10,7 @@ test('the shipped source carries the real limits', () => {
 
 test('hello carries the nonce, goes only to the OS origin, and the hash is cleared', () => {
   const f = makeFrame();
+  assert.equal(f.win.stopped, 0);
   assert.equal(f.posted.length, 1);
   assert.deepEqual(f.posted[0].msg, { __novaura: 'hello', nonce: 'n0nce', apiVersion: 1 });
   assert.equal(f.posted[0].target, HOST);
@@ -149,6 +150,7 @@ test('a port from another source, or a second port, is ignored', async () => {
 test('without boot data it asks to be relaunched, calls reject not_connected, and localStorage still works in memory', async () => {
   const f = makeFrame({ boot: null, hash: '', pathname: '/sess1234/settings/profile' });
   assert.deepEqual(f.posted.map((p) => p.msg), [{ __novaura: 'relaunch', path: 'settings/profile' }]);
+  assert.equal(f.win.stopped, 1, 'the page stops loading, so the app does not run without its data');
   await assert.rejects(f.win.novaura.storage.get('x'), (e) => e.code === 'not_connected');
   f.win.localStorage.setItem('k', 'v');
   assert.equal(f.win.localStorage.getItem('k'), 'v');
