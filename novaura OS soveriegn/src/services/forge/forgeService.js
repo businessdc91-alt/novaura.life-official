@@ -12,6 +12,7 @@ import { verifyInHiddenFrame } from '../cybeni/previewHost.js';
 import { createProject, updateProject, listProjects, loadProjectFiles, replaceProjectFiles, createCheckpoint } from '../cybeni/projectStore.js';
 import { generateImage, iconPrompt, makeIconPng } from '../engines/imageGen.js';
 import { marketplacePublish } from '../marketplacePublishService.js';
+import { upsertLocalAddition } from '../additions/registry.js';
 
 const BRAND_KEY = 'forge_brand_profile';
 const USER_APPS_KEY = 'user_apps';
@@ -346,13 +347,13 @@ export async function listUserApps() {
   return db.getSetting(USER_APPS_KEY, []).catch(() => []);
 }
 
-/** Add a project to Sovereign as its own app (runs in the isolated preview). */
+/**
+ * Add a project to Sovereign as its own app, an addition. Adding it again (an update)
+ * keeps what the person granted it, its quota and its data.
+ */
 export async function integrateAsApp(slug, { name, color = '#7c3aed', iconBlobId = null }) {
-  const apps = (await listUserApps()).filter(a => a.slug !== slug);
-  const app = { id: `user_${slug}`, slug, name: name.slice(0, 40), color, iconBlobId, addedAt: Date.now() };
-  await db.setSetting(USER_APPS_KEY, [...apps, app]);
-  window.dispatchEvent(new CustomEvent('novaura:user_apps_changed'));
-  return app;
+  const project = (await listProjects()).find(p => p.slug === slug);
+  return upsertLocalAddition({ slug, name, color, iconBlobId, kind: project?.origin ? 'forge' : 'cybeni' });
 }
 
 export async function removeUserApp(slug) {
