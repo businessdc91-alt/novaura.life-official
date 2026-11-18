@@ -129,6 +129,15 @@ class WindowManager {
     this._notify();
   }
 
+  /** Change a window's title (an addition naming its own window, for one). */
+  setTitle(id, title) {
+    const win = this._windows.get(id);
+    if (!win) return;
+    win.title = String(title);
+    this._windows.set(id, win);
+    this._notify();
+  }
+
   closeAll() {
     const ids = [...this._windows.keys()];
     ids.forEach(id => this.close(id));
