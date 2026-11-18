@@ -11,3 +11,6 @@ pub mod addition_csp_rules;
 
 #[path = "../../src/addition_sessions_rules.rs"]
 pub mod addition_sessions_rules;
+
+#[path = "../../src/sentinel_runner_rules.rs"]
+pub mod sentinel_runner_rules;
