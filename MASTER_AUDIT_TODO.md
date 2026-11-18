@@ -1078,12 +1078,15 @@ Owner direction: nothing on the mesh is capped at kilobytes, and people must be 
     - `vite build` green;
     - headless Edge with real apps using `@cybeni/backend`: 7/7. Gemini's original runtime fails the two isolation checks in the same run.
     - Gemini's Creative Studio claims re-run and confirmed: browser suites 93/93, PSD 3/3, real-UI smoke 86/86.
-  - **Open (minor):**
-    - an app's `ai.chat` in the builder has no rate limit and uses Cybeni's developer/architect model;
-    - "streaming" reports the whole reply once, at the end;
-    - images are only sent to local models;
-    - in-preview passwords use a demo-grade hash, so never hold real credentials there;
-    - Gemini's `novapp.json` (`novapp-v1`) is unsigned and enforced by nothing. It gets folded into the Additions spec format (`novapp/1`) when Additions is built.
+  - **Minors, fixed 2026-11-18** (1c05b43, 7c2bd7e, c53fc38; 554/554 tests, 19/19 Rust, browser 7/7):
+    - [x] an app's `ai.chat` in the builder runs on the person's chosen OS model (AI subsystem, `useRag:false`, no cache), not Cybeni's developer model, per the Additions spec. At most 2 requests at once per app (backpressure, not a token cap); the app's `maxTokens` is honoured up to 32768. `ai.chat(m, { onToken })` streams.
+    - [x] real streaming from local models: native `query_local_ai_stream` (Tauri channel, 127.0.0.1 only) + `localStream.js` parsers; `runLocalChat` streams with `onToken` and falls back to one request. The OS AI's local chat also streams through the bridge now (the old direct `fetch` failed on LM Studio unless its CORS option was on). Cloud and Exchange replies still arrive in one piece.
+    - [x] reference images reach cloud models (Claude, Gemini, OpenAI-compatible, Bedrock, each in its own shape); a model that refuses images is asked again without them. Exchange hosts stay text-only (their protocol accepts strings).
+    - [x] in-preview passwords are PBKDF2-HMAC-SHA256 (20,000 rounds, 16-byte salt), still synchronous; old-hash accounts are moved over on sign-in. All preview apps still share the cyprev origin, so another app could read the records; Additions' opaque origins fix that.
+    - [x] machine: the dead `E:\visual studio\vs studio 3\NuGetPackages` fallback folder (left by an uninstalled Visual Studio in `C:\Program Files (x86)\NuGet\Config\Microsoft.VisualStudio.FallbackLocation.config`) is cleared in the user NuGet.Config; backup at `NuGet.Config.bak-2026-11-18`. Package restores and single-file publishes work again.
+  - **Open:**
+    - [ ] Gemini's `novapp.json` (`novapp-v1`) is unsigned and enforced by nothing. It gets folded into the Additions spec format (`novapp/1`) when Additions is built.
+    - [ ] installed user apps (`UserAppWindow`) don't answer `ai.chat` yet; that comes with the Additions bridge.
 - [ ] Full browser bundling of external npm dependencies (`react`, `recharts`, etc.) for 100% air-gapped third-party library installs without `esm.sh` (React core/UI + `@cybeni/backend` + Tailwind utilities are offline-resilient).
 - [ ] Rerun the baseline with headroom (two models loaded max), then line-ups C (Qwen 35B-A3B architect), D (Bonsai), Coder-Next developer.
 
