@@ -96,37 +96,38 @@ export async function runModel(
     ...(typeof onToken === 'function' ? { onToken } : {}),
   };
 
-  // Attach vision image payloads safely only on runtimes that natively accept them.
+  // Reference images: local runtimes get them in the last user message here; cloud
+  // providers get them as an option, since each provider's API wants its own shape
+  // (cloudProviders.js). Exchange hosts accept text only.
+  const validUrls = Array.isArray(images)
+    ? images.map(img => img?.dataUrl).filter(u => typeof u === 'string' && u.startsWith('data:image/'))
+    : [];
   let preparedMessages = messages;
-  if (Array.isArray(images) && images.length > 0 && Array.isArray(messages) && messages.length > 0) {
-    const validUrls = images.map(img => img?.dataUrl).filter(u => typeof u === 'string' && u.startsWith('data:image/'));
-    if (validUrls.length > 0) {
-      preparedMessages = messages.map((m, idx) => {
-        if (idx !== messages.length - 1 || m.role !== 'user' || typeof m.content !== 'string') return m;
-        if (k.startsWith('local|ollama:')) {
-          return {
-            ...m,
-            images: validUrls.map(u => u.replace(/^data:image\/[^;]+;base64,/, '')),
-          };
-        }
-        if (k.startsWith('local|lmstudio:') || k.startsWith('local|novaura:')) {
-          return {
-            ...m,
-            content: [
-              { type: 'text', text: m.content },
-              ...validUrls.map(url => ({ type: 'image_url', image_url: { url } })),
-            ],
-          };
-        }
-        return m;
-      });
-    }
+  if (validUrls.length > 0 && Array.isArray(messages) && messages.length > 0) {
+    preparedMessages = messages.map((m, idx) => {
+      if (idx !== messages.length - 1 || m.role !== 'user' || typeof m.content !== 'string') return m;
+      if (k.startsWith('local|ollama:')) {
+        return {
+          ...m,
+          images: validUrls.map(u => u.replace(/^data:image\/[^;]+;base64,/, '')),
+        };
+      }
+      if (k.startsWith('local|lmstudio:') || k.startsWith('local|novaura:')) {
+        return {
+          ...m,
+          content: [
+            { type: 'text', text: m.content },
+            ...validUrls.map(url => ({ type: 'image_url', image_url: { url } })),
+          ],
+        };
+      }
+      return m;
+    });
   }
 
   if (k.startsWith('local|')) {
-    const out = await runLocalChat(k.slice(6), preparedMessages, opts);
-    if (typeof onToken === 'function' && out) onToken(out);
-    return out;
+    // runLocalChat streams to onToken itself.
+    return runLocalChat(k.slice(6), preparedMessages, opts);
   }
   if (k.startsWith('exchange|')) {
     const [, keyId, ...rest] = k.split('|');
@@ -137,7 +138,13 @@ export async function runModel(
   if (k.startsWith('cloud|')) {
     if (!kernel?.ai?.chat) throw new Error('The AI subsystem is not ready yet.');
     const [, provider, ...model] = k.split('|');
-    return kernel.ai.chat(messages, { provider, model: model.join('|') || undefined, useRag: false, ...opts });
+    return kernel.ai.chat(messages, {
+      provider,
+      model: model.join('|') || undefined,
+      useRag: false,
+      ...opts,
+      ...(validUrls.length ? { images: validUrls } : {}),
+    });
   }
   throw new Error('No model chosen for this step.');
 }

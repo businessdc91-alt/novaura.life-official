@@ -152,6 +152,29 @@ function splitSystem(messages) {
   return { system, turns };
 }
 
+// Reference images arrive as data URLs (options.images) and go with the last user turn,
+// in the shape each API wants.
+function inlineImages(list) {
+  const out = [];
+  for (const url of Array.isArray(list) ? list : []) {
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(url || ''));
+    if (m) out.push({ url: String(url), mime: m[1].toLowerCase(), data: m[2] });
+  }
+  return out;
+}
+
+function lastUserIndex(list) {
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].role === 'user') return i;
+  return -1;
+}
+
+/** Returns the list with build(item, images) applied to the last user item, if there are images. */
+function withImages(list, images, build) {
+  const imgs = inlineImages(images);
+  const at = imgs.length ? lastUserIndex(list) : -1;
+  return list.map((item, i) => (i === at ? build(item, imgs) : item));
+}
+
 // Gemini and some OpenAI-compatible APIs accept only a subset of JSON Schema.
 function stripSchema(schema) {
   if (Array.isArray(schema)) return schema.map(stripSchema);
@@ -191,7 +214,13 @@ const ADAPTERS = {
         output_config: outputConfig,
         ...(fallback ? { fallbacks: 'default' } : {}),
         ...(system ? { system } : {}),
-        messages: turns,
+        messages: withImages(turns, o.images, (t, imgs) => ({
+          role: t.role,
+          content: [
+            ...imgs.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.data } })),
+            { type: 'text', text: t.content },
+          ],
+        })),
       },
     });
     if (data.stop_reason === 'refusal') {
@@ -218,7 +247,11 @@ const ADAPTERS = {
       headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
       body: {
         ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-        contents: turns.map(t => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.content }] })),
+        contents: withImages(
+          turns.map(t => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.content }] })),
+          o.images,
+          (c, imgs) => ({ ...c, parts: [...c.parts, ...imgs.map(im => ({ inlineData: { mimeType: im.mime, data: im.data } }))] }),
+        ),
         generationConfig: cfg,
       },
     });
@@ -242,7 +275,13 @@ const ADAPTERS = {
     const resolved = resolveReasoningParams(o);
     const maxBudget = reasoningTokenBudget(o.maxTokens ?? 8192, resolved, { strictMaxTokens: Boolean(o.jsonSchema && !resolved.think) });
     const buildBody = (includeEffort) => {
-      const body = { model, messages: messages.map(m => ({ role: m.role, content: m.content })) };
+      const body = {
+        model,
+        messages: withImages(messages.map(m => ({ role: m.role, content: m.content })), o.images, (m, imgs) => ({
+          role: m.role,
+          content: [{ type: 'text', text: m.content }, ...imgs.map(im => ({ type: 'image_url', image_url: { url: im.url } }))],
+        })),
+      };
       if (provider.completionTokens) {
         body.max_completion_tokens = maxBudget;
       } else {
@@ -287,7 +326,10 @@ const ADAPTERS = {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
       body: {
         ...(system ? { system: [{ text: system }] } : {}),
-        messages: turns.map(t => ({ role: t.role, content: [{ text: t.content }] })),
+        messages: withImages(turns.map(t => ({ role: t.role, content: [{ text: t.content }] })), o.images, (t, imgs) => ({
+          ...t,
+          content: [...t.content, ...imgs.map(im => ({ image: { format: im.mime.split('/')[1], source: { bytes: im.data } } }))],
+        })),
         inferenceConfig: { maxTokens: Math.min(o.maxTokens ?? 8192, 10000), temperature: o.temperature ?? 0.7 },
       },
     });
@@ -307,7 +349,17 @@ export async function providerChat(id, messages, getKey, options = {}) {
   const model = options.model || getKey(modelSetting(id)) || provider.defaultModel;
   if (!model) throw new Error(`Choose a ${provider.label} model in Settings → AI Keys & Models.`);
   const base = providerBase(provider, getKey);
-  return ADAPTERS[provider.kind](provider, base, key, model, messages, options);
+  const run = (opts) => ADAPTERS[provider.kind](provider, base, key, model, messages, opts);
+  if (!inlineImages(options.images).length) return run(options);
+  try {
+    return await run(options);
+  } catch (err) {
+    // A text-only model turns the images away; the request still makes sense without them.
+    if (!/error \((400|413|415|422)\)/.test(String(err?.message || ''))) throw err;
+    console.warn(`[cloudProviders] ${provider.label} did not accept the images; asking again without them:`, err.message);
+    const { images: _drop, ...textOnly } = options;
+    return run(textOnly);
+  }
 }
 
 /** Models the key can use, newest first where the API says so. Bedrock has no listing; its suggestions are returned. */
