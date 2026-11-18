@@ -187,12 +187,24 @@ class SovereignDatabase extends Dexie {
       addition_data: '[appId+key], appId',
     });
 
+    // v23 — Sentinel Probe: owner-verified probe targets, probe runs, and their
+    // redacted findings. See src/services/sentinel/targetStore.js. Data at rest here
+    // is redacted; raw observations live only in a run's working folder, wiped after.
+    this.version(23).stores({
+      probe_targets: 'id, kind, ref, isStaging, updatedAt',
+      probe_runs: 'id, targetId, mode, status, startedAt, finishedAt',
+      probe_findings: '[runId+id], runId, severity',
+    });
+
     this.identities = this.table('identities');
     this.domain_records = this.table('domain_records');
     this.domain_claims = this.table('domain_claims');
     this.template_installs = this.table('template_installs');
     this.template_acceptances = this.table('template_acceptances');
     this.addition_data = this.table('addition_data');
+    this.probe_targets = this.table('probe_targets');
+    this.probe_runs = this.table('probe_runs');
+    this.probe_findings = this.table('probe_findings');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
     this.documents = this.table('documents');
