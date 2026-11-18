@@ -104,3 +104,14 @@ test('an account saved with the old hash still signs in and is moved to the new 
   app.auth.signOut();
   assert.equal(app.auth.signIn({ email: 'old@example.com', password: 'hunter22' }).user?.id, 'usr_1', 'and signs in with the new hash');
 });
+
+test('@cybeni/backend keeps an existing v1 window.novaura', async () => {
+  const bridge = Object.freeze({ version: 1 });
+  const realWindow = { localStorage: { length: 0, key: () => null, getItem: () => null, setItem() {}, removeItem() {} }, parent: { postMessage() {} }, addEventListener() {} };
+  Object.defineProperty(realWindow, 'novaura', { value: bridge, writable: false, configurable: false, enumerable: true });
+  globalThis.window = realWindow;
+  const src = `${CYBENI_BACKEND_MODULE_SOURCE}\n// load v1 guard ${++loads}`;
+  const mod = await import(`data:text/javascript;base64,${Buffer.from(src, 'utf8').toString('base64')}`);
+  assert.equal(realWindow.novaura, bridge, 'the addition bridge stays');
+  assert.equal(realWindow.cybeniBackend, mod.novaura, 'the backend is still reachable');
+});

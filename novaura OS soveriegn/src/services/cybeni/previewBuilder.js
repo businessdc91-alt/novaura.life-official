@@ -15,6 +15,7 @@
 
 import { transform } from 'sucrase';
 import { TEST_AGENT_SOURCE, STORAGE_ISOLATION_SOURCE } from './testAgent.js';
+import { NOVAURA_V1_SOURCE } from '../additions/bridgeSource.js';
 import { pinnedSpecifier } from './libraryNotes.js';
 import { CYBENI_BACKEND_MODULE_SOURCE } from './fullStackRuntime.js';
 import { OFFLINE_TAILWIND_FALLBACK_SCRIPT } from './offlineShims.js';
@@ -173,9 +174,15 @@ function pickEntryHtml(files) {
 /**
  * Build a runnable preview of a project.
  * files: [{ path, content }] with project-relative paths.
- * options.mode: 'server' (needs options.baseUrl, e.g. http://cyprev.localhost/<session>/) or 'inline'.
+ * options.mode: 'server' (needs options.baseUrl, e.g. http://cyprev.localhost/<session>/), 'inline',
+ * or 'addition': like 'server', but the page first loads the launch's boot data and the
+ * novaura v1 bridge (src/services/additions), with no test agent, storage isolation or
+ * app name. options.inlineScripts ({ boot, bridge }) builds an addition as one inline
+ * document instead (a plain browser in development).
  */
-export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = '' } = {}) {
+export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = '', inlineScripts = null } = {}) {
+  const addition = mode === 'addition';
+  const served = mode === 'server' || (addition && !inlineScripts);
   const files = rawFiles
     .map(f => ({ path: normalizePath(f.path), content: typeof f.content === 'string' ? f.content : '' }))
     .filter(f => f.path);
@@ -209,7 +216,7 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
       let assetUrl;
       if (/^data:/i.test(trimmed)) assetUrl = trimmed;
       else if (/\.svg$/i.test(f.path)) assetUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(f.content)}`;
-      else assetUrl = mode === 'server' ? `${baseUrl}${f.path}` : trimmed;
+      else assetUrl = served ? `${baseUrl}${f.path}` : trimmed;
       assetMap[f.path] = assetUrl;
       modules.set(`${f.path}.assetmod.js`, `export default ${JSON.stringify(assetUrl)};\n`);
     }
@@ -304,12 +311,12 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
   for (const [spec, target] of Object.entries(ownImports)) {
     if (!/^react(-dom)?(\/|$)/.test(spec) && !spec.startsWith('@cy/') && !VIRTUAL_PACKAGES.has(spec)) imports[spec] = target;
   }
-  const backendUrl = mode === 'server'
+  const backendUrl = served
     ? `${baseUrl}${VIRTUAL_BACKEND_PATH}`
     : `data:text/javascript;base64,${toBase64Utf8(CYBENI_BACKEND_MODULE_SOURCE)}`;
   imports['@cybeni/backend'] = backendUrl;
   imports['@novaura/sdk'] = backendUrl;
-  if (mode === 'server') {
+  if (served) {
     imports['@cy/'] = baseUrl;
   } else {
     for (const [path, code] of modules) imports[`@cy/${path}`] = `data:text/javascript;base64,${toBase64Utf8(code)}`;
@@ -323,7 +330,14 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
   const appIdScript = appId
     ? `<script>window.__cybeniAppId=${JSON.stringify(String(appId).slice(0, 80)).replace(/</g, '\\u003c')};</script>\n`
     : '';
-  const head = `${appIdScript}<script>${STORAGE_ISOLATION_SOURCE}</script>\n<script>${ERROR_REPORTER}</script>\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>\n<script>${escapeScript(OFFLINE_TAILWIND_FALLBACK_SCRIPT)}</script>${assetBootstrap}\n<script type="importmap">${JSON.stringify({ imports })}</script>\n<script type="module">import '@cybeni/backend';</script>`;
+  // An addition starts with its boot data and the novaura bridge, before anything of its own.
+  const additionHead = !addition ? ''
+    : inlineScripts
+      ? `<script>${escapeScript(inlineScripts.boot)}</script>\n<script>${escapeScript(inlineScripts.bridge)}</script>\n`
+      : `<script src="${baseUrl}__novaura/boot.js"></script>\n<script src="${baseUrl}__novaura/v1.js"></script>\n`;
+  const previewOnly = addition ? '' : `${appIdScript}<script>${STORAGE_ISOLATION_SOURCE}</script>\n`;
+  const testAgent = addition ? '' : `\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>`;
+  const head = `${additionHead}${previewOnly}<script>${ERROR_REPORTER}</script>${testAgent}\n<script>${escapeScript(OFFLINE_TAILWIND_FALLBACK_SCRIPT)}</script>${assetBootstrap}\n<script type="importmap">${JSON.stringify({ imports })}</script>\n<script type="module">import '@cybeni/backend';</script>`;
   if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, m => `${m}\n${head}`);
   else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, m => `${m}\n<head>${head}</head>`);
   else html = `${head}\n${html}`;
@@ -331,13 +345,14 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
   issues.push(...nativeStaticCheck(files));
 
   const result = { html, issues, npm: [...bare].sort(), entryNote };
-  if (mode === 'server') {
+  if (served) {
     const serverFiles = [];
     for (const f of files) {
       if (!modules.has(f.path) && f.path !== htmlPath) serverFiles.push({ path: f.path, content: f.content, mime: mimeFor(f.path) });
     }
     for (const [path, code] of modules) serverFiles.push({ path, content: code, mime: 'text/javascript' });
     serverFiles.push({ path: 'index.html', content: html, mime: 'text/html' });
+    if (addition) serverFiles.push({ path: '__novaura/v1.js', content: NOVAURA_V1_SOURCE, mime: 'text/javascript' });
     result.serverFiles = serverFiles;
   }
   return result;

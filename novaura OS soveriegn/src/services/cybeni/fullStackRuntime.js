@@ -655,7 +655,9 @@ export const novaura = {
 };
 
 if (typeof window !== 'undefined') {
-  window.novaura = novaura;
+  // Inside an addition the OS's own novaura v1 bridge is already there (and can't be
+  // replaced); this backend then stays reachable as window.cybeniBackend only.
+  if (!(window.novaura && window.novaura.version === 1)) window.novaura = novaura;
   window.cybeniBackend = novaura;
 
   window.addEventListener('message', (e) => {

@@ -56,6 +56,9 @@ export function bridgeMain(limits) {
     const m = /(?:^#|&)nv=([A-Za-z0-9]+)/.exec(String(w.location.hash || ''));
     nonce = m ? m[1] : null;
   } catch { nonce = null; }
+  // An inline (srcdoc) frame has no address to carry the nonce, so its boot data does.
+  if (!nonce && boot && typeof boot.nonce === 'string' && /^[A-Za-z0-9]+$/.test(boot.nonce)) nonce = boot.nonce;
+  const fromHash = Boolean(nonce) && !(boot && boot.nonce === nonce);
   const connectable = Boolean(boot && nonce);
 
   // ── Port and requests ─────────────────────────────────────────────────────
@@ -197,7 +200,7 @@ export function bridgeMain(limits) {
   }
 
   // ── 3. Clear the launch nonce from the address ────────────────────────────
-  if (nonce) {
+  if (fromHash) {
     try { w.history.replaceState(null, '', String(w.location.pathname || '') + String(w.location.search || '')); } catch { /* keep going */ }
   }
 

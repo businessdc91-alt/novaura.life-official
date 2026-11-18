@@ -16,7 +16,7 @@ export function newSessionId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(10)), b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function protocolBase(session) {
+export function protocolBase(session) {
   // Tauri serves custom protocols as http://<scheme>.localhost on Windows.
   const windows = /Windows/i.test(navigator.userAgent);
   return windows ? `http://cyprev.localhost/${session}/` : `cyprev://localhost/${session}/`;

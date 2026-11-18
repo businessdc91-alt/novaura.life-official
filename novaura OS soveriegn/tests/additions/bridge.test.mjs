@@ -239,3 +239,10 @@ test('ai.chat sends only cloneable options', async () => {
   await tick0();
   assert.deepEqual(port.sent[0].a, { messages: [{ role: 'user', content: 'hi' }], opts: { maxTokens: 10, temperature: 0.2, stream: true } });
 });
+
+test('an inline frame with no hash takes its nonce from the boot data', () => {
+  const f = makeFrame({ boot: defaultBoot({ nonce: 'inl1ne' }), hash: '', pathname: 'srcdoc' });
+  assert.deepEqual(f.posted[0].msg, { __novaura: 'hello', nonce: 'inl1ne', apiVersion: 1 });
+  const hashWins = makeFrame({ boot: defaultBoot({ nonce: 'inl1ne' }), hash: '#nv=fr0mhash' });
+  assert.equal(hashWins.posted[0].msg.nonce, 'fr0mhash');
+});
