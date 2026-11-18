@@ -1,6 +1,8 @@
 // Which network origins an addition may be allowed to reach. Mirrors
-// src-tauri/src/addition_csp_rules.rs (the CSP itself is only ever built in Rust);
-// both are checked against tests/additions/network-origins.cases.txt.
+// src-tauri/src/addition_csp_rules.rs; both are checked against
+// tests/additions/network-origins.cases.txt and addition-csp.golden.txt. In the
+// desktop app the CSP is always built in Rust (addition_publish); additionCsp here is
+// only for an inline addition in a plain browser during development.
 //
 // Only https:// and wss:// with a dotted DNS name are accepted. IP literals,
 // localhost and every *.localhost name (including ipc.localhost, the OS's own IPC
@@ -36,6 +38,33 @@ export function cleanNetworkOrigin(input) {
   if (/^\d+$/.test(last) || last === 'localhost') return null;
 
   return port == null ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
+}
+
+const CDNS = 'https://esm.sh https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com';
+
+/** The same ADDITION_CSP Rust builds; throws naming the first origin that may not be allowed. */
+export function additionCsp(network = []) {
+  const clean = [];
+  for (const raw of network) {
+    const origin = cleanNetworkOrigin(raw);
+    if (!origin) throw new Error(`Not an allowed network origin: ${raw}`);
+    if (!clean.includes(origin)) clean.push(origin);
+  }
+  const n = clean.length ? ` ${clean.join(' ')}` : '';
+  return [
+    "default-src 'self' data: blob:",
+    `script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ${CDNS}`,
+    `style-src 'self' 'unsafe-inline' data: ${CDNS}`,
+    `img-src 'self' data: blob:${n}`,
+    `font-src 'self' data: blob:${n}`,
+    `media-src 'self' data: blob:${n}`,
+    `connect-src 'self' data: blob:${n}`,
+    `frame-src 'self' data: blob:${n}`,
+    `form-action 'self'${n}`,
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; ');
 }
 
 /** scheme://host[:port] of any network URL (http, https, ws, wss), or null. */

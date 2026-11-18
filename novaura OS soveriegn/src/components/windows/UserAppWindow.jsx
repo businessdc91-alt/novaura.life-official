@@ -26,7 +26,7 @@ export default function UserAppWindow({ appId, slug, name, windowId, onClose }) 
       deps: defaultControllerDeps({ windowId, onClose: () => closeRef.current?.() }),
       onState: (s) => {
         if ('error' in s) setError(s.error || '');
-        if (s.banner) setBanner(s.banner);
+        if ('banner' in s) setBanner(s.banner || null);
       },
     });
     ctrlRef.current = ctrl;

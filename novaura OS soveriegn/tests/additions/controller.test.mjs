@@ -160,3 +160,15 @@ test('an addition that no longer exists shows an error instead of launching', as
   assert.ok(log.states.some((s) => /removed/i.test(s.error || '')));
   ctrl.dispose();
 });
+
+test('the banner clears once its origin is granted', async () => {
+  const { ctrl, frame, log, change } = setup();
+  await ctrl.start(frame);
+  log.routers[0].onBlocked('https://api.weather.gov');
+  await settle();
+  change('user_notes', { grants: { permissions: [], network: ['https://api.weather.gov'] } });
+  await settle();
+  assert.equal(log.launches.length, 2);
+  assert.deepEqual(log.states.at(-1).banner, null);
+  ctrl.dispose();
+});

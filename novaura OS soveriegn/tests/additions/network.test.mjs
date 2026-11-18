@@ -28,3 +28,16 @@ test('originOf gives the origin of a blocked URL', () => {
   assert.equal(originOf('about:blank'), null);
   assert.equal(originOf('not a url'), null);
 });
+
+test('the inline (development) copy of ADDITION_CSP matches the golden file Rust is held to', async () => {
+  const { additionCsp } = await import('../../src/services/additions/network.js');
+  const golden = readFileSync(new URL('./addition-csp.golden.txt', import.meta.url), 'utf8');
+  let network = null;
+  let blocks = 0;
+  for (const line of golden.split(/\r?\n/)) {
+    if (line.startsWith('network:')) network = line.slice('network:'.length).trim().split(/\s+/).filter(Boolean);
+    else if (line.startsWith('csp: ')) { assert.equal(additionCsp(network), line.slice(5)); blocks++; }
+  }
+  assert.equal(blocks, 2);
+  assert.throws(() => additionCsp(['https://ok.example', 'http://bad']), /http:\/\/bad/);
+});

@@ -120,7 +120,10 @@ export function createAdditionController({ appId, deps, onState = () => {} }) {
     session = doc.session;
     key = launchKey(addition);
     navigate(doc);
-    onState({ doc, error: '', issues: doc.issues || [] });
+    // A banner for an origin the person has since allowed has done its job.
+    const granted = addition.grants?.network || [];
+    const shown = [...banners].at(-1);
+    onState({ doc, error: '', issues: doc.issues || [], ...(shown && granted.includes(shown) ? { banner: null } : {}) });
     return doc;
   }
 

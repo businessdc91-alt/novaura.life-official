@@ -7,6 +7,7 @@
 
 import { buildPreview } from '../cybeni/previewBuilder.js';
 import { NOVAURA_V1_SOURCE } from './bridgeSource.js';
+import { additionCsp } from './network.js';
 
 /** Never allow-same-origin: each running addition gets its own opaque origin. */
 export const ADDITION_SANDBOX = 'allow-scripts allow-forms allow-modals';
@@ -53,8 +54,10 @@ export async function launchAddition(addition, { data, invoke, loadFiles, hostOr
   const nonce = newNonce();
 
   if (!invoke) {
+    // Development in a plain browser: the same policy, as a meta tag.
     const boot = bootScript({ app, snapshot, theme, hostOrigin, nonce });
-    const out = buildPreview(files, { mode: 'addition', inlineScripts: { boot, bridge: NOVAURA_V1_SOURCE } });
+    const csp = additionCsp(addition.grants?.network || []);
+    const out = buildPreview(files, { mode: 'addition', inlineScripts: { boot, bridge: NOVAURA_V1_SOURCE, csp } });
     return { session: null, nonce, srcdoc: out.html, sandbox: ADDITION_SANDBOX, issues: out.issues };
   }
 

@@ -132,3 +132,12 @@ test('stopping an addition clears its session', async () => {
   await stopAddition(null, async () => { throw new Error('should not be called'); });
   await stopAddition('sess0001abcd', async () => { throw new Error('gone'); });
 });
+
+test('an inline addition carries the same CSP as a meta tag, ahead of everything else', async () => {
+  const { additionCsp } = await import('../../src/services/additions/network.js');
+  const { out } = await launch({}, { invoke: null });
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${additionCsp(['https://api.weather.gov'])}">`;
+  const at = out.srcdoc.indexOf(meta);
+  assert.ok(at > 0, 'no CSP meta tag');
+  assert.ok(at < out.srcdoc.indexOf('window.__novauraBoot='), 'the policy must come before any script');
+});

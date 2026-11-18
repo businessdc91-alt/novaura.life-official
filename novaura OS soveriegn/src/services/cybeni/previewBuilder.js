@@ -333,7 +333,7 @@ export function buildPreview(rawFiles, { mode = 'inline', baseUrl = '', appId = 
   // An addition starts with its boot data and the novaura bridge, before anything of its own.
   const additionHead = !addition ? ''
     : inlineScripts
-      ? `<script>${escapeScript(inlineScripts.boot)}</script>\n<script>${escapeScript(inlineScripts.bridge)}</script>\n`
+      ? `${inlineScripts.csp ? `<meta http-equiv="Content-Security-Policy" content="${String(inlineScripts.csp).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">\n` : ''}<script>${escapeScript(inlineScripts.boot)}</script>\n<script>${escapeScript(inlineScripts.bridge)}</script>\n`
       : `<script src="${baseUrl}__novaura/boot.js"></script>\n<script src="${baseUrl}__novaura/v1.js"></script>\n`;
   const previewOnly = addition ? '' : `${appIdScript}<script>${STORAGE_ISOLATION_SOURCE}</script>\n`;
   const testAgent = addition ? '' : `\n<script>${escapeScript(TEST_AGENT_SOURCE)}</script>`;
