@@ -1,12 +1,13 @@
 import CloudKeysPanel from './settings/CloudKeysPanel.jsx';
 import BackupPanel from './settings/BackupPanel.jsx';
+import AdditionsPanel from './settings/AdditionsPanel.jsx';
 import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 import React, { useState, useEffect } from 'react';
 import {
   Settings, Key, Cpu, HardDrive, ShieldCheck, Download,
   RefreshCw, Check, Sparkles, Database, Palette, AlertCircle,
   Gauge, Network, Lock, Layers, Zap, CheckCircle2, AlertTriangle, Server,
-  Bug, LifeBuoy, ClipboardCopy, RotateCcw, FileText, Send, MessageSquare
+  Bug, LifeBuoy, ClipboardCopy, RotateCcw, FileText, Send, MessageSquare, Puzzle
 } from 'lucide-react';
 import { useKernel } from '../../kernel/useKernel.js';
 import { db, resetDatabaseToFactory } from '../../database/sovereignDatabase.js';
@@ -16,19 +17,21 @@ import { evaluateHostHardware, HARDWARE_TIERS } from '../../services/hardwareSpe
 import { interAppSecurityBroker } from '../../kernel/InterAppSecurityBroker.js';
 import { APP_VERSION, BUILD_TIME, buildDateLabel } from '../../config/buildInfo.js';
 
-export default function SettingsDiagnosticsWindow({ defaultTab = 'specs' }) {
+export default function SettingsDiagnosticsWindow({ defaultTab, props }) {
   const { kernel } = useKernel();
-  const [activeTab, setActiveTab] = useState(defaultTab); // 'specs' | 'ai' | 'diagnostics' | 'backup' | 'beta'
+  // Opened with a tab in mind (window props, e.g. Settings → Additions from an addition), or the first one.
+  const initialTab = props?.defaultTab || defaultTab || 'specs';
+  const [activeTab, setActiveTab] = useState(initialTab); // 'specs' | 'ai' | 'additions' | 'diagnostics' | 'backup' | 'beta'
 
   // Sync tab with external events or props
   useEffect(() => {
-    if (defaultTab) setActiveTab(defaultTab);
+    if (initialTab) setActiveTab(initialTab);
     const handleTabSwitch = (e) => {
       if (e.detail) setActiveTab(e.detail);
     };
     window.addEventListener('novaura:open_settings_tab', handleTabSwitch);
     return () => window.removeEventListener('novaura:open_settings_tab', handleTabSwitch);
-  }, [defaultTab]);
+  }, [initialTab]);
 
   // Auto-probe local AI engines when switching to beta or ai tabs
   useEffect(() => {
@@ -399,6 +402,18 @@ ${betaForm.description || 'No steps provided.'}
           >
             <Key className="w-4 h-4 text-cyan-400" />
             <span>AI Keys & Models</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('additions')}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+              activeTab === 'additions'
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+            }`}
+          >
+            <Puzzle className="w-4 h-4 text-violet-400" />
+            <span>Additions</span>
           </button>
 
           <button
@@ -894,6 +909,8 @@ ${betaForm.description || 'No steps provided.'}
             </div>
           </div>
         )}
+
+        {activeTab === 'additions' && <AdditionsPanel />}
 
         {activeTab === 'backup' && <BackupPanel />}
 
