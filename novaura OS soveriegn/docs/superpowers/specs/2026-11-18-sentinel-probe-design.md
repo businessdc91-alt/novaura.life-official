@@ -29,15 +29,15 @@ The asset owner (Dillan first; later, any Sovereign user testing their own sites
 
 There are two separate safety goals, and conflating them is the usual mistake. This design keeps them apart:
 
-- **Contain the attacker.** The probe generates and launches attack-shaped traffic. That execution runs inside a **throwaway VM** (Windows Sandbox for v1) that can reach only the target over the network and has no access to the host filesystem, OS, or other services. If the target responds maliciously, or a probe misbehaves, the blast radius is a VM that is destroyed at the end of the run. The sandbox protects the host **from the target and from the agent's own actions.**
+- **Contain the attacker.** The probe generates and launches attack-shaped traffic. That execution runs inside a **throwaway VM** (Windows Sandbox for v1) with **no network egress at all** — the firewall denies every outbound connection, so the VM can reach neither the host nor the internet. The target is not reached remotely: a **copy of the target's servable content is placed inside the VM and served on its own loopback**, so the attacker and the target copy both live in the disposable VM. (This also resolves a problem with reaching the target "remotely": mesh and local-project targets are served by the owner's own host, so letting the VM reach them would mean letting it reach the host — exactly what isolation must prevent. Serving a copy inside removes that path. External domains, which genuinely are remote, are deferred to a later phase and the runner that handles them.) If the target copy responds maliciously, or a probe misbehaves, the blast radius is a VM that is destroyed at the end of the run. The sandbox protects the host **from the target and from the agent's own actions.**
 
 - **Protect the artifact.** To find bugs, the AI has to see the target's responses, which may contain sensitive data. That reasoning runs on **trusted compute** — the owner's local model (LM Studio / built-in AI) or the owner's own cloud key — so the data stays within the owner's own trust boundary. Before any finding is persisted to the database, shown in a shareable view, or exported, a **redaction pass** strips the sensitive data. Redaction protects **what gets stored and shared**, which is what "without exposing what it found" means.
 
-So the flow of data is entirely within the owner's trust: owned target → disposable sandbox executor → owner's host brain (local/own-key AI) → redacted report. The sandbox is the executor; the host is the brain; redaction gates the output; the ownership gate is the wall around the whole thing.
+So the flow of data is entirely within the owner's trust: the owner's host copies the owned target's content into the VM → the disposable VM serves it and probes it → raw observations come back to the owner's host brain (local/own-key AI) over a filesystem channel → redacted report. The sandbox is the executor; the host is the brain; redaction gates the output; the ownership gate is the wall around the whole thing.
 
 ### Why the brain is on the host, not in the sandbox
 
-The sandbox's only network egress is to the target. Putting the model inside would mean either loading a model into a disposable VM on every run (impractical) or punching an AI-sized hole in the network wall (weakens isolation). Instead, the sandbox holds only the "hands" (the probe executor). The host holds the "brain" (the planner + the owner's model). They talk over a **file-based control channel** on a mapped folder — no host↔sandbox network path is opened, so the sandbox's network wall stays "target only."
+The sandbox has no network egress. Putting the model inside would mean either loading a model into a disposable VM on every run (impractical) or opening a network path out of the VM for the AI (which would defeat the no-egress wall). Instead, the sandbox holds only the "hands" (the probe executor and the served target copy). The host holds the "brain" (the planner + the owner's model). They talk over a **file-based control channel** on a mapped folder — the only path in or out of the VM is that shared folder on the owner's own disk; no network path is opened at all.
 
 ## Architecture
 
@@ -61,11 +61,11 @@ Isolation is swappable behind one interface so Hyper-V can replace Windows Sandb
 
 - `ProbeRunner` interface: `start(scopeToken, plan) -> session`, `send(session, command) -> void`, `receive(session) -> observation | null`, `stop(session) -> void`, `collectReport(session) -> redactedReport`.
 - **v1 implementation — Windows Sandbox** (`windowsSandboxRunner`, driven from a Tauri command):
-  - Generates a `.wsb` config that maps two folders: `in/` (read-only in the sandbox: the probe toolkit, the scope token, the run mode) and `io/` (read-write: the file-based control channel and the redacted report out).
-  - A startup script inside the sandbox: (a) sets Windows Firewall to **default-deny outbound**, allowing only the resolved target IP(s); (b) launches the in-sandbox executor.
-  - The sandbox is disposable — it resets completely when it closes, so nothing from the probe persists except what the executor wrote to `io/` (already redacted).
+  - Generates a `.wsb` config that maps two folders: `in/` (read-only in the sandbox: the target's content copy, the probe toolkit, the startup script, the scope token, the run mode) and `io/` (read-write: the file-based control channel and the observations/report out).
+  - A startup script inside the sandbox: (a) sets Windows Firewall to **default-deny all outbound** — no network egress at all; (b) serves the target content copy on a sandbox-local loopback address; (c) launches the in-sandbox executor, which probes that loopback.
+  - Because the target is a copy inside the VM and the host↔VM channel is the mapped folder, the VM needs no network path to anything. The executor's HTTP client is additionally pinned to the sandbox-loopback target, so even inside the VM it refuses any other host.
+  - The sandbox is disposable — it resets completely when it closes, so nothing from the probe persists except what was written to `io/` (and the host wipes the working folder after collecting the redacted report).
   - Teardown destroys the sandbox; a **Stop** control destroys it immediately mid-run.
-  - Defense in depth: the toolkit's HTTP client also validates every request host against the scope token and refuses anything off-target, so the network wall and the client wall both have to fail for a stray request to escape.
 - Requires the Windows Sandbox optional feature; if it is unavailable the runner **fails loudly** and the UI explains how to enable it. It never silently downgrades to a weaker isolation.
 
 ### 3. Probe agent and check library — `src/services/sentinel/agent.js`, `src/services/sentinel/checks/`
@@ -115,8 +115,8 @@ These hold only redacted data, so they are safe to include in backups.
 
 1. Owner picks a target and mode in the UI.
 2. The ownership gate resolves and verifies it, re-checking ownership live, and mints a single-use scope token (Deep also checks the staging flag + attestation).
-3. The runner starts a throwaway sandbox with the toolkit, the token, and the mode; the firewall is set to target-only.
-4. The host planner and the in-sandbox executor run the plan loop over the mapped control channel; the executor touches only the target and streams raw observations back.
+3. The host copies the target's servable content into the run's `in/` folder; the runner starts a throwaway sandbox with the content copy, the toolkit, the token, and the mode; the firewall denies all outbound and the content copy is served on sandbox loopback.
+4. The host planner and the in-sandbox executor run the plan loop over the mapped control channel; the executor probes only the sandbox-local target copy and streams raw observations back.
 5. The host planner assembles findings and redacts them before any are written to the database.
 6. The report is stored (redacted) and shown; the sandbox is destroyed and its working folder wiped.
 
@@ -124,7 +124,7 @@ These hold only redacted data, so they are safe to include in backups.
 
 - **No scope token, no run.** The runner refuses to start without a gate-signed token, and the token names exactly one target and mode.
 - **Ownership is re-verified at run time** from `domain_records`/`listProjects()`, not trusted from `probe_targets`.
-- **Target-only network.** The sandbox's firewall denies outbound except the target; the toolkit HTTP client independently refuses off-target hosts.
+- **No network egress.** The sandbox's firewall denies all outbound — it reaches neither the host nor the internet. The target is a copy served on sandbox loopback; the executor's HTTP client is pinned to that loopback and refuses any other host.
 - **Deep mode needs a staging target + attestation;** it refuses production.
 - **Non-destructive in Safe mode** by construction — no state-changing check exists in the Safe set.
 - **Rate-limited** per run, with a time budget and an immediate Stop.
@@ -157,7 +157,7 @@ Rust-testable logic (scope-token signing/verification, host allowlisting) goes i
 The pieces are sequenced so each lands safe and testable:
 
 1. Ownership gate + scope token + `probe_targets` (the wall, first).
-2. `ProbeRunner` interface + Windows Sandbox runner + the file control channel + target-only firewall (isolation, with a trivial echo check to prove the loop).
+2. `ProbeRunner` interface + Windows Sandbox runner + the file control channel + deny-all-outbound firewall + serving the target copy on sandbox loopback (isolation, with a trivial echo check to prove the loop).
 3. Redaction + report + the data model (so nothing unredacted is ever stored, before real checks exist).
 4. The check library (Safe set first) + the host agent loop.
 5. UI + Deep mode + the staging attestation.
@@ -167,15 +167,15 @@ Whether this is one implementation plan or a few sequential ones (the gate; the 
 
 ## Later
 
-- **Hyper-V runner** — a real private virtual switch and a firewall allowlist so the VM reaches only the target at the network level; drops into `ProbeRunner`.
-- **External domains** — a DNS-TXT ownership challenge, once the gate and the rest are hardened.
+- **Hyper-V runner** — a real private virtual switch and a firewall allowlist, for the case where the target must be reached live rather than copied in; drops into `ProbeRunner`.
+- **External domains** — a DNS-TXT ownership challenge, and (since a live external site can't be copied into the VM) the target-only-egress runner above, once the gate and the rest are hardened. This is the one case that needs real outbound from the VM, which is why it waits.
 - **A larger check library** and optional vetted CLI tools (better suited to the Hyper-V/container runner).
 - **Scheduled / continuous probing** and diffing findings between runs.
 - **Probing your own Additions** — the opaque-origin app sandbox and this probe share a threat model.
 
 ## Owner decisions (from brainstorming, 2026-11-18)
 
-1. **Isolation:** a throwaway VM. v1 realizes it with **Windows Sandbox** (built-in, disposable), network wall enforced in software (target-only firewall + client allowlist); **Hyper-V** (hard network isolation) drops into the same runner interface later.
+1. **Isolation:** a throwaway VM. v1 realizes it with **Windows Sandbox** (built-in, disposable) running with **no network egress** — the target is copied in and served on sandbox loopback, so the VM reaches neither host nor internet; **Hyper-V** (for live remote targets, with hard network isolation) drops into the same runner interface later.
 2. **Aggressiveness:** selectable per run — **Safe** (active, non-destructive) and **Deep** (state-changing, staging only).
 3. **AI location:** the owner's **local model**, with the owner's **own cloud key** as an opt-in. Never the decentralized inference network for this tool.
 4. **First targets:** **mesh/hosted sites and Cybeni/Forge projects** in v1; **external domains** after v1 is fully tested and hardened.
