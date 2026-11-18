@@ -1085,8 +1085,45 @@ Owner direction: nothing on the mesh is capped at kilobytes, and people must be 
     - [x] in-preview passwords are PBKDF2-HMAC-SHA256 (20,000 rounds, 16-byte salt), still synchronous; old-hash accounts are moved over on sign-in. All preview apps still share the cyprev origin, so another app could read the records; Additions' opaque origins fix that.
     - [x] machine: the dead `E:\visual studio\vs studio 3\NuGetPackages` fallback folder (left by an uninstalled Visual Studio in `C:\Program Files (x86)\NuGet\Config\Microsoft.VisualStudio.FallbackLocation.config`) is cleared in the user NuGet.Config; backup at `NuGet.Config.bak-2026-11-18`. Package restores and single-file publishes work again.
   - **Open:**
-    - [ ] Gemini's `novapp.json` (`novapp-v1`) is unsigned and enforced by nothing. It gets folded into the Additions spec format (`novapp/1`) when Additions is built.
-    - [ ] installed user apps (`UserAppWindow`) don't answer `ai.chat` yet; that comes with the Additions bridge.
+    - [ ] Gemini's `novapp.json` (`novapp-v1`) is unsigned and enforced by nothing. Installs now go through `integrateAsApp`, which gives every app a `novapp/1` local manifest (Additions, 2026-11-18). The file Cybeni ships is still `novapp-v1`; it gets replaced by signed `.novapp` bundles in Additions plan 3.
+    - [ ] installed user apps don't answer `ai.chat` yet: `novaura.ai.chat` says `permission_denied`/`not_available`, and `@cybeni/backend`'s `ai-request` gets no answer inside an addition (times out at 120 s, as before). Additions plan 2.
+- [x] **Additions — runtime and basic API (spec steps 0–1), 2026-11-18** (branch `aura-core/regulation`, ff0ff66..320572e; plan `novaura OS soveriegn/docs/superpowers/plans/2026-11-18-additions-runtime.md`):
+  - Each installed user app runs in a frame with sandbox `allow-scripts allow-forms allow-modals` (no allow-same-origin, so it has its own opaque origin), served from a separate `cyprev` addition pool (32 sessions, 256 MB each, 1 GB total). Its CSP is built in Rust from the network origins the person granted; it never allows localhost, 127.0.0.1 or `ipc.localhost`.
+  - The `__novaura/v1.js` bridge:
+    - provides `novaura` v1 (`storage`, `ui`; `notify`/`ai`/`files` closed until plan 2);
+    - backs a localStorage replacement (64 MB) with Dexie `addition_data` (database version 22), with a 1 GB quota per addition that the person can raise;
+    - hands over the port with a nonce handshake;
+    - relaunches an app after it reloads itself, or after its grants change.
+  - The router enforces budgets: 50 requests/s, 16 MB messages with chunks for anything larger, its own budget for events, capped pending reads, and up to 32 blocked origins listed.
+  - Existing "my apps" are moved over on first launch: each gets a manifest with no permissions and its share of the old shared storage is copied; nothing is deleted. Apps that used IndexedDB/Dexie are flagged.
+  - Settings → Additions: network toggles, quota, Copy old data again, Remove (with Keep its data). The launcher category is now "Additions". A blocked origin shows a banner with Review.
+  - Step-0 spike in the installed 1.0.14 (owner-approved): module scripts load in the opaque frame, localStorage can be replaced, and the port round-trips.
+  - Verified: `npm test` 677/677; `npm run tauri:test` 31/31; `tauri:check` clean; `vite build` green; `npm run test:additions` 13/13 (headless Edge, fake cyprev with the golden CSP); a headless smoke of the real window and panel passed 11/11.
+  - A fresh whole-branch review found nothing critical: no way to reach other additions' or OS data, and no handshake takeover. Its Important 1–5 and three re-graded minors are fixed (f5b64b2, 320572e).
+  - [x] Live check in the installed 1.0.15 (2026-11-18, owner-approved; installed silently over 1.0.14):
+    - **What it ran:** a throwaway probe addition was published through the real `addition_publish` (memory only, cleared afterwards) and framed with the addition sandbox.
+    - **Inside the frame:**
+      - origin `null`, `novaura` v1, the nonce gone from the address;
+      - blocked: fetches to LM Studio `:1234`, the built-in AI `:39281`, `localhost` by name, `ipc.localhost`, and an origin that wasn't granted;
+      - the granted origin was allowed, and the OS database refused (`SecurityError`);
+      - `boot.js` was served only once (404 when fetched again);
+      - navigating the frame itself to `http://127.0.0.1:1234/` or `https://example.com/` ended on Chrome's error page, with nothing loaded;
+      - an `invoke` from the frame got no answer. The Tauri handles are injected non-configurable, so the bridge can't remove them, but they reach nothing.
+    - **Rust** refuses `http://127.0.0.1:1234` as a network origin.
+    - **Profile:** the database upgraded to version 22 with `addition_data`. Settings → Additions shows its empty state. The owner's profile has no installed apps yet, so there was nothing to migrate and no moved app to open. That path is covered by the headless smoke on real components and by `npm run test:additions`.
+    - **Lag:** the owner saw heavy lag during the check. The cause was three LM Studio models (about 45 GB of RAM, 3.6 GB free of 64 GB, so the system was paging), not Sovereign: its processes were 200–330 MB each.
+  - [ ] Known limits (in the spec):
+    - WebRTC/TURN is not covered by the CSP. Decide before third-party additions spread.
+    - Self-navigation is blocked only by the OS window's `frame-src` in `tauri.conf.json`. Never widen it.
+  - [ ] Deferred minors from the review:
+    - have the bridge create the MessageChannel, so the port is never posted to `'*'` and writes made before the port arrives survive an early reload;
+    - a `__proto__` localStorage key is lost through the boot object literal;
+    - `writeLocalStorage` is not in one transaction;
+    - `get`/`keys` don't wait for queued writes;
+    - set `popout:false` for additions;
+    - Copy old data again should confirm first;
+    - `upsertLocalAddition` resets `addedAt`.
+  - [ ] Outside the diff: `PlatformBridgeWindow.jsx` has a message listener with no source check. It isn't registered, so it's unreachable today. Fix it or delete it before it's ever registered.
 - [ ] Full browser bundling of external npm dependencies (`react`, `recharts`, etc.) for 100% air-gapped third-party library installs without `esm.sh` (React core/UI + `@cybeni/backend` + Tailwind utilities are offline-resilient).
 - [ ] Rerun the baseline with headroom (two models loaded max), then line-ups C (Qwen 35B-A3B architect), D (Bonsai), Coder-Next developer.
 

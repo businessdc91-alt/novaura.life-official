@@ -577,3 +577,56 @@ Expected: Rust tests and `network.test.mjs` pass.
   - `npx vite build`: green;
   - `npm run test:additions`: 13 `ok`.
 - [ ] **Step 4: Commit** with the message `docs(additions): runtime and basic API built`.
+
+---
+
+## Execution record (2026-11-18)
+
+Built inline; all 15 tasks complete (ff0ff66..HEAD on `aura-core/regulation`). The step-0 spike was a go. One fresh whole-branch review found no Critical issues; its Important findings were fixed (f5b64b2, 320572e). The live check ran in the installed 1.0.15 (see `MASTER_AUDIT_TODO.md`).
+
+### Rulings made during execution
+
+- - Pre-flight: Ruling: novaura.app.id is the manifest id (local.<slug> for moved apps), registry/window id stays user_<slug> — the spec defines app.id from the manifest — cost if wrong: one field change in bootScript.
+- Task 5: Ruling: fakeTable also has where('[appId+key]').between() and each(); snapshotLocalStorage and keys read only their prefix's rows — otherwise launching a 1 GB addition would load all of it — cost if wrong: none (extra capability).
+- Task 5: Ruling: sizes are UTF-8 bytes for strings, byteLength/size for binary; usage is scanned once per session per addition then kept in memory, writes serialised per addition — cost if wrong: usage drifts if something else writes addition_data directly.
+- Task 5: Ruling: writeLocalStorage takes { quotaBytes } and enforces the 64 MB localStorage limit on the OS side as well as the bridge — the frame is untrusted — cost if wrong: none.
+- Task 5: Ruling: addition_data is NOT in BACKUP_TABLES — exportSnapshot is one JSON string and can't carry GB binary values; .novapp export (plan 3) is the backup — cost if wrong: a .novabackup restore brings apps back without their saved data until plan 3.
+- Task 6: Ruling: registry gains upsertLocalAddition({slug,name,color,iconBlobId,kind}); integrateAsApp calls it so the keep-grants logic lives with the registry, not forgeService — cost if wrong: none (one extra export).
+- Task 6: Ruling: setGrants silently drops anything not declared/requested (returns the result) rather than throwing; setQuota refuses < 1 MB or non-numbers — cost if wrong: a UI bug that grants nothing shows no error.
+- Task 7: Ruling: the relaunch message carries { path } (session-relative path + search) and the host passes it on, so a multi-page app or a history-router reload comes back on the same page instead of index.html — cost if wrong: one extra field.
+- Task 7: Ruling: storage.get replies { value } or { chunked: { readId, kind, size, count, type?, view? } }; storage.put.begin carries { key, kind: string|bytes|blob, size, type?, view? }; commit carries { uploadId, count }. Strings are cut by UTF-8 bytes, never splitting a surrogate pair — cost if wrong: router and bridge both change.
+- Task 7: Ruling: localStorage is a Proxy so localStorage.x, Object.keys(localStorage) and JSON.stringify(localStorage) work as with real Storage; window.novaura is non-writable and non-configurable (an app assigning it in strict code gets a TypeError) — cost if wrong: an app that replaces window.novaura breaks.
+- Task 7: Ruling: ai.chat forwards only { maxTokens, temperature, stream } (functions can't cross postMessage); streaming design waits for plan 2 — cost if wrong: none now.
+- Task 8: Ruling: createRouter takes an optional services { notify, aiChat, filesOpen, filesSave } so plan 2 only plugs them in; none are passed in plan 1, so granted ones say not_available — cost if wrong: one param rename.
+- Task 8: Ruling: unexpected failures reply code 'internal' (not in the plan's list); pending chunked uploads are capped at the addition's quota in total, and chunks must arrive in order and add up to the declared size — cost if wrong: none.
+- Task 8: Ruling: sizeOf/utf8Length/measure moved to size.js (dataStore re-exports sizeOf) so the router needn't import the database — cost if wrong: none.
+- Task 9: Ruling: onRelaunch receives { path } from the bridge's relaunch message (see Task 7 ruling); host also pushes theme events and answers a reply that fails to clone with code internal — cost if wrong: none.
+- Task 9: Ruling: subscribeTheme also watches class and style on the root, not only data-theme, so custom colour changes reach additions — cost if wrong: a few extra theme pushes.
+- Task 10: Ruling: inline (dev, srcdoc) additions carry the nonce in boot data since srcdoc has no fragment; the bridge uses boot.nonce only when the hash has none, and then leaves history alone — cost if wrong: dev-only path.
+- Task 10: Ruling: launchAddition takes deps.baseUrl (previewHost.protocolBase, now exported) and deps.path for relaunch-to-page; a path with ':' in its route, dot segments, a leading '/' or other characters falls back to index.html — cost if wrong: a reload lands on index.html.
+- Task 10: Ruling: addition pages keep ERROR_REPORTER and the offline Tailwind fallback (the plan only drops the test agent, storage isolation and app-id script) — cost if wrong: an addition posts error reports to a host that ignores them.
+- Task 11: Ruling: @cybeni/backend keys saved with NO app name (__cybeni_db__:<t>, bare __cybeni_auth_users__) are left behind, not copied as plain keys — installed apps always ran with appId=slug, so unnamed ones came from previews; copying them would put another app's tables into every addition — cost if wrong: a standalone-run app loses unnamed backend data (still in the old storage).
+- Task 11: Ruling: every other __cybeni-prefixed key is Cybeni-internal and skipped (not only __cybeni_probe__); a name-attributed key wins over a plain key of the same name — cost if wrong: an app that wrote its own __cybeni* key loses it.
+- Task 11: Ruling: migrateLegacyApps takes an optional kindOf(slug) (forge if the project has origin) and copyOldDataAgain(appId, deps?) returns the key count and records oldDataCopiedAt (so the running addition relaunches); the 'browser-database' note is stored as a code and worded by the panel — cost if wrong: none.
+- Task 12: Ruling: the controller relaunches on novaura:addition_changed only when the launch key changes (grants, quota, manifest id/name/version, name, slug, oldDataCopiedAt) — noteBlockedOrigin also fires addition_changed and must not relaunch the app — cost if wrong: a change that should relaunch doesn't until Reload.
+- Task 12: Ruling: before a controller-initiated relaunch the frame is sent to about:blank and the controller waits for load (≤500 ms) + 150 ms, and snapshotLocalStorage now queues behind writes, so the old page's pagehide flush lands before the new snapshot — cost if wrong: ~0.3 s extra per relaunch.
+- Task 12: Ruling: the controller owns the frame's src/srcdoc (one iframe for the window's life) and createAdditionController takes deps + onState; defaultControllerDeps(windowId, onClose) holds the real wiring with lazy imports — cost if wrong: none.
+- Task 12: Ruling: settingsLink opens settings with props { defaultTab: 'additions' } (so a new settings window opens on the tab) and also fires novaura:focus_addition — Task 13 reads both — cost if wrong: Settings opens on its first tab.
+- Task 13: Ruling: the panel (not the settings window) takes the pending focus, on mount and on novaura:focus_addition; the settings window reads props.defaultTab so a new window opens on Additions — cost if wrong: none.
+- Task 13: Ruling: publisher shows the manifest publisher's name when there is one (plan 3 adds verified/not-verified wording), else 'Made on this computer' — cost if wrong: wording.
+- Task 14: Ruling: a bridge with no boot data calls window.stop() after asking to be relaunched, so an app never runs on empty storage (it could save over its data or reload-loop) — found while writing the self-reload test — cost if wrong: an app that reloads itself shows a blank frame for the relaunch's ~0.3 s.
+- Task 14: Ruling: the browser suite drives the real controller (not launch+host by hand) with a test Dexie database of the same addition_data layout, so the OS's real database and its boot side effects stay out of the test page; fixture files come in via Vite ?raw imports — cost if wrong: none.
+- Task 14 follow-up (commit 936cb11): Ruling: inline (plain-browser dev) additions carry ADDITION_CSP as a <meta> CSP built by a JS mirror (additionCsp) tested against the golden file — found by a headless smoke of the real UserAppWindow + AdditionsPanel (scratch/additions-smoke.html, scratchpad additions-smoke.mjs: 11/11 ok) — the desktop path still builds the CSP only in Rust — cost if wrong: dev-only drift, caught by the golden test.
+- Task 14 follow-up: Ruling: the window's network banner clears after a relaunch that grants its origin — cost if wrong: none.
+- Final: Ruling: minors 2 (migration timeout marks apps migrated with no data), 3 (non-entry HTML pages get no bridge — multi-page Forge sites regress), 4 (removed addition's window keeps writing) are re-graded Important by effect and enter the fix pass; minor 12 (bridge deletes __TAURI_INTERNALS__) and 5 (%2e in relaunch path) ride along as one-liners.
+- Final: Ruling: declined-to-judge items (PREVIEW_CSP, plan 2/3 scope, *.nip.io loopback names, OS page in frame-src 'self', PlatformBridgeWindow listener, Rust whole-file clone, 80-bit session ids) stand as the reviewer set them aside — none reachable in this plan; PlatformBridgeWindow goes on the audit list — cost if wrong: revisit in plan 2.
+
+### Deferred minors (from the final review)
+
+- 1 bridge-created MessageChannel (port posted to '*'; writes before the port lost on early reload)
+- 6 localStorage key __proto__ lost through the boot object literal
+- 7 writeLocalStorage bulkDelete+bulkPut not in one transaction
+- 8 get/keys don't wait behind queued writes
+- 9 pop-out runs a second controller (set popout:false for additions)
+- 10 Copy old data again overwrites without asking
+- 11 upsertLocalAddition resets addedAt

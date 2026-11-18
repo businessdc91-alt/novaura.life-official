@@ -50,9 +50,10 @@ export function bridgeMain(limits) {
   // ── 1. Boot data ──────────────────────────────────────────────────────────
   const boot = w.__novauraBoot || null;
   try { delete w.__novauraBoot; } catch { w.__novauraBoot = undefined; }
-  // The web view may inject the OS's IPC handles into every frame. The CSP already
-  // blocks the IPC host; taking the handles away too means a widened policy alone
-  // could never hand an addition the OS's commands.
+  // The web view may inject the OS's IPC handles into every frame. Best effort only:
+  // WebView2 injects them non-configurable, so they stay. What keeps an addition away
+  // from OS commands is the CSP (no IPC host) and WebView2 not delivering a frame's
+  // IPC messages; checked live on 1.0.15 (an invoke from an addition got no answer).
   for (const name of ['__TAURI_INTERNALS__', '__TAURI__', 'ipc']) {
     try { delete w[name]; } catch { /* keep going */ }
     try { if (w[name] !== undefined) Object.defineProperty(w, name, { value: undefined, configurable: false, writable: false }); } catch { /* keep going */ }
