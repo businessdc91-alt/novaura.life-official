@@ -472,6 +472,56 @@ export async function queryLocalAi(port = 11434, path = '/api/chat', method = 'P
 }
 
 /**
+ * POST to a local AI server on 127.0.0.1 and hand the reply over while it is written.
+ * onText(piece) gets the body text in order (only for a 2xx reply). Resolves
+ * { status, body } with the whole body once the server is done. Rejects when streaming
+ * is not available (an app build without the native command), so the caller can ask
+ * with queryLocalAi instead.
+ */
+export async function streamLocalAi(port, path, body, onText) {
+  const json = typeof body === 'string' ? body : JSON.stringify(body ?? {});
+  if (isTauriNative()) {
+    const { invoke, Channel } = await import('@tauri-apps/api/core');
+    let open = true;
+    const channel = new Channel();
+    channel.onmessage = (piece) => {
+      if (open) onText?.(String(piece ?? ''));
+    };
+    try {
+      const res = await invoke('query_local_ai_stream', { port: Number(port), path, body: json, onData: channel });
+      return { status: Number(res?.status) || 0, body: String(res?.body ?? '') };
+    } finally {
+      // The whole body is returned, so a piece that arrives after this is not needed.
+      open = false;
+    }
+  }
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: json,
+  });
+  if (!res.ok || !res.body?.getReader) return { status: res.status, body: await res.text() };
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let all = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value, { stream: true });
+    if (text) {
+      all += text;
+      onText?.(text);
+    }
+  }
+  const rest = decoder.decode();
+  if (rest) {
+    all += rest;
+    onText?.(rest);
+  }
+  return { status: res.status, body: all };
+}
+
+/**
  * Get authentic native hardware specification (CPU name/cores/threads, physical RAM GB, dedicated GPUs)
  */
 export async function getNativeHardwareSpec() {

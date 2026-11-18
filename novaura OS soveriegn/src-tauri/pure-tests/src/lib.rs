@@ -2,3 +2,6 @@
 
 #[path = "../../src/native_build_rules.rs"]
 pub mod native_build_rules;
+
+#[path = "../../src/local_ai_stream_rules.rs"]
+pub mod local_ai_stream_rules;

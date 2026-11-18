@@ -4,6 +4,7 @@ pub mod llm;
 pub mod forge;
 pub mod mesh;
 pub mod native_build;
+pub mod local_ai_stream;
 pub mod preview;
 pub mod games;
 pub mod templates;
@@ -1907,6 +1908,7 @@ pub fn run() {
             fetch_onion_raw,
             probe_local_ai,
             query_local_ai_raw,
+            local_ai_stream::query_local_ai_stream,
             get_native_hardware_spec,
             preview::cybeni_preview_publish,
             preview::cybeni_preview_clear,

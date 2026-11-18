@@ -299,11 +299,14 @@ export class LocalModelSubsystem {
       strictMaxTokens: options.strictMaxTokens || Boolean(options.jsonSchema && !resolved.think),
     });
 
-    if (!stream && this._ollamaUrl === DEFAULT_OLLAMA_URL) {
+    // The usual address goes through the native bridge, streamed or not; a custom
+    // address is fetched directly below.
+    if (this._ollamaUrl === DEFAULT_OLLAMA_URL) {
       return runLocalChat(
         { runtime: 'ollama', model: resolvedModel },
         normalizedMessages,
         {
+          ...(stream ? { onToken: options.onToken } : {}),
           maxTokens: options.maxTokens ?? 2048,
           temperature: options.temperature ?? 0.7,
           jsonSchema: options.jsonSchema,
@@ -405,11 +408,14 @@ export class LocalModelSubsystem {
       strictMaxTokens: options.strictMaxTokens || Boolean(options.jsonSchema && !resolved.think),
     });
 
-    if (!stream && this._lmstudioUrl === DEFAULT_LMSTUDIO_URL) {
+    // The usual address goes through the native bridge (LM Studio refuses web-page
+    // requests unless its CORS option is on); a custom address is fetched directly below.
+    if (this._lmstudioUrl === DEFAULT_LMSTUDIO_URL) {
       return runLocalChat(
         { runtime: 'lmstudio', model: resolvedModel },
         normalizedMessages,
         {
+          ...(stream ? { onToken: options.onToken } : {}),
           maxTokens: options.maxTokens ?? 2048,
           temperature: options.temperature ?? 0.7,
           jsonSchema: options.jsonSchema,

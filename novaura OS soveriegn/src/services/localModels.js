@@ -2,8 +2,9 @@
 // Every call goes through queryLocalAi, which only ever talks to 127.0.0.1,
 // so nothing here can reach a cloud endpoint or another machine.
 
-import { probeLocalAi, queryLocalAi } from './nativeService.js';
+import { probeLocalAi, queryLocalAi, streamLocalAi } from './nativeService.js';
 import { releaseComfyModels } from './engines/mediaRoom.js';
+import { createStreamReader, assembleStream } from './localStream.js';
 import {
   resolveReasoningParams,
   ollamaThinkValue,
@@ -145,8 +146,23 @@ export function cleanCompletion(text) {
 /**
  * Run a chat completion on a local model.
  * messages: [{ role: 'system'|'user'|'assistant', content }]
+ * With onToken(piece) the reply is streamed and each piece is handed over as the model
+ * writes it; where streaming is not available, onToken gets the whole reply once.
+ * Either way the cleaned reply is returned.
  */
-export async function runLocalChat(
+export async function runLocalChat(ref, messages, options = {}) {
+  const { onToken, ...rest } = options || {};
+  if (typeof onToken !== 'function') return chatOnce(ref, messages, rest, null);
+  let streamed = false;
+  const text = await chatOnce(ref, messages, rest, (piece) => {
+    streamed = true;
+    onToken(piece);
+  });
+  if (!streamed && text) onToken(text);
+  return text;
+}
+
+async function chatOnce(
   ref,
   messages,
   {
@@ -159,11 +175,35 @@ export async function runLocalChat(
     scope,
     strictMaxTokens = false,
     onThinking,
-  } = {}
+  } = {},
+  onPiece
 ) {
   const parsed = typeof ref === 'string' ? parseModelRef(ref) : ref;
   if (!parsed) throw new Error('No local model selected.');
   const cfg = LOCAL_RUNTIMES[parsed.runtime];
+
+  // The reply comes back in the shape of a non-streamed one either way, so the
+  // retries below work the same.
+  let streaming = typeof onPiece === 'function';
+  const post = async (path, payload) => {
+    if (streaming) {
+      const kind = parsed.runtime === 'ollama' ? 'ollama' : 'openai';
+      try {
+        const reader = createStreamReader(kind, (d) => { if (d.content) onPiece(d.content); });
+        const res = await streamLocalAi(cfg.port, path, { ...payload, stream: true }, (text) => reader.push(text));
+        if (res.status >= 200 && res.status < 300) return assembleStream(kind, res.body);
+        try {
+          return JSON.parse(res.body);
+        } catch {
+          return { error: res.body || `${cfg.label} answered with HTTP ${res.status}.` };
+        }
+      } catch (err) {
+        console.warn('[LocalModels] Streaming is not available; asking for the whole reply instead:', err?.message || err);
+        streaming = false;
+      }
+    }
+    return queryLocalAi(cfg.port, path, 'POST', { ...payload, stream: false });
+  };
   const resolved = resolveReasoningParams({ think, reasoningEffort, effort, scope });
   const effectiveMaxTokens = reasoningTokenBudget(maxTokens, resolved, {
     strictMaxTokens: strictMaxTokens || Boolean(jsonSchema && !resolved.think),
@@ -171,10 +211,9 @@ export async function runLocalChat(
 
   if (parsed.runtime === 'ollama') {
     const thinkParam = ollamaThinkValue(parsed.model, resolved);
-    const ask = (cpuOnly, includeThink = true) => queryLocalAi(cfg.port, '/api/chat', 'POST', {
+    const ask = (cpuOnly, includeThink = true) => post('/api/chat', {
       model: parsed.model,
       messages,
-      stream: false,
       ...(includeThink ? { think: thinkParam } : {}),
       // A JSON schema constrains the reply to valid JSON of that shape.
       ...(jsonSchema ? { format: jsonSchema } : {}),
@@ -207,12 +246,11 @@ export async function runLocalChat(
   }
 
   const lmEffort = openAiReasoningEffort(resolved);
-  const ask = (includeEffort = true) => queryLocalAi(cfg.port, '/v1/chat/completions', 'POST', {
+  const ask = (includeEffort = true) => post('/v1/chat/completions', {
     model: parsed.model,
     messages,
     temperature,
     max_tokens: effectiveMaxTokens,
-    stream: false,
     ...(includeEffort ? { reasoning_effort: lmEffort } : {}),
     ...(jsonSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: jsonSchema } } } : {}),
   });
