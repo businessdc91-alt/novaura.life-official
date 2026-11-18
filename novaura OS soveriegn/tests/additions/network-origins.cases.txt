@@ -1,0 +1,29 @@
+# Network origins an addition may be allowed to reach. Checked by both the Rust
+# rules (src-tauri/src/addition_csp_rules.rs) and the JS mirror (src/services/additions/network.js).
+# "ok <input> => <clean>" is accepted and cleaned; "bad <input>" is refused.
+ok https://api.weather.gov => https://api.weather.gov
+ok https://API.Weather.gov/ => https://api.weather.gov
+ok https://maps.example.com:8443 => https://maps.example.com:8443
+ok wss://stream.example.org => wss://stream.example.org
+bad http://api.weather.gov
+bad https://localhost
+bad https://localhost:1234
+bad https://app.localhost
+bad https://127.0.0.1
+bad https://[::1]
+bad https://192.168.1.5
+bad http://ipc.localhost
+bad https://ipc.localhost
+bad https://*.example.com
+bad https://example.com/path
+bad https://example.com?x=1
+bad https://user@example.com
+bad https://example.com;script-src
+bad https://exa mple.com
+bad https://intranet
+bad https://example.com:0
+bad https://example.com:99999
+bad 'self'
+bad *
+bad data:
+bad javascript:alert(1)
