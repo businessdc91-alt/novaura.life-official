@@ -8,7 +8,7 @@
 // Blocked network origins the frame reports are passed to onBlocked once cleaned;
 // local addresses never are.
 
-import { CHUNK_BYTES, MAX_MESSAGE_BYTES, REQUESTS_PER_SECOND } from './limits.js';
+import { CHUNK_BYTES, LOCAL_STORAGE_LIMIT_BYTES, MAX_MESSAGE_BYTES, REQUESTS_PER_SECOND } from './limits.js';
 import { cleanNetworkOrigin, originOf } from './network.js';
 import { isArrayBuffer, isBlob, measure, sizeOf, utf8Length } from './size.js';
 
@@ -39,8 +39,8 @@ const needKey = (a) => {
   return a.key;
 };
 
-/** Cut a string into pieces of at most `limit` UTF-8 bytes, never splitting a surrogate pair. */
-function chunkString(s, limit) {
+/** Where to cut a string into pieces of at most `limit` UTF-8 bytes ([start, end] pairs), never splitting a surrogate pair. */
+function stringCuts(s, limit) {
   const out = [];
   let start = 0;
   let bytes = 0;
@@ -51,11 +51,11 @@ function chunkString(s, limit) {
     if (c < 0x80) n = 1;
     else if (c < 0x800) n = 2;
     else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n = 4; width = 2; }
-    if (bytes + n > limit && i > start) { out.push(s.slice(start, i)); start = i; bytes = 0; }
+    if (bytes + n > limit && i > start) { out.push([start, i]); start = i; bytes = 0; }
     bytes += n;
     i += width - 1;
   }
-  if (start < s.length) out.push(s.slice(start));
+  if (start < s.length) out.push([start, s.length]);
   return out;
 }
 
@@ -76,6 +76,15 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
   const chunkBytes = limits.chunkBytes ?? CHUNK_BYTES;
   const maxMessage = limits.maxMessageBytes ?? MAX_MESSAGE_BYTES;
   const rps = limits.requestsPerSecond ?? REQUESTS_PER_SECOND;
+  // Events are budgeted too: the frame is untrusted. An honest bridge sends at most one
+  // localStorage batch every 50 ms and reports each blocked origin once.
+  const eventRate = limits.eventsPerSecond ?? 25;
+  const eventBurst = limits.eventBurst ?? 40;
+  const maxEventOps = limits.maxEventOps ?? 100_000;
+  const maxEventBytes = limits.maxEventBytes ?? LOCAL_STORAGE_LIMIT_BYTES + 1024 ** 2;
+  const maxBlocked = limits.maxBlockedOrigins ?? 32;
+  // One pending chunked read per key, and never more held than the addition may store.
+  const maxPendingReadBytes = limits.maxPendingReadBytes ?? quotaBytes;
 
   // Token bucket: `rps` requests a second, with bursts up to `rps`.
   let tokens = rps;
@@ -87,15 +96,33 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
     if (tokens >= 1) { tokens -= 1; return 0; }
     return Math.max(1, Math.ceil(((1 - tokens) * 1000) / rps));
   }
+  let eventTokens = eventBurst;
+  let eventLast = now();
+  function takeEvent() {
+    const t = now();
+    eventTokens = Math.min(eventBurst, eventTokens + ((t - eventLast) * eventRate) / 1000);
+    eventLast = t;
+    if (eventTokens < 1) return false;
+    eventTokens -= 1;
+    return true;
+  }
+  const reported = new Set();
 
   // Chunked uploads (one per key) and chunked reads, dropped after 60 s.
   const uploads = new Map();
   const reads = new Map();
+  let pendingReadBytes = 0;
   let seq = 0;
+  function dropRead(id) {
+    const r = reads.get(id);
+    if (!r) return;
+    reads.delete(id);
+    pendingReadBytes -= r.size;
+  }
   function sweep() {
     const t = now();
     for (const [id, u] of uploads) if (u.expires < t) uploads.delete(id);
-    for (const [id, r] of reads) if (r.expires < t) reads.delete(id);
+    for (const [id, r] of reads) if (r.expires < t) dropRead(id);
   }
 
   async function setValue(key, value) {
@@ -105,24 +132,24 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
 
   const METHODS = {
     async 'storage.get'(a) {
-      const value = await data.get(appId, needKey(a));
+      const key = needKey(a);
+      // A new read of a key replaces any unfinished one, so repeated reads can't pile up copies.
+      for (const [id, r] of reads) if (r.key === key) dropRead(id);
+      const value = await data.get(appId, key);
       const kind = typeof value === 'string' ? 'string' : isArrayBuffer(value) || ArrayBuffer.isView(value) ? 'bytes' : isBlob(value) ? 'blob' : null;
       if (!kind || sizeOf(value) <= chunkBytes) return { value };
+      const size = sizeOf(value);
+      if (pendingReadBytes + size > maxPendingReadBytes) throw fail('rate_limited', 'Too much is being read at once; waiting.', { retryAfterMs: 1000 });
       const id = `r${++seq}`;
-      const read = { kind, size: sizeOf(value), expires: now() + PENDING_MS };
-      if (kind === 'string') read.parts = chunkString(value, chunkBytes);
+      // Pieces are cut when asked for, from the one stored value.
+      const read = { key, kind, size, value, expires: now() + PENDING_MS };
+      if (kind === 'string') read.cuts = stringCuts(value, chunkBytes);
       else if (kind === 'bytes') {
-        const buf = isArrayBuffer(value) ? value : value.buffer;
-        const off = isArrayBuffer(value) ? 0 : value.byteOffset;
-        read.parts = [];
-        for (let i = 0; i < read.size; i += chunkBytes) read.parts.push(buf.slice(off + i, off + Math.min(read.size, i + chunkBytes)));
         if (!isArrayBuffer(value) && Object.hasOwn(VIEWS, value.constructor?.name)) read.view = value.constructor.name;
-      } else {
-        read.blob = value;
-        read.type = value.type || '';
-      }
-      read.count = read.parts ? read.parts.length : Math.ceil(read.size / chunkBytes);
+      } else read.type = value.type || '';
+      read.count = read.cuts ? read.cuts.length : Math.ceil(size / chunkBytes);
       reads.set(id, read);
+      pendingReadBytes += size;
       const head = { readId: id, kind, size: read.size, count: read.count };
       if (read.view) head.view = read.view;
       if (kind === 'blob') head.type = read.type;
@@ -134,9 +161,15 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
       const index = Number(a.index);
       if (!read || !Number.isInteger(index) || index < 0 || index >= read.count) throw fail('bad_request', 'No such piece to read.');
       read.expires = now() + PENDING_MS;
-      if (index === read.count - 1) reads.delete(a.readId);
-      if (read.parts) return read.parts[index];
-      return read.blob.slice(index * chunkBytes, Math.min(read.size, (index + 1) * chunkBytes)).arrayBuffer();
+      if (index === read.count - 1) dropRead(a.readId);
+      const { value } = read;
+      if (read.cuts) return value.slice(read.cuts[index][0], read.cuts[index][1]);
+      const from = index * chunkBytes;
+      const to = Math.min(read.size, from + chunkBytes);
+      if (read.kind === 'blob') return value.slice(from, to).arrayBuffer();
+      const buf = isArrayBuffer(value) ? value : value.buffer;
+      const off = isArrayBuffer(value) ? 0 : value.byteOffset;
+      return buf.slice(off + from, off + to);
     },
 
     'storage.set'(a) {
@@ -222,6 +255,13 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
 
   async function onEvent(msg) {
     if (msg.t === 'ls.batch' && Array.isArray(msg.ops)) {
+      if (!takeEvent()) return;
+      let bytes;
+      try { bytes = measure(msg.ops, maxEventBytes); } catch { return; }
+      if (msg.ops.length > maxEventOps || bytes > maxEventBytes) {
+        console.warn(`[additions] ${appId}: an oversized localStorage batch was refused`);
+        return;
+      }
       try {
         await data.writeLocalStorage(appId, msg.ops, { quotaBytes });
       } catch (err) {
@@ -229,7 +269,8 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
       }
     } else if (msg.t === 'blocked') {
       const origin = cleanNetworkOrigin(originOf(String(msg.uri || '')) || '');
-      if (origin) {
+      if (origin && !reported.has(origin) && reported.size < maxBlocked) {
+        reported.add(origin);
         try { onBlocked(origin); } catch { /* the window may be gone */ }
       }
     }
@@ -247,7 +288,9 @@ export function createRouter({ addition, data, ui, onBlocked = () => {}, now = D
       const reply = (code, message, extra) => ({ id, ok: false, e: { code, message, ...extra } });
       const wait = take();
       if (wait) return reply('rate_limited', 'Too many requests; waiting.', { retryAfterMs: wait });
-      if (measure(msg.a, maxMessage) > maxMessage) return reply('too_large', 'That message is larger than 16 MB; send it in pieces.');
+      let size;
+      try { size = measure(msg.a, maxMessage); } catch (err) { return reply('bad_request', String(err?.message || err)); }
+      if (size > maxMessage) return reply('too_large', 'That message is larger than 16 MB; send it in pieces.');
       if (typeof msg.m !== 'string' || !Object.hasOwn(METHODS, msg.m)) return reply('unknown_method', `novaura has no method ${String(msg.m)}.`);
       try {
         const v = await METHODS[msg.m](msg.a && typeof msg.a === 'object' ? msg.a : {});

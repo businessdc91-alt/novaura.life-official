@@ -112,3 +112,9 @@ test('the quota can be raised but not set to nonsense', async () => {
   await assert.rejects(registry.setQuota('user_notes', -5));
   await assert.rejects(registry.setQuota('user_notes', Number.NaN));
 });
+
+test('an app can put at most 32 blocked origins in front of the person', async () => {
+  settings.set('user_apps', [oldEntry]);
+  for (let i = 0; i < 40; i++) await registry.noteBlockedOrigin('user_notes', `https://h${i}.example.com`);
+  assert.equal((await registry.getAddition('user_notes')).requested.network.length, 32);
+});

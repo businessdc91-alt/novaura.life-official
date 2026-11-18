@@ -165,3 +165,37 @@ test('a message that is not a request or a known event is ignored', async () => 
   const { router } = setup();
   for (const msg of [null, 'text', 42, { t: 'unknown' }, { id: 'x', m: 'storage.usage' }]) assert.equal(await router.handle(msg), null);
 });
+
+test('a Map or Set cannot slip past the message limit or the quota', async () => {
+  const { req } = setup({ quotaBytes: 5000 });
+  assert.equal(code(await req('storage.set', { key: 'k', value: new Map([['a', 'x'.repeat(2000)]]) })), 'too_large');
+  ok(await req('storage.set', { key: 'k', value: new Set(['y'.repeat(800)]) }));
+  assert.ok(ok(await req('storage.usage')) >= 800);
+});
+
+test('an event flood is cut off: ls.batch has its own budget and blocked origins are capped', async () => {
+  const { router, data, calls } = setup();
+  for (let i = 0; i < 200; i++) await router.handle({ t: 'ls.batch', ops: [{ op: 'set', key: `k${i}`, value: 'v' }] });
+  const kept = Object.keys(await data.snapshotLocalStorage('user_notes')).length;
+  assert.ok(kept >= 20 && kept <= 60, `kept ${kept} of 200 batches sent at once`);
+  for (let i = 0; i < 100; i++) await router.handle({ t: 'blocked', uri: `https://h${i}.example.com/`, directive: 'connect-src' });
+  await router.handle({ t: 'blocked', uri: 'https://h0.example.com/again', directive: 'connect-src' });
+  assert.equal(calls.blocked.length, 32);
+});
+
+test('a huge ls.batch is dropped instead of written', async () => {
+  const { router, data } = setup({ limits: { maxEventOps: 10 } });
+  await router.handle({ t: 'ls.batch', ops: Array.from({ length: 11 }, (_, i) => ({ op: 'set', key: `k${i}`, value: 'v' })) });
+  assert.deepEqual(await data.snapshotLocalStorage('user_notes'), {});
+});
+
+test('a large value has one pending read per key, and pending reads are capped', async () => {
+  const { req } = setup({ limits: { maxPendingReadBytes: 300 } });
+  ok(await req('storage.set', { key: 'a', value: 'a'.repeat(200) }));
+  ok(await req('storage.set', { key: 'b', value: 'b'.repeat(200) }));
+  const first = ok(await req('storage.get', { key: 'a' })).chunked;
+  const second = ok(await req('storage.get', { key: 'a' })).chunked;
+  assert.equal(code(await req('storage.get.chunk', { readId: first.readId, index: 0 })), 'bad_request');
+  ok(await req('storage.get.chunk', { readId: second.readId, index: 0 }));
+  assert.equal(code(await req('storage.get', { key: 'b' })), 'rate_limited');
+});

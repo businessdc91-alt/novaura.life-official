@@ -11,6 +11,7 @@ import { PERMISSIONS, localManifest } from './manifest.js';
 import { DEFAULT_QUOTA_BYTES } from './limits.js';
 
 const KEY = 'user_apps';
+const MAX_REQUESTED_ORIGINS = 32;
 const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
 
 function normalize(a) {
@@ -111,6 +112,8 @@ export async function noteBlockedOrigin(appId, origin) {
     if (i < 0) return false;
     const a = normalize(apps[i]);
     if ([...list(a.manifest?.network), ...a.requested.network, ...a.grants.network].includes(clean)) return false;
+    // An app can't bury the person in requests: at most this many are ever listed.
+    if (a.requested.network.length >= MAX_REQUESTED_ORIGINS) return false;
     apps[i] = { ...a, requested: { network: [...a.requested.network, clean] } };
     await db.setSetting(KEY, apps);
     announce(appId);
