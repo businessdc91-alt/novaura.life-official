@@ -11,7 +11,9 @@ const MIRROR_MAX_FIELD_CHARS = 2 * 1024 * 1024;
 
 // Tables included in backups and the encrypted disk mirror. Add new user-data
 // tables here, or they will not survive a reinstall. Left out on purpose: caches
-// (inference_hosts) and bulky regenerable history (cybeni_checkpoints).
+// (inference_hosts) and bulky regenerable history (cybeni_checkpoints). addition_data
+// is left out too: one addition may hold a GB of binary values that a JSON backup
+// can't carry; additions are backed up by exporting them as .novapp files.
 export const BACKUP_TABLES = [
   'identities', 'settings', 'workspaces', 'documents', 'chat_history', 'mailbox', 'social_posts', 'vault',
   'sentinel_audit', 'card_decks', 'contacts', 'call_logs', 'hosted_sites',
@@ -179,11 +181,18 @@ class SovereignDatabase extends Dexie {
       template_acceptances: 'id, templateId, direction, status, at',
     });
 
+    // v22 — Additions: each user app's own saved data (its localStorage replacement and
+    // novaura.storage), keyed by addition id. See src/services/additions/dataStore.js.
+    this.version(22).stores({
+      addition_data: '[appId+key], appId',
+    });
+
     this.identities = this.table('identities');
     this.domain_records = this.table('domain_records');
     this.domain_claims = this.table('domain_claims');
     this.template_installs = this.table('template_installs');
     this.template_acceptances = this.table('template_acceptances');
+    this.addition_data = this.table('addition_data');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
     this.documents = this.table('documents');
