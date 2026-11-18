@@ -8,6 +8,8 @@
 // Serves the project folder over http://127.0.0.1, loads each file in a runner page
 // (tests/creative/browser/harness.js), and prints "ok  <name>" or "FAIL <name> (<why>)".
 // Exits 1 when anything fails, including page errors and console errors.
+// A second server stands in for the OS's cyprev protocol (see below); tests get its
+// address as ?cyprev=<base> (tests/additions/browser/cyprev.js).
 // The browser is CHROME_PATH, else Edge (the engine behind WebView2), else Chrome.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -77,6 +79,97 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const HTTP = server.address().port;
 
+// A stand-in for the OS's `cyprev` protocol, on its own port so its pages have a
+// different origin from the runner. Tests publish sessions to it and frame them;
+// it serves them the way src-tauri/src/addition_sessions_rules.rs does: the
+// session's CSP, ACAO *, no-store, nosniff, once-only files and the SPA fallback.
+// Test files find it through the runner URL's ?cyprev=<base>.
+const cyprevSessions = new Map();
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'content-type',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+};
+const SESSION_RE = /^[A-Za-z0-9]{8,40}$/;
+
+function cleanCyprevPath(path) {
+  const trimmed = path.replace(/^\/+/, '');
+  if (!trimmed || trimmed.length > 300 || trimmed.includes('\\') || trimmed.includes('\0')) return null;
+  const parts = [];
+  for (const seg of trimmed.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') return null;
+    parts.push(seg);
+  }
+  return parts.length ? parts.join('/') : null;
+}
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+const cyprevServer = createServer(async (req, res) => {
+  const plain = (status, text, extra = {}) => {
+    res.writeHead(status, { ...CORS, 'content-type': 'text/plain', 'cache-control': 'no-store', ...extra });
+    res.end(text);
+  };
+  if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
+  const url = new URL(req.url, 'http://cyprev');
+  const route = url.pathname.match(/^\/__(publish|clear)\/([^/]+)$/);
+  if (req.method === 'POST' && route) {
+    const [, action, session] = route;
+    if (!SESSION_RE.test(session)) return plain(400, 'Invalid session id');
+    if (action === 'clear') { cyprevSessions.delete(session); return plain(200, 'cleared'); }
+    let payload;
+    try { payload = JSON.parse(await readBody(req)); } catch { return plain(400, 'Bad JSON'); }
+    const once = new Set((payload.once || []).map(cleanCyprevPath).filter(Boolean));
+    const files = new Map();
+    for (const f of payload.files || []) {
+      const path = cleanCyprevPath(f.path || '');
+      if (!path) return plain(400, `Rejected path: ${f.path}`);
+      const body = f.encoding === 'base64' ? Buffer.from(f.content || '', 'base64') : Buffer.from(f.content || '', 'utf8');
+      files.set(path, { mime: f.mime || 'application/octet-stream', body, once: once.has(path) });
+    }
+    cyprevSessions.set(session, { files, csp: String(payload.csp || "default-src 'none'") });
+    res.writeHead(200, { ...CORS, 'content-type': 'application/json' });
+    res.end(JSON.stringify({ count: files.size }));
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') return plain(405, 'Method not allowed');
+  let raw;
+  try { raw = decodeURIComponent(url.pathname); } catch { raw = url.pathname; }
+  const trimmed = raw.replace(/^\/+/, '');
+  const slash = trimmed.indexOf('/');
+  const session = slash < 0 ? trimmed : trimmed.slice(0, slash);
+  const rest = slash < 0 ? '' : trimmed.slice(slash + 1);
+  const sess = SESSION_RE.test(session) ? cyprevSessions.get(session) : null;
+  if (!sess) return plain(404, 'Unknown preview');
+  const csp = { 'content-security-policy': sess.csp };
+  const path = cleanCyprevPath(!rest || rest.endsWith('/') ? `${rest}index.html` : rest);
+  if (!path) return plain(404, 'Not found in this addition', csp);
+  const last = path.split('/').pop();
+  const key = sess.files.has(path) ? path : (!last.includes('.') && sess.files.has('index.html') ? 'index.html' : null);
+  if (!key) return plain(404, 'Not found in this addition', csp);
+  const file = sess.files.get(key);
+  if (file.once) sess.files.delete(key);
+  res.writeHead(200, {
+    ...CORS, ...csp,
+    'content-type': file.mime,
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  });
+  res.end(file.body);
+});
+await new Promise(r => cyprevServer.listen(0, '127.0.0.1', r));
+const CYPREV = `http://127.0.0.1:${cyprevServer.address().port}/`;
+// The browser reports what a frame's CSP blocks as an error, but the additions
+// tests block things on purpose; anything they did not mean to block fails the
+// test that needed it.
+const isCyprevCspReport = (text = '', url = '') =>
+  /Content Security Policy/i.test(text) && (url.startsWith(CYPREV) || text.includes(CYPREV.slice(0, -1)));
+
 const PORT = 9400 + Math.floor(Math.random() * 400);
 const profile = mkdtempSync(join(tmpdir(), 'novaura-browser-test-'));
 const browser = spawn(findBrowser(), [
@@ -108,7 +201,8 @@ async function connect() {
           if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
             pageErrors.push(`console.error: ${msg.params.args.map(a => a.value ?? a.description ?? '').join(' ').slice(0, 300)}`);
           }
-          if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error' && !/favicon/.test(msg.params.entry.url || '')) {
+          if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error' && !/favicon/.test(msg.params.entry.url || '')
+            && !isCyprevCspReport(msg.params.entry.text, msg.params.entry.url)) {
             pageErrors.push(`browser log: ${msg.params.entry.text.slice(0, 300)}`);
           }
         };
@@ -140,7 +234,7 @@ try {
   for (const file of files) {
     console.log(`# ${file}`);
     pageErrors = [];
-    const query = `file=${encodeURIComponent(file)}${selftest ? '&selftest=1' : ''}`;
+    const query = `file=${encodeURIComponent(file)}${selftest ? '&selftest=1' : ''}&cyprev=${encodeURIComponent(CYPREV)}`;
     const runner = vite ? `${vite}scripts/smoke/browser-runner.html` : `http://127.0.0.1:${HTTP}/__runner.html`;
     await send('Page.navigate', { url: `${runner}?${query}` });
     const start = Date.now();
@@ -164,6 +258,7 @@ try {
   try { ws?.close(); } catch { /* closing */ }
   browser.kill();
   server.close();
+  cyprevServer.close();
   await sleep(300);
   try { rmSync(profile, { recursive: true, force: true }); } catch { /* the browser may still hold it */ }
 }
