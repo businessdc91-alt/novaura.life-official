@@ -9,38 +9,14 @@
 
 import { db } from '../../database/sovereignDatabase.js';
 import { DEFAULT_QUOTA_BYTES, LOCAL_STORAGE_LIMIT_BYTES } from './limits.js';
+import { sizeOf } from './size.js';
+
+export { sizeOf };
 
 const LS = 'ls:';
 const ST = 's:';
 // ';' sorts right after ':', so [appId, 'ls:'] up to [appId, 'ls;'] is every ls: key.
 const range = (appId, prefix) => [[appId, prefix], [appId, prefix.slice(0, -1) + ';']];
-
-function utf8Length(s) {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 0x80) n += 1;
-    else if (c < 0x800) n += 2;
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n += 4; i++; }
-    else n += 3;
-  }
-  return n;
-}
-
-/** Bytes a value takes: UTF-8 length for strings, byte length for binary, size for blobs. */
-export function sizeOf(value) {
-  if (value == null) return 0;
-  if (typeof value === 'string') return utf8Length(value);
-  if (value instanceof ArrayBuffer) return value.byteLength;
-  if (ArrayBuffer.isView(value)) return value.byteLength;
-  if (typeof Blob !== 'undefined' && value instanceof Blob) return value.size;
-  if (typeof value === 'number' || typeof value === 'boolean') return 8;
-  try {
-    return utf8Length(JSON.stringify(value) ?? '');
-  } catch {
-    return 0;
-  }
-}
 
 function quotaError(message) {
   const err = new Error(message);
