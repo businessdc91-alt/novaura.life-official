@@ -11,6 +11,8 @@ import { publishHostedSite } from '../../services/sovereignMesh.js';
 import { marketplacePublish } from '../../services/marketplacePublishService.js';
 import { runPipeline, phasesFor, TESTS_PATH } from '../../services/cybeni/pipeline.js';
 import { listCybeniModels, runModel, suggestRoles } from '../../services/cybeni/models.js';
+import { createAppAiBridge } from '../../services/cybeni/appAiBridge.js';
+import { kernel } from '../../kernel/NovaKernel.js';
 import { buildPreview, staticCheck } from '../../services/cybeni/previewBuilder.js';
 import { publishPreview, clearPreview, verifyInHiddenFrame, newSessionId, isNoise } from '../../services/cybeni/previewHost.js';
 import { normalizeTests } from '../../services/cybeni/testAgent.js';
@@ -76,12 +78,14 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
   const [checkReport, setCheckReport] = useState(null);
   const liveTimer = useRef(null);
 
-  const settingsRef = useRef(settings);
-  const modelsRef = useRef(models);
-  useEffect(() => {
-    settingsRef.current = settings;
-    modelsRef.current = models;
-  }, [settings, models]);
+  // ai.chat() in the preview runs on the person's chosen OS model, like an installed app:
+  // no companion memory, no cached answers.
+  const [aiBridge] = useState(() => createAppAiBridge({
+    chat: (messages, opts) => {
+      if (!kernel?.ai?.chat) throw new Error('The AI subsystem is not ready yet.');
+      return kernel.ai.chat(messages, { ...opts, useRag: false, noCache: true });
+    },
+  }));
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [showExport, setShowExport] = useState(false);
@@ -241,27 +245,15 @@ export default function CybeniBuilderWindow({ props: windowProps } = {}) {
       } else if (d.type === 'inspect-cancelled') {
         setInspecting(false);
       } else if (d.type === 'ai-request' && d.requestId) {
-        try {
-          const roles = settingsRef.current?.roles || {};
-          const modelKey = roles.developer || roles.architect || modelsRef.current[0]?.key;
-          if (!modelKey) throw new Error('No AI model configured in Cybeni settings.');
-          const incoming = Array.isArray(d.messages) ? d.messages : [];
-          const hasSys = incoming.some(m => m.role === 'system');
-          const sysContent = d.opts?.system || 'You are a helpful AI assistant embedded inside an application.';
-          const msgs = hasSys ? incoming : [{ role: 'system', content: sysContent }, ...incoming];
-          const text = await runModel(modelKey, msgs, {
-            temperature: d.opts?.temperature ?? 0.5,
-            maxTokens: Math.min(2048, Number(d.opts?.maxTokens) || 1024),
-          });
-          e.source?.postMessage({ __cybeniAiReply: true, requestId: d.requestId, text }, replyOrigin);
-        } catch (err) {
-          e.source?.postMessage({ __cybeniAiReply: true, requestId: d.requestId, error: err.message || 'AI request failed.' }, replyOrigin);
-        }
+        const target = e.source;
+        aiBridge.handle(d, (payload) => {
+          try { target?.postMessage(payload, replyOrigin); } catch { /* the preview was replaced */ }
+        });
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [aiBridge]);
 
   // ── Editing ───────────────────────────────────────────────────────────────
 

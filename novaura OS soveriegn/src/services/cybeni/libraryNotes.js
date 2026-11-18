@@ -46,7 +46,7 @@ const NOTES = {
   '@tanstack/react-query': 'TanStack Query v5: wrap the app in <QueryClientProvider client={new QueryClient()}>; useQuery({ queryKey: [...], queryFn }).',
   uuid: 'uuid v9: import { v4 as uuidv4 } from \'uuid\'; or use crypto.randomUUID() with no package.',
   'date-fns': 'date-fns v3: named imports, e.g. import { format, addDays } from \'date-fns\'.',
-  '@cybeni/backend': '@cybeni/backend (built-in): import { db, auth, storage, ai } from \'@cybeni/backend\'. db.collection(\'items\') supports list/get/insert/update/remove/seed/subscribe; auth supports currentUser/signUp/signIn/demoSignIn/signOut/onAuthChange; storage has get/set; ai.chat(prompt) uses Sovereign OS AI.',
+  '@cybeni/backend': '@cybeni/backend (built-in): import { db, auth, storage, ai } from \'@cybeni/backend\'. db.collection(\'items\') supports list/get/insert/update/remove/seed/subscribe; auth supports currentUser/signUp/signIn/demoSignIn/signOut/onAuthChange; storage has get/set; ai.chat(promptOrMessages, { system, maxTokens, onToken }) runs on the person\'s Sovereign OS AI and resolves with the reply text, and onToken(piece) streams it as it is written (at most 2 requests at once per app).',
   '@novaura/sdk': '@novaura/sdk (alias of @cybeni/backend / window.novaura): provides db, auth, storage, and ai APIs with zero configuration.',
 };
 

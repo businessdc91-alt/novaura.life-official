@@ -143,7 +143,7 @@ The app runs in a browser preview with no build step:
 - TypeScript (.ts/.tsx) is supported (types are stripped, not checked).
 - npm packages are imported by bare name and loaded from esm.sh at runtime, so only use packages that work in the browser. Do not write an import map: bare imports are resolved automatically.
 - Tailwind is available by adding <script src="https://cdn.tailwindcss.com"></script> to index.html (with automatic offline fallback utilities).
-- Built-in full-stack backend: import { db, auth, storage, ai } from '@cybeni/backend' (or window.novaura) gives you persistent tables (db.collection('items').list/get/insert/update/remove/seed/subscribe), multi-user accounts (auth.currentUser/signUp/signIn/demoSignIn/signOut/onAuthChange), storage, and ai.chat() with zero setup. Use '@cybeni/backend' for data-driven or multi-user apps unless localStorage/IndexedDB is simpler.
+- Built-in full-stack backend: import { db, auth, storage, ai } from '@cybeni/backend' (or window.novaura) gives you persistent tables (db.collection('items').list/get/insert/update/remove/seed/subscribe), multi-user accounts (auth.currentUser/signUp/signIn/demoSignIn/signOut/onAuthChange), storage, and ai.chat(promptOrMessages, { system, onToken }) (resolves with the reply text; onToken streams it) with zero setup. Use '@cybeni/backend' for data-driven or multi-user apps unless localStorage/IndexedDB is simpler.
 - Project media assets under assets/ (images/audio) can be imported directly (import logo from './assets/logo.png') or referenced as <img src="assets/logo.png" />.
 - No Node APIs, no require(), no bundler or package.json build config.
 - For an empty project, default to React + Tailwind with index.html, src/main.jsx and src/App.jsx.`;
