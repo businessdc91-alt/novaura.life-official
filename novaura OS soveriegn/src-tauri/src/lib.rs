@@ -1913,6 +1913,8 @@ pub fn run() {
             preview::cybeni_preview_publish,
             preview::cybeni_preview_clear,
             preview::site_preview_publish,
+            preview::addition_publish,
+            preview::addition_clear,
             native_build::cybeni_native_toolchains,
             native_build::cybeni_native_compile,
             llm::llm_catalog,

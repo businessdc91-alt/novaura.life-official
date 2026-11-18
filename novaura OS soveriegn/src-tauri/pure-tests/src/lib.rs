@@ -8,3 +8,6 @@ pub mod local_ai_stream_rules;
 
 #[path = "../../src/addition_csp_rules.rs"]
 pub mod addition_csp_rules;
+
+#[path = "../../src/addition_sessions_rules.rs"]
+pub mod addition_sessions_rules;

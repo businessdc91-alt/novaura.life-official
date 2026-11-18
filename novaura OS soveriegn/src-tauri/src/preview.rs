@@ -22,6 +22,15 @@ use std::sync::{Mutex, OnceLock};
 use serde::Deserialize;
 use tauri::http::{header, Request, Response, StatusCode};
 
+#[path = "addition_csp_rules.rs"]
+mod addition_csp_rules;
+#[path = "addition_sessions_rules.rs"]
+mod addition_sessions_rules;
+
+use addition_csp_rules::addition_csp;
+use addition_sessions_rules::{valid_session, AdditionSessions, Served};
+pub(crate) use addition_sessions_rules::{clean_path, percent_decode};
+
 const MAX_FILES: usize = 600;
 const MAX_TOTAL_BYTES: usize = 24 * 1024 * 1024;
 const MAX_SESSIONS: usize = 8;
@@ -92,31 +101,6 @@ pub struct PreviewFileIn {
     pub mime: String,
 }
 
-fn valid_session(id: &str) -> bool {
-    (8..=40).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric())
-}
-
-/// Accept only plain relative paths: no `..`, no backslashes, no absolute paths.
-pub(crate) fn clean_path(path: &str) -> Option<String> {
-    let trimmed = path.trim_start_matches('/');
-    if trimmed.is_empty() || trimmed.len() > 300 || trimmed.contains('\\') || trimmed.contains('\0') {
-        return None;
-    }
-    let mut parts = Vec::new();
-    for seg in trimmed.split('/') {
-        match seg {
-            "" | "." => continue,
-            ".." => return None,
-            s => parts.push(s),
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("/"))
-    }
-}
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -176,23 +160,30 @@ pub fn cybeni_preview_clear(session: String) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
-                out.push(hi * 16 + lo);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
+/// Addition sessions: their own pool (see `addition_sessions_rules`), each with the
+/// CSP built from the network origins the person approved for that addition.
+fn additions() -> &'static Mutex<AdditionSessions> {
+    static ADDITIONS: OnceLock<Mutex<AdditionSessions>> = OnceLock::new();
+    ADDITIONS.get_or_init(|| Mutex::new(AdditionSessions::new()))
+}
+
+/// Publish one addition launch. The CSP is built here from `network`, never taken
+/// from the page; an origin that may not be allowed fails the whole publish.
+/// `once` lists files that are served a single time (the storage snapshot).
+#[tauri::command]
+pub fn addition_publish(session: String, files: Vec<PreviewFileIn>, network: Vec<String>, once: Vec<String>) -> Result<usize, String> {
+    let csp = addition_csp(&network)?;
+    let files = files.into_iter().map(|f| (f.path, f.mime, f.content.into_bytes())).collect();
+    let mut sessions = additions().lock().map_err(|_| "Addition store poisoned".to_string())?;
+    sessions.publish(&session, files, csp, &once, now_ms())
+}
+
+#[tauri::command]
+pub fn addition_clear(session: String) -> Result<(), String> {
+    if let Ok(mut sessions) = additions().lock() {
+        sessions.clear(&session);
     }
-    String::from_utf8_lossy(&out).into_owned()
+    Ok(())
 }
 
 fn respond(status: StatusCode, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> {
@@ -211,14 +202,22 @@ fn respond_with(status: StatusCode, mime: &str, body: Vec<u8>, csp: &str) -> Res
         .unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
-/// Serve `/<session>/<path>`. Unknown extension-less paths fall back to
-/// index.html so client-side routers work.
+/// Serve `/<session>/<path>`, from the addition pool first and otherwise from the
+/// previews. Unknown extension-less paths fall back to index.html so client-side
+/// routers work.
 pub fn handle(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let raw = percent_decode(request.uri().path());
     let trimmed = raw.trim_start_matches('/');
     let (session, rest) = trimmed.split_once('/').unwrap_or((trimmed, ""));
     if !valid_session(session) {
         return respond(StatusCode::NOT_FOUND, "text/plain", b"Unknown preview".to_vec());
+    }
+    if let Ok(mut additions) = additions().lock() {
+        match additions.serve(session, rest) {
+            Served::NotAddition => {}
+            Served::File { mime, body, csp } => return respond_with(StatusCode::OK, &mime, body, &csp),
+            Served::Missing { csp } => return respond_with(StatusCode::NOT_FOUND, "text/plain", b"Not found in this addition".to_vec(), &csp),
+        }
     }
     let path = if rest.is_empty() || rest.ends_with('/') { format!("{rest}index.html") } else { rest.to_string() };
     let Some(path) = clean_path(&path) else {
@@ -245,16 +244,6 @@ pub fn handle(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn path_cleaning() {
-        assert_eq!(clean_path("/src/App.jsx").as_deref(), Some("src/App.jsx"));
-        assert_eq!(clean_path("./a/./b.js").as_deref(), Some("a/b.js"));
-        assert!(clean_path("../etc/passwd").is_none());
-        assert!(clean_path("a/../../b").is_none());
-        assert!(clean_path("a\\b").is_none());
-        assert!(clean_path("").is_none());
-    }
 
     #[test]
     fn serves_published_files_with_isolating_headers() {
