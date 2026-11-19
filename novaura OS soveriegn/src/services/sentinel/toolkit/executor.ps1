@@ -16,7 +16,7 @@ while ($true) {
   Get-ChildItem -Path $io -Filter 'cmd-*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
     $name = $_.Name
     if ($seen.ContainsKey($name)) { return }
-    if ($name -notmatch '^cmd-(\d+)\.json$') { return }
+    if ($name -notmatch '^cmd-([0-9]+)\.json$') { return }  # ASCII digits only (.NET \d matches Unicode digits)
     $seen[$name] = $true
     $n   = $Matches[1]
     $obs = Join-Path $io ("obs-$n.json")

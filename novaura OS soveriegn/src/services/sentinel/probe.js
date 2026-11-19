@@ -33,7 +33,10 @@ export async function runProbe({ kind, name, slug, mode = 'safe' } = {}, { runne
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
   const target = resolved.target;
 
-  await store.registerTarget({ kind: target.kind, ref: target.ref, name: target.name, isStaging: mode === 'deep' });
+  // isStaging is a property of the target (set at registration/attestation), never derived
+  // from the run mode — otherwise probing a production target in deep mode would wrongly
+  // mark it staging and a future Deep-mode gate would trust that.
+  await store.registerTarget({ kind: target.kind, ref: target.ref, name: target.name, isStaging: target.isStaging === true });
 
   // 2. Scope token — mint then verify our own; refuse if it does not verify.
   const token = mintScopeToken(target, mode, { now });
@@ -59,27 +62,36 @@ export async function runProbe({ kind, name, slug, mode = 'safe' } = {}, { runne
   }
 
   try {
-    // 5. Echo.
-    const n = await session.channel.send({ op: 'echo' });
-    const obs = await session.channel.waitObservation(n, { timeoutMs: 30000, pollMs: 300 });
+    try {
+      // 5. Echo.
+      const n = await session.channel.send({ op: 'echo' });
+      const obs = await session.channel.waitObservation(n, { timeoutMs: 30000, pollMs: 300 });
 
-    // 6. Build the finding from ONLY safe fields, then redact (fail-closed backstop).
-    const finding = redactFinding({
-      id: 'f_echo',
-      checkId: 'echo',
-      severity: 'info',
-      vector: 'GET / on sandbox loopback',
-      fix: 'Informational: the sandbox served the target copy and answered on loopback.',
-      reproduce: 'Serve the target copy inside the sandbox and GET /.',
-      proof: { status: obs.status, headerNames: obs.headers, servedPaths: obs.servedPaths },
-    });
+      // 6. Build the finding from ONLY safe fields, then redact (fail-closed backstop).
+      const finding = redactFinding({
+        id: 'f_echo',
+        checkId: 'echo',
+        severity: 'info',
+        vector: 'GET / on sandbox loopback',
+        fix: 'Informational: the sandbox served the target copy and answered on loopback.',
+        reproduce: 'Serve the target copy inside the sandbox and GET /.',
+        proof: { status: obs.status, headerNames: obs.headers, servedPaths: obs.servedPaths },
+      });
 
-    // 7. Persist redacted data, then wipe the working folder.
-    await store.recordRun({ id: runId, targetId: target.id, mode, status: 'complete', startedAt, finishedAt: now() });
-    await store.recordFindings(runId, [finding]);
-    return { ok: true, runId, findings: [{ ...finding, runId }] };
+      // 7. Persist redacted data.
+      await store.recordRun({ id: runId, targetId: target.id, mode, status: 'complete', startedAt, finishedAt: now() });
+      await store.recordFindings(runId, [finding]);
+      return { ok: true, runId, findings: [{ ...finding, runId }] };
+    } catch (err) {
+      // A mid-run failure (timeout, send/observe error) ends the run FAILED with a clear
+      // reason and no fabricated findings — never an unhandled throw out of runProbe.
+      await store.recordRun({ id: runId, targetId: target.id, mode, status: 'failed', startedAt, finishedAt: now() });
+      return { ok: false, reason: `Probe run failed: ${err.message}`, runId };
+    }
   } finally {
-    await runner.stop(session);
+    // The wipe must happen even if stopping the runner fails, so no raw observation is left
+    // at rest. stop() is best-effort; the wipe is not.
+    try { await runner.stop(session); } catch { /* best effort */ }
     await rm(runDir, { recursive: true, force: true });
   }
 }

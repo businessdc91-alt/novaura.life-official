@@ -62,3 +62,24 @@ test('redactFinding leaves vector and fix but strips proof', () => {
   assert.equal(r.proof.body, '[redacted]');
   assert.equal(r.where.email, '[redacted]');
 });
+
+test('short high-entropy secrets and PII are redacted (deny-by-default)', () => {
+  const secrets = [
+    'AKIAIOSFODNN7EXAMPLE',                   // AWS access key id (20 chars, no separators)
+    '4111-1111-1111-1111',                    // credit-card number
+    '555-867-5309',                           // phone number
+    '550e8400-e29b-41d4-a716-446655440000',   // UUID (token/session shape)
+    'Password123',
+    'abc123def456',
+    'ABCD-1234-EFGH-5678-IJKL-9012',          // segmented license / API key
+  ];
+  for (const s of secrets) assert.equal(redactValue(s), '[redacted]', s);
+});
+
+test('legitimate safe tokens still survive the stricter classifier', () => {
+  for (const s of ['content-type', 'x-frame-options', 'content-security-policy', 'strict-transport-security',
+                   'GET', 'POST', 'OK', 'Not Found', 'Internal Server Error', 'index.html', 'app.js',
+                   'assets/logo.png', 'date', 'etag', 'server']) {
+    assert.equal(redactValue(s), s, s);
+  }
+});

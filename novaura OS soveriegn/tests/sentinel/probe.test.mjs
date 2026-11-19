@@ -144,3 +144,55 @@ test('a runner that fails to start ends the run failed with nothing stored and t
     await rm(workRoot, { recursive: true, force: true });
   }
 });
+
+test('probing in deep mode does not mark the target as staging', async () => {
+  reset();
+  resolveImpl = async () => OWNED;
+  const workRoot = await freshRoot();
+  try {
+    await runProbe({ kind: 'project', slug: 'app', mode: 'deep' }, { runner: createFakeRunner(), now: Date.now, workRoot });
+    const t = [...targets.rows.values()][0];
+    assert.equal(t.isStaging, false);
+  } finally {
+    await rm(workRoot, { recursive: true, force: true });
+  }
+});
+
+test('the working folder is wiped even when the runner stop throws', async () => {
+  reset();
+  resolveImpl = async () => OWNED;
+  const base = createFakeRunner();
+  const runner = { start: (...a) => base.start(...a), async stop() { throw new Error('stop blew up'); } };
+  const workRoot = await freshRoot();
+  try {
+    const r = await runProbe({ kind: 'project', slug: 'app' }, { runner, now: Date.now, workRoot });
+    assert.equal(r.ok, true);
+    assert.deepEqual(await readdir(workRoot), []);
+  } finally {
+    await rm(workRoot, { recursive: true, force: true });
+  }
+});
+
+test('a mid-run failure records a failed run and returns a reason, not a throw', async () => {
+  reset();
+  resolveImpl = async () => OWNED;
+  const hangRunner = {
+    async start() {
+      return { channel: { async send() { return 1; }, async waitObservation() { throw new Error('timed out waiting for observation 1'); }, close() {} } };
+    },
+    async stop() {},
+  };
+  const workRoot = await freshRoot();
+  try {
+    const r = await runProbe({ kind: 'project', slug: 'app' }, { runner: hangRunner, now: Date.now, workRoot });
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /timed out|observation|failed/i);
+    const allRuns = [...runs.rows.values()];
+    assert.equal(allRuns.length, 1);
+    assert.equal(allRuns[0].status, 'failed');
+    assert.equal(findings.rows.size, 0);
+    assert.deepEqual(await readdir(workRoot), []);
+  } finally {
+    await rm(workRoot, { recursive: true, force: true });
+  }
+});

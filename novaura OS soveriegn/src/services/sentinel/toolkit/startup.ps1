@@ -29,9 +29,12 @@ Start-Job -Name sentinelServer -ArgumentList $site, $port -ScriptBlock {
       $rel = [System.Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath).TrimStart('/')
       if ([string]::IsNullOrEmpty($rel)) { $rel = 'index.html' }
       $path = Join-Path $site $rel
-      # Never serve outside the copied site folder.
+      # Never serve outside the copied site folder. Compare against the site root WITH a
+      # trailing separator, case-insensitively, so a sibling like "site-evil" can't match.
       $full = [System.IO.Path]::GetFullPath($path)
-      if ($full.StartsWith([System.IO.Path]::GetFullPath($site)) -and (Test-Path $full -PathType Leaf)) {
+      $root = [System.IO.Path]::GetFullPath($site)
+      if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) { $root += [System.IO.Path]::DirectorySeparatorChar }
+      if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path $full -PathType Leaf)) {
         $bytes = [System.IO.File]::ReadAllBytes($full)
         $ctx.Response.StatusCode = 200
         $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)

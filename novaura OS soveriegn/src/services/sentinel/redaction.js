@@ -15,8 +15,17 @@ const RE_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;    // header.
 const RE_BEARER = /\bbearer\s+\S/i;
 const RE_BASE64 = /^[A-Za-z0-9+/_-]{40,}={0,2}$/;                     // long base64 blob
 const RE_EMAIL = /[^@\s]+@[^@\s]+\.[^@\s]+/;
-const RE_ENUM = /^[A-Za-z0-9][A-Za-z0-9 _.:/+-]*$/;                  // words, header names, methods
-const RE_LONGRUN = /[A-Za-z0-9]{24,}/;                               // an unbroken run that long is token-like
+
+// A string is kept ONLY if it matches one of a few narrow, positively-safe shapes
+// (deny-by-default). Anything else — short API keys, credit-card numbers, phone numbers,
+// UUIDs, passwords, license keys — is redacted, because it cannot be shown to be safe.
+const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'TRACE', 'CONNECT']);
+const RE_HEADER = /^[A-Za-z]+(?:-[A-Za-z]+)+$/;       // hyphenated, letters only: content-type, x-frame-options
+const RE_WORD = /^[A-Za-z]{1,12}$/;                   // short all-letter token: GET, OK, date, etag, server
+const RE_STATUS = /^[A-Za-z][A-Za-z ]{1,38}$/;        // status text; must contain a space (checked below)
+const RE_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;      // path/filename shape
+const RE_ALLDIGITS = /^[0-9._/-]+$/;                  // all digits/separators -> card/phone/IP, not a safe name
+const RE_LONGRUN = /[A-Za-z0-9]{16,}/;                // a 16+ unbroken alphanumeric run is token-like
 
 const isPlainObject = (v) => {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
@@ -25,7 +34,18 @@ const isPlainObject = (v) => {
 };
 
 const isSecret = (s) => RE_HEX.test(s) || RE_JWT.test(s) || RE_BEARER.test(s) || RE_BASE64.test(s) || RE_EMAIL.test(s);
-const isSafeEnum = (s) => s.length <= MAX_ENUM_LEN && RE_ENUM.test(s) && !RE_LONGRUN.test(s);
+
+function isSafeEnum(s) {
+  if (s.length === 0 || s.length > MAX_ENUM_LEN) return false;
+  if (METHODS.has(s)) return true;                                   // HTTP method
+  if (RE_WORD.test(s)) return true;                                  // short dictionary-ish token
+  if (RE_HEADER.test(s) && !RE_LONGRUN.test(s)) return true;         // hyphenated header name
+  if (RE_STATUS.test(s) && s.includes(' ')) return true;            // multi-word status text
+  if ((s.includes('.') || s.includes('/')) && RE_PATH.test(s) && !RE_LONGRUN.test(s) && !RE_ALLDIGITS.test(s)) {
+    return true;                                                     // path / filename (index.html, assets/logo.png)
+  }
+  return false;
+}
 
 /** A non-sensitive descriptor of a value's shape — no contents. */
 export function shapeOf(value) {
