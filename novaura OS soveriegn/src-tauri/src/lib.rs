@@ -6,6 +6,7 @@ pub mod mesh;
 pub mod native_build;
 pub mod local_ai_stream;
 pub mod preview;
+pub mod sentinel_runner;
 pub mod games;
 pub mod templates;
 mod password;
@@ -1915,6 +1916,8 @@ pub fn run() {
             preview::site_preview_publish,
             preview::addition_publish,
             preview::addition_clear,
+            sentinel_runner::sentinel_sandbox_start,
+            sentinel_runner::sentinel_sandbox_stop,
             native_build::cybeni_native_toolchains,
             native_build::cybeni_native_compile,
             llm::llm_catalog,
