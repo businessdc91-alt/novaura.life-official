@@ -139,8 +139,51 @@ export async function loadVaultState(filename) {
       console.warn('[NativeService] load_vault_state note:', err);
     }
   }
+  if (typeof localStorage === 'undefined') return null;
   const raw = localStorage.getItem(`novaura_vault_sync_${filename}`);
   return raw ? JSON.parse(raw) : null;
+}
+
+export async function purgeVaultState(filename) {
+  let purgedNative = false;
+  if (isTauriNative()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      purgedNative = Boolean(await invoke('purge_vault_state', { filename }));
+    } catch (err) {
+      console.warn('[NativeService] purge_vault_state note:', err);
+    }
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem(`novaura_vault_sync_${filename}`);
+    } catch {}
+  }
+  return purgedNative || true;
+}
+
+export async function setNativeCloudAirGap(enabled) {
+  if (isTauriNative()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return Boolean(await invoke('cloud_set_airgap', { enabled: Boolean(enabled) }));
+    } catch (err) {
+      console.warn('[NativeService] cloud_set_airgap note:', err);
+    }
+  }
+  return Boolean(enabled);
+}
+
+export async function getNativeCloudAirGap() {
+  if (isTauriNative()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return Boolean(await invoke('cloud_get_airgap'));
+    } catch (err) {
+      console.warn('[NativeService] cloud_get_airgap note:', err);
+    }
+  }
+  return false;
 }
 
 /**

@@ -1,9 +1,11 @@
 /**
  * NovAura Sovereign OS — Sovereign Keyring & Credential Enclave
- * 
+ *
  * Hardware-bound, zero-knowledge credential enclave:
- * - 256-bit AES-GCM encryption with PBKDF2 key derivation (250,000 rounds)
+ * - 256-bit AES-GCM encryption with PBKDF2-HMAC-SHA256 key derivation (600,000 rounds, OWASP standard)
  * - Independent per-vault random salt with verifier record & legacy salt migration
+ * - Zero-plaintext storage for SSH/PGP keys and TOTP 2FA seeds
+ * - Configurable idle auto-lock + visibilitychange lock enforcement
  * - Authentic RFC 6238 TOTP 2FA code generation (Base32 + HMAC-SHA1)
  * - Genuine Ed25519 & RSA SSH key generation with valid OpenSSH wire format
  * - Automated 30-second zero-clipboard memory wipe
@@ -14,13 +16,17 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha1 } from '@noble/hashes/legacy.js';
 
-let _sessionKey = null; // Volatile memory only; cleared on lock
 let _clipboardWipeTimer = null;
 let _clipboardRemainingSec = 0;
 
 const VAULT_SALT_KEY = 'novaura_enclave_vault_salt_v2';
 const VERIFIER_RECORD_ID = 'enclave_passphrase_verifier';
 const VERIFIER_PLAINTEXT = 'NOVAURA_SOVEREIGN_ENCLAVE_VERIFIED';
+
+export const LEGACY_SSH_STORAGE_KEY = 'novaura_ssh_keys';
+export const LEGACY_TOTP_STORAGE_KEY = 'novaura_totp_accounts';
+export const ENCLAVE_IDLE_MINUTES_KEY = 'novaura_enclave_idle_minutes';
+const DEFAULT_IDLE_MINUTES = 15;
 
 // ── RFC 4648 Base32 Decoding ───────────────────────────────────────────────
 
@@ -88,13 +94,113 @@ function bytesToBase64(bytes) {
 // ── Enclave Service Implementation ─────────────────────────────────────────
 
 class CredentialEnclaveService {
-  constructor() {
+  constructor({ recordsStore, storage } = {}) {
+    this._recordsStore = recordsStore || db.enclave_records;
+    this._storage = storage !== undefined
+      ? storage
+      : (typeof localStorage !== 'undefined' ? localStorage : null);
+    this._sessionKey = null; // Volatile memory only; cleared on lock
     this._isUnlocked = false;
     this._listeners = new Set();
+    this._idleTimer = null;
+    this._lastActivityAt = 0;
+    this._lastLockReason = null;
+    this._fallbackSaltHex = null;
+    this._idleTimeoutMs = this._loadIdleMinutes() * 60_000;
+
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      this._onVisibilityChange = () => {
+        if (
+          document.visibilityState === 'visible' &&
+          this._isUnlocked &&
+          this._idleTimeoutMs > 0 &&
+          (Date.now() - this._lastActivityAt) >= this._idleTimeoutMs
+        ) {
+          this.lock('idle_timeout');
+        }
+      };
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+    }
+  }
+
+  _storageGet(key) {
+    try {
+      return this._storage?.getItem?.(key) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  _storageSet(key, val) {
+    try {
+      this._storage?.setItem?.(key, String(val));
+    } catch {}
+  }
+
+  _storageRemove(key) {
+    try {
+      this._storage?.removeItem?.(key);
+    } catch {}
+  }
+
+  _loadIdleMinutes() {
+    const raw = this._storageGet(ENCLAVE_IDLE_MINUTES_KEY);
+    if (raw === null || raw === '') return DEFAULT_IDLE_MINUTES;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return DEFAULT_IDLE_MINUTES;
+    return n;
   }
 
   isUnlocked() {
     return this._isUnlocked;
+  }
+
+  getIdleTimeoutMinutes() {
+    return Math.round((this._idleTimeoutMs / 60_000) * 1000) / 1000;
+  }
+
+  setIdleTimeoutMinutes(minutes) {
+    const n = Number(minutes);
+    const clean = Number.isFinite(n) && n >= 0 ? n : DEFAULT_IDLE_MINUTES;
+    this._storageSet(ENCLAVE_IDLE_MINUTES_KEY, clean);
+    this._idleTimeoutMs = clean * 60_000;
+    this._armIdleTimer();
+    this._notify();
+    return clean;
+  }
+
+  setIdleTimeoutMs(ms) {
+    const n = Number(ms);
+    this._idleTimeoutMs = Number.isFinite(n) && n >= 0 ? n : DEFAULT_IDLE_MINUTES * 60_000;
+    this._armIdleTimer();
+    return this._idleTimeoutMs;
+  }
+
+  touchActivity() {
+    this._lastActivityAt = Date.now();
+    this._armIdleTimer();
+  }
+
+  _armIdleTimer() {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+      this._idleTimer = null;
+    }
+    if (this._isUnlocked && this._idleTimeoutMs > 0) {
+      this._idleTimer = setTimeout(() => {
+        this.lock('idle_timeout');
+      }, this._idleTimeoutMs);
+      this._idleTimer.unref?.();
+    }
+  }
+
+  getStatus() {
+    return {
+      isUnlocked: this._isUnlocked,
+      idleTimeoutMinutes: this.getIdleTimeoutMinutes(),
+      lastLockReason: this._lastLockReason,
+      lastActivityAt: this._lastActivityAt,
+    };
   }
 
   subscribe(listener) {
@@ -103,18 +209,28 @@ class CredentialEnclaveService {
   }
 
   _notify() {
-    this._listeners.forEach(fn => fn({ isUnlocked: this._isUnlocked }));
+    const status = {
+      isUnlocked: this._isUnlocked,
+      reason: this._lastLockReason,
+      idleTimeoutMinutes: this.getIdleTimeoutMinutes(),
+    };
+    this._listeners.forEach(fn => fn(status));
   }
 
   /**
    * Get or initialize the persistent random vault salt
    */
   _getVaultSalt() {
-    let saltHex = localStorage.getItem(VAULT_SALT_KEY);
+    let saltHex = this._storageGet(VAULT_SALT_KEY);
     if (!saltHex) {
-      const saltBytes = crypto.getRandomValues(new Uint8Array(16));
-      saltHex = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-      localStorage.setItem(VAULT_SALT_KEY, saltHex);
+      if (this._fallbackSaltHex) {
+        saltHex = this._fallbackSaltHex;
+      } else {
+        const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+        saltHex = Array.from(saltBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        this._fallbackSaltHex = saltHex;
+        this._storageSet(VAULT_SALT_KEY, saltHex);
+      }
     }
     const bytes = new Uint8Array(saltHex.length / 2);
     for (let i = 0; i < bytes.length; i++) {
@@ -153,7 +269,7 @@ class CredentialEnclaveService {
   /**
    * Derives 256-bit AES-GCM encryption key from operator passphrase + cryptographic salt (600,000 rounds)
    * Verifies against stored verifier to ensure invalid passphrases fail immediately.
-   * Transparently migrates legacy 250,000 round vaults to 600,000 rounds.
+   * Transparently migrates legacy 250,000 round vaults and legacy plaintext localStorage keys.
    */
   async unlock(passphrase) {
     if (!passphrase) throw new Error('Passphrase required to unlock enclave.');
@@ -163,7 +279,7 @@ class CredentialEnclaveService {
     const derivedKey = await this._deriveKeyWithSalt(passphrase, primarySalt, 600000);
 
     // Check if a verifier record exists
-    const verifierRecord = await db.enclave_records.get(VERIFIER_RECORD_ID);
+    const verifierRecord = await this._recordsStore.get(VERIFIER_RECORD_ID);
 
     if (verifierRecord) {
       try {
@@ -178,8 +294,9 @@ class CredentialEnclaveService {
         if (text !== VERIFIER_PLAINTEXT) {
           throw new Error('Passphrase verification mismatch.');
         }
-      } catch (err) {
+      } catch {
         // Fallback 1: Check legacy 250,000 rounds with primary salt and transparently upgrade
+        let upgraded = false;
         try {
           const legacy250kKey = await this._deriveKeyWithSalt(passphrase, primarySalt, 250000);
           const iv = new Uint8Array(verifierRecord.iv);
@@ -190,17 +307,16 @@ class CredentialEnclaveService {
             ciphertext
           );
           if (new TextDecoder().decode(decrypted) === VERIFIER_PLAINTEXT) {
-            // Smoothly migrate verifier to 600,000 rounds
-            _sessionKey = derivedKey;
+            this._sessionKey = derivedKey;
             await this._setVerifierRecord(derivedKey);
-            this._isUnlocked = true;
-            this._notify();
-            return true;
+            upgraded = true;
           }
         } catch {
           // Fallback 2: Check older hardware-concatenated salt at 250,000 rounds
+          const hw = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 8) : 8;
+          const mem = typeof navigator !== 'undefined' ? (navigator.deviceMemory || 16) : 16;
           const legacyHwSalt = new TextEncoder().encode(
-            (navigator.hardwareConcurrency || 8) + '_' + (navigator.deviceMemory || 16) + '_novaura_sovereign_enclave'
+            `${hw}_${mem}_novaura_sovereign_enclave`
           );
           try {
             const legacyKey = await this._deriveKeyWithSalt(passphrase, legacyHwSalt, 250000);
@@ -212,25 +328,28 @@ class CredentialEnclaveService {
               ciphertext
             );
             if (new TextDecoder().decode(decrypted) === VERIFIER_PLAINTEXT) {
-              _sessionKey = derivedKey;
+              this._sessionKey = derivedKey;
               await this._setVerifierRecord(derivedKey);
-              this._isUnlocked = true;
-              this._notify();
-              return true;
+              upgraded = true;
             }
           } catch {}
         }
 
-        throw new Error('Incorrect passphrase. Enclave unlock rejected.');
+        if (!upgraded) {
+          throw new Error('Incorrect passphrase. Enclave unlock rejected.');
+        }
       }
     } else {
       // First-time initialization: create verifier record with 600,000 rounds
-      _sessionKey = derivedKey;
+      this._sessionKey = derivedKey;
       await this._setVerifierRecord(derivedKey);
     }
 
-    _sessionKey = derivedKey;
+    this._sessionKey = derivedKey;
     this._isUnlocked = true;
+    this._lastLockReason = null;
+    this.touchActivity();
+    await this.migrateLegacyPlaintextSecrets().catch(() => {});
     this._notify();
     return true;
   }
@@ -244,7 +363,7 @@ class CredentialEnclaveService {
       enc.encode(VERIFIER_PLAINTEXT)
     );
 
-    await db.enclave_records.put({
+    await this._recordsStore.put({
       id: VERIFIER_RECORD_ID,
       type: 'verifier',
       label: 'Passphrase Integrity Sentinel',
@@ -255,25 +374,113 @@ class CredentialEnclaveService {
     });
   }
 
-  lock() {
-    _sessionKey = null;
+  lock(reason = 'manual') {
+    if (this._idleTimer) {
+      clearTimeout(this._idleTimer);
+      this._idleTimer = null;
+    }
+    this._sessionKey = null;
     this._isUnlocked = false;
+    this._lastLockReason = reason;
     this._notify();
+  }
+
+  /**
+   * Detect plaintext legacy SSH/TOTP items left in localStorage prior to enclave hardening.
+   */
+  hasLegacyPlaintextSecrets() {
+    const parseArr = (raw) => {
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+    const ssh = parseArr(this._storageGet(LEGACY_SSH_STORAGE_KEY));
+    const totp = parseArr(this._storageGet(LEGACY_TOTP_STORAGE_KEY));
+    return {
+      sshCount: ssh.length,
+      totpCount: totp.length,
+      total: ssh.length + totp.length,
+    };
+  }
+
+  /**
+   * Encrypt any legacy plaintext SSH or TOTP records into AES-256-GCM enclave storage
+   * and purge plaintext localStorage keys only once encryption succeeds.
+   */
+  async migrateLegacyPlaintextSecrets() {
+    if (!this._isUnlocked || !this._sessionKey) {
+      throw new Error('Enclave is locked. Unlock with operator passphrase first.');
+    }
+
+    const parseArr = (raw) => {
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const sshItems = parseArr(this._storageGet(LEGACY_SSH_STORAGE_KEY));
+    const totpItems = parseArr(this._storageGet(LEGACY_TOTP_STORAGE_KEY));
+    let migratedSsh = 0;
+    let migratedTotp = 0;
+
+    for (const item of sshItems) {
+      if (!item || typeof item !== 'object') continue;
+      await this.storeSecret({
+        id: item.id || ('ssh_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
+        type: 'ssh_pgp',
+        label: item.label || `${item.algorithm || 'SSH'} Operator Key`,
+        category: String(item.algorithm || 'ssh').toLowerCase(),
+        plaintextPayload: item,
+      });
+      migratedSsh++;
+    }
+
+    if (this._storageGet(LEGACY_SSH_STORAGE_KEY) !== null) {
+      this._storageRemove(LEGACY_SSH_STORAGE_KEY);
+    }
+
+    for (const item of totpItems) {
+      if (!item || typeof item !== 'object') continue;
+      await this.storeSecret({
+        id: item.id || ('totp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
+        type: 'totp',
+        label: item.name || item.label || '2FA Account',
+        category: item.issuer || 'Sovereign Node',
+        plaintextPayload: item,
+      });
+      migratedTotp++;
+    }
+
+    if (this._storageGet(LEGACY_TOTP_STORAGE_KEY) !== null) {
+      this._storageRemove(LEGACY_TOTP_STORAGE_KEY);
+    }
+
+    this.touchActivity();
+    return { migratedSsh, migratedTotp };
   }
 
   /**
    * Encrypt and store an enclave record in Dexie
    */
   async storeSecret({ id, type, label, category, plaintextPayload }) {
-    if (!this._isUnlocked || !_sessionKey) {
+    if (!this._isUnlocked || !this._sessionKey) {
       throw new Error('Enclave is locked. Unlock with operator passphrase first.');
     }
+    this.touchActivity();
 
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const enc = new TextEncoder();
     const encryptedBuffer = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
-      _sessionKey,
+      this._sessionKey,
       enc.encode(JSON.stringify(plaintextPayload))
     );
 
@@ -287,7 +494,7 @@ class CredentialEnclaveService {
       updatedAt: new Date().toISOString(),
     };
 
-    await db.enclave_records.put(record);
+    await this._recordsStore.put(record);
     return record;
   }
 
@@ -295,11 +502,12 @@ class CredentialEnclaveService {
    * Retrieve and decrypt a specific enclave secret
    */
   async revealSecret(id) {
-    if (!this._isUnlocked || !_sessionKey) {
+    if (!this._isUnlocked || !this._sessionKey) {
       throw new Error('Enclave is locked.');
     }
+    this.touchActivity();
 
-    const record = await db.enclave_records.get(id);
+    const record = await this._recordsStore.get(id);
     if (!record) throw new Error('Secret record not found.');
 
     const iv = new Uint8Array(record.iv);
@@ -307,7 +515,7 @@ class CredentialEnclaveService {
 
     const decryptedBuffer = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv },
-      _sessionKey,
+      this._sessionKey,
       ciphertext
     );
 
@@ -316,14 +524,40 @@ class CredentialEnclaveService {
   }
 
   async getSecretRecords() {
-    const all = await db.enclave_records.toArray();
+    if (this._isUnlocked) this.touchActivity();
+    const all = await this._recordsStore.toArray();
     // Hide system verifier from list
     return all.filter(r => r.id !== VERIFIER_RECORD_ID);
   }
 
+  /**
+   * Return decrypted records of a specific enclave type (e.g. 'ssh_pgp' or 'totp')
+   */
+  async listDecryptedByType(type) {
+    if (!this._isUnlocked || !this._sessionKey) {
+      throw new Error('Enclave is locked.');
+    }
+    this.touchActivity();
+    const all = await this.getSecretRecords();
+    const matching = all.filter(r => r.type === type);
+    const results = [];
+    for (const rec of matching) {
+      const payload = await this.revealSecret(rec.id);
+      results.push({
+        ...(payload && typeof payload === 'object' ? payload : { value: payload }),
+        id: rec.id,
+        label: payload?.label || rec.label,
+        category: rec.category,
+        updatedAt: rec.updatedAt,
+      });
+    }
+    return results;
+  }
+
   async deleteSecret(id) {
     if (id === VERIFIER_RECORD_ID) return;
-    await db.enclave_records.delete(id);
+    if (this._isUnlocked) this.touchActivity();
+    await this._recordsStore.delete(id);
   }
 
   /**

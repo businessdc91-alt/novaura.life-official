@@ -4,7 +4,7 @@ import {
   CreditCard, FileText, Layers, BookOpen, PhoneCall, Mail,
   Users, Bot, ShieldCheck, Settings, FolderOpen, Sparkles,
   MonitorCog, Cpu, Zap, Palette, Hammer, HardDrive, Flame,
-  GitBranch, KeyRound, GitPullRequest
+  GitBranch, KeyRound, GitPullRequest, Store
 } from 'lucide-react';
 import { APP_REGISTRY, getAppById } from '../config/appRegistry.js';
 
@@ -29,6 +29,7 @@ const CATEGORIES = [
     label: 'Creator Studio',
     color: 'text-amber-400',
     apps: [
+      { id: 'commerce_studio', label: 'Commerce Studio', icon: Store, desc: 'AI Dropshipping & Storefronts' },
       { id: 'media_foundry', label: 'Media Foundry', icon: Flame, desc: 'ComfyUI Forge & Visual Lab' },
       { id: 'literature', label: 'Word Studio', icon: BookOpen, desc: 'Literature IDE & Ghostwriter' },
       { id: 'card_forge', label: 'Card Forge', icon: Layers, desc: 'TCG Deck Studio' },

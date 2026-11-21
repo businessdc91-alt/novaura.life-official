@@ -14,6 +14,7 @@
 import { PROVIDERS, getProvider, providerChat } from '../../services/cloudProviders.js';
 import { db } from '../../database/sovereignDatabase.js';
 import { hydrateReasoningConfigFromDb, resolveReasoningParams } from '../../services/reasoningConfig.js';
+import { getSecurityPolicy } from '../../services/security/complianceService.js';
 
 const CACHE_TTL_MS = 10 * 60_000; // 10 minutes
 const MAX_CACHE_ENTRIES = 200;
@@ -207,7 +208,20 @@ export class AISubsystem {
             });
           }
         } else if (getProvider(provider)) {
-          result = await providerChat(provider, effectiveMessages, (name) => this._cloudKey(name), effectiveOptions);
+          const secPolicy = getSecurityPolicy();
+          if (secPolicy.airGappedAiOnly) {
+            this._kernel?.sentinel?.logEvent('cloud_egress_blocked', 'ai_subsystem', 'warning', { provider });
+            throw new Error(`Cloud provider ${provider} blocked by Strict Air-Gapped Local-Only AI Lock.`);
+          }
+          result = await providerChat(provider, effectiveMessages, (name) => this._cloudKey(name), {
+            ...effectiveOptions,
+            onSecretsRedacted: (findings) => {
+              this._kernel?.sentinel?.logEvent('cloud_secret_redacted', 'ai_subsystem', 'warning', {
+                provider,
+                findings,
+              });
+            },
+          });
           if (options.onToken) options.onToken(result);
         } else {
           continue;

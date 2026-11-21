@@ -30,6 +30,7 @@ import { setEmbeddingDiscovery } from '../services/auraCore/contextBridge.js';
 import {
   markBootHealthy, recordBootAttempt, recordCrashIncident, shouldRunBackgroundLoops,
 } from '../services/auraCore/phoenixProtocol.js';
+import { syncSecurityPoliciesToRuntime } from '../services/security/complianceService.js';
 
 export const BOOT_PHASES = [
   { id: 0,  name: 'KERNEL_INIT',  label: 'Initializing Sovereign subsystems...' },
@@ -128,7 +129,8 @@ export class NovaKernel {
       await this._phase(4, async () => {
         this.settings.init(this);
         await this.settings.onReady?.();
-        this._log(4, 'Preferences loaded from private storage.');
+        const secPolicy = await syncSecurityPoliciesToRuntime(this).catch(() => null);
+        this._log(4, `Preferences loaded from private storage.${secPolicy?.airGappedAiOnly ? ' [AIR-GAP LOCK ACTIVE]' : ''}`);
       });
 
       // Phase 5 — Memory Map & Snapshot restore

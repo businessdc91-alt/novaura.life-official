@@ -16,6 +16,7 @@ import {
   geminiThinkingConfig,
   reasoningTokenBudget,
 } from './reasoningConfig.js';
+import { getSecurityPolicy, scanAndRedactOutboundSecrets } from './security/complianceService.js';
 
 export const PROVIDERS = [
   {
@@ -102,6 +103,9 @@ export function providerBase(provider, getKey) {
 // ── Transport ──────────────────────────────────────────────────────────────
 
 async function send(provider, { url, method = 'POST', headers = {}, body, timeoutSecs = 600 }) {
+  if (getSecurityPolicy().airGappedAiOnly) {
+    throw new Error('Cloud AI egress is blocked: Strict Air-Gapped Local-Only AI mode is active. Disable Air-Gap Lock in Settings → Security & SOC 2 or use a local model (Ollama / LM Studio / Built-in AI).');
+  }
   const json = body === undefined ? undefined : JSON.stringify(body);
   if (isTauri() && !provider.custom) {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -342,6 +346,10 @@ const ADAPTERS = {
  * options: { model?, maxTokens?, temperature?, jsonSchema?, effort? }
  */
 export async function providerChat(id, messages, getKey, options = {}) {
+  const secPolicy = getSecurityPolicy();
+  if (secPolicy.airGappedAiOnly) {
+    throw new Error('Cloud AI egress is blocked: Strict Air-Gapped Local-Only AI mode is active. Disable Air-Gap Lock in Settings → Security & SOC 2 or use a local model (Ollama / LM Studio / Built-in AI).');
+  }
   const provider = getProvider(id);
   if (!provider) throw new Error(`Unknown provider: ${id}`);
   const key = getKey(id);
@@ -349,7 +357,15 @@ export async function providerChat(id, messages, getKey, options = {}) {
   const model = options.model || getKey(modelSetting(id)) || provider.defaultModel;
   if (!model) throw new Error(`Choose a ${provider.label} model in Settings → AI Keys & Models.`);
   const base = providerBase(provider, getKey);
-  const run = (opts) => ADAPTERS[provider.kind](provider, base, key, model, messages, opts);
+  let outboundMessages = messages;
+  if (secPolicy.redactCloudSecrets && options.skipSecretRedaction !== true) {
+    const scan = scanAndRedactOutboundSecrets(messages);
+    outboundMessages = scan.messages;
+    if (scan.redactedCount > 0) {
+      options.onSecretsRedacted?.(scan.findings);
+    }
+  }
+  const run = (opts) => ADAPTERS[provider.kind](provider, base, key, model, outboundMessages, opts);
   if (!inlineImages(options.images).length) return run(options);
   try {
     return await run(options);

@@ -396,6 +396,26 @@ export const APP_CAPABILITY_PROFILES = {
     canAccessRawDisk: false,
   },
 
+  commerce_studio: {
+    id: 'commerce_studio',
+    name: 'Sovereign Commerce Studio',
+    allowedPublish: ['commerce:*', 'website:*', 'media:request_asset'],
+    allowedSubscribe: ['commerce:*', 'website:*', 'media:asset_ready', 'theme:changed', 'window:*'],
+    allowedAppCalls: { media_foundry: ['request_illustration'] },
+    dataScope: [
+      'commerce_stores',
+      'commerce_products',
+      'commerce_orders',
+      'commerce_ledger',
+      'commerce_campaigns',
+      'commerce_domains',
+      'hosted_sites',
+      'documents',
+    ],
+    canAccessVaultSecrets: false,
+    canAccessRawDisk: false,
+  },
+
   card_creator: {
     id: 'card_creator',
     name: '3D Business Card Architect',

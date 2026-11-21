@@ -138,6 +138,7 @@ class SemanticsEngine {
       { id: 'browser', name: 'Decentralized Browser', description: 'Web browser and decentralized gateway' },
       { id: 'cybeni', name: 'Cybeni Builder', description: 'Dedicated AI IDE and code engineer' },
       { id: 'website_builder', name: 'Website Builder', description: 'Visual drag-and-drop website creator' },
+      { id: 'commerce_studio', name: 'Commerce Studio', description: 'AI dropshipping storefront builder, multi-rail payments & dual mesh/web hosting' },
       { id: 'card_creator', name: 'Business Card Creator', description: '3D interactive business card designer' },
       { id: 'resume_builder', name: 'Resume Builder', description: 'ATS-optimized executive resume architect' },
       { id: 'card_forge', name: 'TCG Card Forge', description: 'Card game studio, deck builder & AI rules' },
@@ -174,6 +175,9 @@ class SemanticsEngine {
     if (text.includes('open hypervisor') || text.includes('neural hypervisor') || text.includes('local models') || text.includes('speedometer') || text.includes('ollama')) return this.executeAction('window:open', { type: 'hypervisor' });
     if (text.includes('open media foundry') || text.includes('comfyui') || text.includes('comfy') || text.includes('forge') || text.includes('image generator') || text.includes('media lab')) return this.executeAction('window:open', { type: 'media_foundry' });
     if (text.includes('open website builder') || text.includes('build website')) return this.executeAction('window:open', { type: 'website_builder' });
+    if (text.includes('dropship') || text.includes('commerce') || text.includes('dropforge') || text.includes('create store') || text.includes('open store') || text.includes('storefront')) {
+      return this.executeAction('window:open', { type: 'commerce_studio' });
+    }
     if (text.includes('open business card') || text.includes('business card')) return this.executeAction('window:open', { type: 'card_creator' });
     if (text.includes('open resume') || text.includes('build resume')) return this.executeAction('window:open', { type: 'resume_builder' });
     if (text.includes('open card forge') || text.includes('card forge') || text.includes('tcg')) return this.executeAction('window:open', { type: 'card_forge' });

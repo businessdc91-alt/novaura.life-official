@@ -189,9 +189,18 @@ export default function MailReadingPane({
                   {!mail.senderIsContact && (
                     <span className="inline-flex items-center gap-1 text-[11px] text-amber-300/90">
                       <AlertTriangle className="w-3 h-3" />
-                      Not in your contacts: the name is the sender's own claim
+                      Not in your contacts: the name is the sender&apos;s own claim
                     </span>
                   )}
+                </div>
+              )}
+
+              {!shortPub && mail.box !== 'sent' && mail.folder !== 'sent' && mail.box !== 'drafts' && (
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="inline-flex items-center gap-1.5 text-[11px] text-amber-300 bg-amber-950/50 border border-amber-500/30 rounded px-2 py-0.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Unsigned / Unverified Sender — no Ed25519 DID signature attached</span>
+                  </div>
                 </div>
               )}
             </div>

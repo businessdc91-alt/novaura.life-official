@@ -634,16 +634,47 @@ fn open_vault_payload(stored: String) -> Result<String, String> {
     }
 }
 
+fn sanitize_vault_filename(filename: &str) -> Result<String, String> {
+    let clean_name: String = filename
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+        .collect();
+    if clean_name.is_empty() || clean_name.starts_with('.') || clean_name.contains("..") {
+        return Err("Invalid vault filename".into());
+    }
+    Ok(clean_name)
+}
+
+fn zero_and_remove_file(path: &std::path::Path) -> Result<bool, String> {
+    use std::io::Write;
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if len > 0 {
+        if let Ok(mut file) = fs::OpenOptions::new().write(true).open(path) {
+            let chunk = [0u8; 65536];
+            let mut remaining = len;
+            while remaining > 0 {
+                let to_write = remaining.min(chunk.len() as u64) as usize;
+                let _ = file.write_all(&chunk[..to_write]);
+                remaining -= to_write as u64;
+            }
+            let _ = file.flush();
+            let _ = file.sync_all();
+        }
+    }
+    fs::remove_file(path).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 #[tauri::command]
 fn sync_vault_state(filename: String, payload: String) -> Result<bool, String> {
     // Per profile: a new profile's empty database must never rehydrate from someone else's mirror.
     let mut path = profiles::data_dir();
     path.push("vault");
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    let clean_name: String = filename
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
-        .collect();
+    let clean_name = sanitize_vault_filename(&filename)?;
     path.push(clean_name);
     let sealed = seal_vault_payload(&payload)?;
     // Write to a temp file then rename, so a crash never leaves a half-written vault.
@@ -657,10 +688,7 @@ fn sync_vault_state(filename: String, payload: String) -> Result<bool, String> {
 fn load_vault_state(filename: String) -> Result<Option<String>, String> {
     let mut path = profiles::data_dir();
     path.push("vault");
-    let clean_name: String = filename
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
-        .collect();
+    let clean_name = sanitize_vault_filename(&filename)?;
     path.push(clean_name);
     if path.exists() {
         let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -668,6 +696,17 @@ fn load_vault_state(filename: String) -> Result<Option<String>, String> {
     } else {
         Ok(None)
     }
+}
+
+#[tauri::command]
+fn purge_vault_state(filename: String) -> Result<bool, String> {
+    let mut path = profiles::data_dir();
+    path.push("vault");
+    let clean_name = sanitize_vault_filename(&filename)?;
+    path.push(clean_name);
+    let tmp = path.with_extension("tmp");
+    let _ = zero_and_remove_file(&tmp);
+    zero_and_remove_file(&path)
 }
 
 #[tauri::command]
@@ -1884,6 +1923,7 @@ pub fn run() {
             read_node_certificate,
             sync_vault_state,
             load_vault_state,
+            purge_vault_state,
             get_authentic_drive_telemetry,
             request_uefi_reboot_authorization,
             trigger_uefi_firmware_reboot,
@@ -1946,6 +1986,8 @@ pub fn run() {
             engines::engine_live_telemetry,
             engines::engine_gpu_process_memory,
             cloud::cloud_ai_request,
+            cloud::cloud_set_airgap,
+            cloud::cloud_get_airgap,
             forge::forge_fetch_text,
             forge::forge_install_desktop_app,
             templates::template_prepare_dir,
@@ -2070,5 +2112,14 @@ mod safety_tests {
 
         let bare = b"HTTP/1.1 200 OK\n\n{}";
         assert_eq!(http_response_body(bare), b"{}".to_vec());
+    }
+
+    #[test]
+    fn vault_filename_sanitization_blocks_traversal() {
+        assert_eq!(sanitize_vault_filename("sovereign_db_snapshot.json").unwrap(), "sovereign_db_snapshot.json");
+        assert!(sanitize_vault_filename("..").is_err());
+        assert!(sanitize_vault_filename("../secret").is_err());
+        assert!(sanitize_vault_filename(".env").is_err());
+        assert!(sanitize_vault_filename("").is_err());
     }
 }

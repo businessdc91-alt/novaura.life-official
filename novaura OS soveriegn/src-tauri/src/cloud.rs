@@ -11,6 +11,39 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static CLOUD_AIRGAP_ENABLED: AtomicBool = AtomicBool::new(false);
+
+const FORBIDDEN_HEADERS: &[&str] = &[
+    "host",
+    "cookie",
+    "set-cookie",
+    "transfer-encoding",
+    "content-length",
+    "proxy-authorization",
+    "proxy-connection",
+    "connection",
+    "upgrade",
+    "te",
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "expect",
+];
+
+pub fn set_airgap(enabled: bool) -> bool {
+    CLOUD_AIRGAP_ENABLED.store(enabled, Ordering::SeqCst);
+    enabled
+}
+
+pub fn is_airgapped() -> bool {
+    CLOUD_AIRGAP_ENABLED.load(Ordering::SeqCst)
+}
+
+pub fn is_forbidden_header(name: &str) -> bool {
+    FORBIDDEN_HEADERS.contains(&name.to_ascii_lowercase().as_str())
+}
 
 const HOSTS: &[&str] = &[
     "api.anthropic.com",
@@ -106,6 +139,9 @@ pub struct CloudResponse {
 pub fn build_config(headers: &[(String, String)], body: Option<&str>) -> Result<String, String> {
     let mut config = String::new();
     for (name, value) in headers {
+        if is_forbidden_header(name) {
+            return Err(format!("Forbidden header: {name}"));
+        }
         if !valid_header_name(name) || !valid_header_value(value) {
             return Err(format!("Invalid header: {name}"));
         }
@@ -132,6 +168,9 @@ pub fn split_status(output: &str) -> Option<(u16, &str)> {
 }
 
 fn send(req: CloudRequest) -> Result<CloudResponse, String> {
+    if is_airgapped() {
+        return Err("Cloud AI egress is blocked: Strict Air-Gapped Local-Only AI mode is active.".into());
+    }
     if !allowed_url(&req.url) {
         return Err("That address is not a supported AI provider.".into());
     }
@@ -165,6 +204,16 @@ fn send(req: CloudRequest) -> Result<CloudResponse, String> {
             Err(format!("Could not reach the provider: {}", err.trim()))
         }
     }
+}
+
+#[tauri::command]
+pub fn cloud_set_airgap(enabled: bool) -> bool {
+    set_airgap(enabled)
+}
+
+#[tauri::command]
+pub fn cloud_get_airgap() -> bool {
+    is_airgapped()
 }
 
 #[tauri::command]
@@ -203,6 +252,52 @@ mod tests {
         assert!(build_config(&[("Bad Name".into(), "x".into())], None).is_err());
         assert!(build_config(&[("X-Key".into(), "a\nheader = evil".into())], None).is_err());
         assert!(build_config(&[], Some("@C:/secret.txt")).is_err());
+    }
+
+    #[test]
+    fn forbidden_headers_rejected() {
+        for h in [
+            "Host",
+            "cookie",
+            "Transfer-Encoding",
+            "Content-Length",
+            "Proxy-Authorization",
+            "X-Forwarded-For",
+            "Expect",
+        ] {
+            assert!(
+                build_config(&[(h.into(), "val".into())], None).is_err(),
+                "expected {h} to be rejected"
+            );
+        }
+        assert!(
+            build_config(
+                &[
+                    ("Authorization".into(), "Bearer k".into()),
+                    ("Content-Type".into(), "application/json".into()),
+                    ("x-api-key".into(), "secret".into()),
+                    ("HTTP-Referer".into(), "https://novaura.life".into()),
+                    ("X-Title".into(), "Novaura Sovereign OS".into()),
+                ],
+                None,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn airgap_blocks_cloud_send() {
+        set_airgap(true);
+        let res = send(CloudRequest {
+            url: "https://api.openai.com/v1/models".into(),
+            method: "GET".into(),
+            headers: vec![],
+            body: None,
+            timeout_secs: Some(10),
+        });
+        set_airgap(false);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Air-Gapped"));
     }
 
     #[test]

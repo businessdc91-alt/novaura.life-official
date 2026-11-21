@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ShieldCheck, Lock, Unlock, Key, KeyRound, Copy, RefreshCw,
   Plus, Trash2, Eye, EyeOff, Check, AlertTriangle, Shield,
@@ -8,6 +8,8 @@ import { credentialEnclave } from '../../services/credentialEnclaveService.js';
 
 export default function CredentialEnclaveWindow() {
   const [unlocked, setUnlocked] = useState(() => credentialEnclave.isUnlocked());
+  const [lockReason, setLockReason] = useState(() => credentialEnclave.getStatus().lastLockReason);
+  const [idleMinutes, setIdleMinutes] = useState(() => credentialEnclave.getIdleTimeoutMinutes());
   const [passphrase, setPassphrase] = useState('');
   const [deriving, setDeriving] = useState(false);
   const [unlockError, setUnlockError] = useState('');
@@ -17,32 +19,18 @@ export default function CredentialEnclaveWindow() {
   const [clipboardCountdown, setClipboardCountdown] = useState(0);
   const [copiedItemLabel, setCopiedItemLabel] = useState('');
 
-  // Enclave Records
+  // Enclave Records (populated in volatile RAM only while unlocked)
   const [records, setRecords] = useState([]);
   const [revealedSecrets, setRevealedSecrets] = useState({});
 
   // Form State for Adding Keys
   const [newKeyForm, setNewKeyForm] = useState({ provider: 'gemini', label: 'Gemini Cloud BYOK', value: '' });
 
-  // SSH Keyring State (Persistent without hardcoded mock keys)
-  const [sshKeys, setSshKeys] = useState(() => {
-    try {
-      const saved = localStorage.getItem('novaura_ssh_keys');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  // SSH Keyring State (encrypted in AES-256-GCM enclave store, zero plaintext storage)
+  const [sshKeys, setSshKeys] = useState([]);
 
-  // TOTP 2FA State (Persistent user accounts, zero mock seeds)
-  const [totpAccounts, setTotpAccounts] = useState(() => {
-    try {
-      const saved = localStorage.getItem('novaura_totp_accounts');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  // TOTP 2FA State (encrypted in AES-256-GCM enclave store, zero plaintext storage)
+  const [totpAccounts, setTotpAccounts] = useState([]);
   const [newTotpForm, setNewTotpForm] = useState({ name: '', issuer: '', secret: '' });
   const [showAddTotp, setShowAddTotp] = useState(false);
   const [totpTick, setTotpTick] = useState({ timeRemaining: 30 });
@@ -52,26 +40,50 @@ export default function CredentialEnclaveWindow() {
   const [includeSymbols, setIncludeSymbols] = useState(true);
   const [generatedPass, setGeneratedPass] = useState(() => credentialEnclave.generatePassphrase(24, true));
 
-  useEffect(() => {
+  const wipeVolatileState = useCallback(() => {
+    setRecords([]);
+    setSshKeys([]);
+    setTotpAccounts([]);
+    setRevealedSecrets({});
+  }, []);
+
+  const loadRecords = useCallback(async () => {
+    if (!credentialEnclave.isUnlocked()) {
+      wipeVolatileState();
+      return;
+    }
     try {
-      localStorage.setItem('novaura_ssh_keys', JSON.stringify(sshKeys));
-    } catch {}
-  }, [sshKeys]);
+      const [allRecs, decryptedSsh, decryptedTotp] = await Promise.all([
+        credentialEnclave.getSecretRecords(),
+        credentialEnclave.listDecryptedByType('ssh_pgp'),
+        credentialEnclave.listDecryptedByType('totp'),
+      ]);
+      setRecords(allRecs.filter(r => r.type === 'api_key'));
+      setSshKeys(decryptedSsh);
+      setTotpAccounts(decryptedTotp);
+    } catch (e) {
+      console.warn(e);
+    }
+  }, [wipeVolatileState]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('novaura_totp_accounts', JSON.stringify(totpAccounts));
-    } catch {}
-  }, [totpAccounts]);
-
-  useEffect(() => {
-    const unsub = credentialEnclave.subscribe(({ isUnlocked }) => {
+    const unsub = credentialEnclave.subscribe(({ isUnlocked, reason, idleTimeoutMinutes }) => {
       setUnlocked(isUnlocked);
-      if (isUnlocked) loadRecords();
+      setLockReason(reason || null);
+      if (typeof idleTimeoutMinutes === 'number') {
+        setIdleMinutes(idleTimeoutMinutes);
+      }
+      if (isUnlocked) {
+        loadRecords();
+      } else {
+        wipeVolatileState();
+      }
     });
 
     if (unlocked) {
       loadRecords();
+    } else {
+      wipeVolatileState();
     }
 
     // TOTP Timer Interval (Dynamic RFC 6238 time-step cycle)
@@ -87,16 +99,7 @@ export default function CredentialEnclaveWindow() {
       unsub();
       clearInterval(timer);
     };
-  }, [unlocked]);
-
-  const loadRecords = async () => {
-    try {
-      const recs = await credentialEnclave.getSecretRecords();
-      setRecords(recs);
-    } catch (e) {
-      console.warn(e);
-    }
-  };
+  }, [unlocked, loadRecords, wipeVolatileState]);
 
   const handleUnlock = async (e) => {
     e?.preventDefault();
@@ -109,6 +112,7 @@ export default function CredentialEnclaveWindow() {
     try {
       await credentialEnclave.unlock(passphrase);
       setUnlocked(true);
+      setLockReason(null);
       setPassphrase('');
     } catch (err) {
       setUnlockError(err.message || 'Unlock failed.');
@@ -118,9 +122,9 @@ export default function CredentialEnclaveWindow() {
   };
 
   const handleLock = () => {
-    credentialEnclave.lock();
+    credentialEnclave.lock('manual');
     setUnlocked(false);
-    setRevealedSecrets({});
+    wipeVolatileState();
   };
 
   const handleCopySecret = (text, label) => {
@@ -175,14 +179,14 @@ export default function CredentialEnclaveWindow() {
   const handleGenerateSSH = async (alg) => {
     try {
       const keypair = await credentialEnclave.generateKeyPair(alg);
-      setSshKeys(prev => [
-        {
-          id: 'ssh_' + Date.now(),
-          label: `${alg} Operator Key`,
-          ...keypair,
-        },
-        ...prev,
-      ]);
+      await credentialEnclave.storeSecret({
+        id: 'ssh_' + Date.now(),
+        type: 'ssh_pgp',
+        label: `${alg} Operator Key`,
+        category: alg.toLowerCase(),
+        plaintextPayload: keypair,
+      });
+      await loadRecords();
     } catch (err) {
       alert(err.message);
     }
@@ -198,9 +202,16 @@ export default function CredentialEnclaveWindow() {
           </div>
 
           <h2 className="text-lg font-bold text-slate-100 mb-1">Sovereign Keyring & Credential Enclave</h2>
-          <p className="text-xs text-slate-400 max-w-sm mb-6 leading-relaxed">
-            Zero-knowledge vault encrypted at rest with hardware-bound 256-bit AES-GCM and PBKDF2 (250,000 iterations).
+          <p className="text-xs text-slate-400 max-w-sm mb-5 leading-relaxed">
+            Zero-knowledge vault encrypted at rest with hardware-bound 256-bit AES-GCM and PBKDF2-HMAC-SHA256 (600,000 iterations).
           </p>
+
+          {lockReason === 'idle_timeout' && (
+            <div className="w-full max-w-xs mb-4 px-3 py-2 rounded-xl bg-amber-950/40 border border-amber-500/40 text-[11px] text-amber-300 flex items-center gap-2 text-left">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Enclave automatically locked after inactivity timeout.</span>
+            </div>
+          )}
 
           <form onSubmit={handleUnlock} className="w-full max-w-xs space-y-3">
             <div>
@@ -225,23 +236,13 @@ export default function CredentialEnclaveWindow() {
               <Unlock className="w-3.5 h-3.5" />
               <span>{deriving ? 'Deriving 256-bit Master Key...' : 'Unlock Enclave'}</span>
             </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setPassphrase('novaura_sovereign_operator_2026');
-              }}
-              className="text-[11px] text-slate-500 hover:text-cyan-400 transition-colors block mx-auto pt-1"
-            >
-              Use Local Operator Default Key
-            </button>
           </form>
         </div>
       ) : (
         /* Enclave Unlocked Workspace */
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Top Header & Zero-Clipboard Banner */}
-          <div className="p-3 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between shrink-0">
+          <div className="p-3 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between shrink-0 gap-2 flex-wrap">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                 <ShieldCheck className="w-4 h-4" />
@@ -257,7 +258,7 @@ export default function CredentialEnclaveWindow() {
               </div>
             </div>
 
-            {/* Clipboard Countdown Ticker */}
+            {/* Clipboard Countdown Ticker + Auto-Lock Selector */}
             <div className="flex items-center gap-3">
               {clipboardCountdown > 0 ? (
                 <div className="flex items-center gap-2 px-3 py-1 bg-amber-950/40 border border-amber-500/40 rounded-lg text-xs text-amber-300 font-mono">
@@ -270,6 +271,22 @@ export default function CredentialEnclaveWindow() {
                   <span>Zero-Clipboard Guard Armed</span>
                 </div>
               )}
+
+              <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                <span>Auto-Lock:</span>
+                <select
+                  value={idleMinutes}
+                  onChange={(e) => setIdleMinutes(credentialEnclave.setIdleTimeoutMinutes(Number(e.target.value)))}
+                  className="px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-[11px] text-slate-200 outline-none focus:border-cyan-500"
+                >
+                  <option value={1}>1m</option>
+                  <option value={5}>5m</option>
+                  <option value={15}>15m</option>
+                  <option value={30}>30m</option>
+                  <option value={60}>60m</option>
+                  <option value={0}>Manual</option>
+                </select>
+              </label>
 
               <button
                 onClick={handleLock}
@@ -469,7 +486,10 @@ export default function CredentialEnclaveWindow() {
                               {key.fingerprint}
                             </span>
                             <button
-                              onClick={() => setSshKeys(prev => prev.filter(k => k.id !== key.id))}
+                              onClick={async () => {
+                                await credentialEnclave.deleteSecret(key.id);
+                                await loadRecords();
+                              }}
                               className="p-1 text-slate-500 hover:text-red-400 rounded"
                               title="Delete Key"
                             >
@@ -482,7 +502,16 @@ export default function CredentialEnclaveWindow() {
                           {key.publicKey}
                         </div>
 
-                        <div className="flex justify-end gap-2 pt-1">
+                        <div className="flex justify-end gap-3 pt-1">
+                          {key.privateKey && (
+                            <button
+                              onClick={() => handleCopySecret(key.privateKey, `${key.label} (Private)`)}
+                              className="flex items-center gap-1 text-[11px] text-amber-400 hover:text-amber-300 font-semibold cursor-pointer"
+                            >
+                              <Copy className="w-3 h-3" />
+                              <span>Copy Private Key (30s wipe)</span>
+                            </button>
+                          )}
                           <button
                             onClick={() => handleCopySecret(key.publicKey, `${key.label} (Public)`)}
                             className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold cursor-pointer"
@@ -503,7 +532,7 @@ export default function CredentialEnclaveWindow() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-bold text-slate-100">Time-Based 2FA Authenticator (TOTP)</h3>
-                    <p className="text-xs text-slate-400">Authentic RFC 6238 time-step codes with zero-cloud storage and live 30-second cycles.</p>
+                    <p className="text-xs text-slate-400">Authentic RFC 6238 time-step codes encrypted at rest with zero-cloud storage and live 30-second cycles.</p>
                   </div>
                   <button
                     onClick={() => setShowAddTotp(!showAddTotp)}
@@ -517,21 +546,30 @@ export default function CredentialEnclaveWindow() {
                 {/* Add TOTP Form */}
                 {showAddTotp && (
                   <form
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                       e.preventDefault();
                       if (!newTotpForm.name || !newTotpForm.secret) return;
                       const cleanSecret = newTotpForm.secret.replace(/\s+/g, '').toUpperCase();
-                      setTotpAccounts(prev => [
-                        ...prev,
-                        {
+                      const cleanName = newTotpForm.name.trim();
+                      const cleanIssuer = newTotpForm.issuer.trim() || 'Sovereign Node';
+                      try {
+                        await credentialEnclave.storeSecret({
                           id: 'totp_' + Date.now(),
-                          name: newTotpForm.name.trim(),
-                          issuer: newTotpForm.issuer.trim() || 'Sovereign Node',
-                          secret: cleanSecret,
-                        }
-                      ]);
-                      setNewTotpForm({ name: '', issuer: '', secret: '' });
-                      setShowAddTotp(false);
+                          type: 'totp',
+                          label: cleanName,
+                          category: cleanIssuer,
+                          plaintextPayload: {
+                            name: cleanName,
+                            issuer: cleanIssuer,
+                            secret: cleanSecret,
+                          },
+                        });
+                        setNewTotpForm({ name: '', issuer: '', secret: '' });
+                        setShowAddTotp(false);
+                        await loadRecords();
+                      } catch (err) {
+                        alert('Error saving 2FA key: ' + err.message);
+                      }
                     }}
                     className="p-4 bg-slate-900 border border-cyan-500/30 rounded-xl space-y-3"
                   >
@@ -601,7 +639,10 @@ export default function CredentialEnclaveWindow() {
                                 {totpTick.timeRemaining}s
                               </div>
                               <button
-                                onClick={() => setTotpAccounts(prev => prev.filter(a => a.id !== acc.id))}
+                                onClick={async () => {
+                                  await credentialEnclave.deleteSecret(acc.id);
+                                  await loadRecords();
+                                }}
                                 className="p-1 text-slate-500 hover:text-red-400 rounded"
                                 title="Delete 2FA Account"
                               >

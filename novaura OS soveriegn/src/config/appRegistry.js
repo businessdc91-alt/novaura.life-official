@@ -58,7 +58,8 @@ const TemplateLibraryWindow = lazy(() => import('../components/windows/TemplateL
 const AwakeningsWindow = lazy(() => import('../components/windows/AwakeningsWindow.jsx'));
 const GildedCageWindow = lazy(() => import('../components/windows/GildedCageWindow.jsx'));
 const AuraMindLabWindow = lazy(() => import('../components/windows/AuraMindLabWindow.jsx'));
-import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy, Brain } from 'lucide-react';
+const SovereignCommerceWindow = lazy(() => import('../components/windows/SovereignCommerceWindow.jsx'));
+import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy, Brain, Store } from 'lucide-react';
 
 
 
@@ -112,6 +113,16 @@ export const APP_REGISTRY = [
     title: 'Website Studio & Visual Canvas',
     component: WebsiteBuilderWindow,
     defaultSize: { width: 1020, height: 680 },
+  },
+  {
+    id: 'commerce_studio',
+    label: 'Commerce Studio',
+    category: 'creator',
+    icon: Store,
+    color: '#10b981',
+    title: 'Sovereign Commerce Studio — Automated Dropshipping & Storefronts',
+    component: SovereignCommerceWindow,
+    defaultSize: { width: 1240, height: 720 },
   },
   {
     id: 'card_creator',

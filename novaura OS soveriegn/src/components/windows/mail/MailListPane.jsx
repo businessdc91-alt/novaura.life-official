@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Search, Star, Paperclip, Lock, AlertTriangle, Flame,
-  CheckSquare, Square, Archive, Trash2, MailCheck, Filter, RefreshCw
+  CheckSquare, Square, Archive, Trash2, MailCheck, Filter, RefreshCw, ShieldCheck
 } from 'lucide-react';
 
 export default function MailListPane({
@@ -130,6 +130,8 @@ export default function MailListPane({
             const isFocused = focusedIndex === idx;
             const isHighPriority = mail.priority === 'high' || /urgent|asap|critical/i.test(mail.subject || '');
             const senderName = getCleanSender(mail);
+            const hasVerifiedDid = /^did:nova:[0-9a-f]{64}$/.test(mail.senderDid || '');
+            const isSentMail = mail.box === 'sent' || mail.folder === 'sent' || mail.box === 'drafts';
 
             return (
               <div
@@ -193,8 +195,20 @@ export default function MailListPane({
                     </div>
                   )}
 
-                  {/* Metadata Icons: Encryption, Attachments, Delivery Warnings */}
-                  <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-1">
+                  {/* Metadata Icons: Verification, Encryption, Attachments, Delivery Warnings */}
+                  <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-1 flex-wrap">
+                    {hasVerifiedDid ? (
+                      <span className="flex items-center gap-1 text-emerald-400" title={`Cryptographically signed by ${mail.senderDid}`}>
+                        <ShieldCheck className="w-3 h-3" />
+                        <span>Verified</span>
+                      </span>
+                    ) : !isSentMail ? (
+                      <span className="flex items-center gap-1 text-amber-400" title="No verified Ed25519 DID signature attached">
+                        <AlertTriangle className="w-3 h-3" />
+                        <span>Unverified</span>
+                      </span>
+                    ) : null}
+
                     {mail.isEncryptedE2EE && (
                       <span className="flex items-center gap-1 text-emerald-400" title="End-to-End Encrypted via X25519">
                         <Lock className="w-3 h-3" />

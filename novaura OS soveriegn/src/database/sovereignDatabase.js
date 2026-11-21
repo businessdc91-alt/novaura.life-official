@@ -29,6 +29,8 @@ export const BACKUP_TABLES = [
   'authorized_apps',
   // v19: Founder Directives and Dual-Mesh Governance
   'founder_directives',
+  // v24: Sovereign Commerce Studio
+  'commerce_stores', 'commerce_products', 'commerce_orders', 'commerce_ledger', 'commerce_campaigns', 'commerce_domains',
 ];
 
 class SovereignDatabase extends Dexie {
@@ -196,6 +198,17 @@ class SovereignDatabase extends Dexie {
       probe_findings: '[runId+id], runId, severity',
     });
 
+    // v24 — Sovereign Commerce Studio: multi-tenant stores, supplier-linked products,
+    // idempotent orders, 5% profit-split accounting ledger, ad campaigns, and TLD/path domains.
+    this.version(24).stores({
+      commerce_stores: 'id, slug, ownerId, name, niche, customDomain, meshDomain, status, updatedAt',
+      commerce_products: 'id, storeId, sku, supplier, supplierProductId, status, retailCents, updatedAt',
+      commerce_orders: 'id, storeId, externalPaymentId, rail, status, createdAt, updatedAt',
+      commerce_ledger: 'id, storeId, orderId, type, rail, amountCents, createdAt',
+      commerce_campaigns: 'id, storeId, channel, status, createdAt',
+      commerce_domains: 'id, storeId, domain, registrar, status, updatedAt',
+    });
+
     this.identities = this.table('identities');
     this.domain_records = this.table('domain_records');
     this.domain_claims = this.table('domain_claims');
@@ -205,6 +218,12 @@ class SovereignDatabase extends Dexie {
     this.probe_targets = this.table('probe_targets');
     this.probe_runs = this.table('probe_runs');
     this.probe_findings = this.table('probe_findings');
+    this.commerce_stores = this.table('commerce_stores');
+    this.commerce_products = this.table('commerce_products');
+    this.commerce_orders = this.table('commerce_orders');
+    this.commerce_ledger = this.table('commerce_ledger');
+    this.commerce_campaigns = this.table('commerce_campaigns');
+    this.commerce_domains = this.table('commerce_domains');
     this.settings = this.table('settings');
     this.workspaces = this.table('workspaces');
     this.documents = this.table('documents');
@@ -481,11 +500,16 @@ export const exportDatabaseBackup = () => db.exportSnapshot();
 export const importDatabaseBackup = (jsonString) => db.importSnapshot(jsonString);
 
 export async function resetDatabaseToFactory() {
+  db._mirrorDirty = false;
   await db.transaction('rw', db.tables, async () => {
     for (const table of db.tables) {
       await table.clear();
     }
   });
+  try {
+    const { purgeVaultState } = await import('../services/nativeService.js');
+    await purgeVaultState('sovereign_db_snapshot.json');
+  } catch {}
   if (typeof localStorage !== 'undefined') {
     localStorage.clear();
   }

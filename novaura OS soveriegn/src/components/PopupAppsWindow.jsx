@@ -8,7 +8,7 @@ import {
   Palette, Settings, Layers, CreditCard, FileText, HardDrive,
   Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Sparkles,
   TrendingUp, Music, ShoppingBag, Gamepad2, Search, X, Grid,
-  Maximize2, Minimize2, Check, ExternalLink
+  Maximize2, Minimize2, Check, ExternalLink, Store
 } from 'lucide-react';
 import { APP_REGISTRY, APP_MAP } from '../config/appRegistry.js';
 
@@ -31,6 +31,7 @@ const TOOLBAR_APP_DEFS = {
   terminal:        { id: 'terminal',        label: 'Terminal',     icon: TerminalIcon, color: '#34d399', category: 'engineering' },
   browser:         { id: 'browser',         label: 'Browser',      icon: Globe,        color: '#60a5fa', category: 'engineering' },
   website_builder: { id: 'website_builder', label: 'Builder',      icon: Hammer,       color: '#06b6d4', category: 'engineering' },
+  commerce_studio: { id: 'commerce_studio', label: 'Commerce',     icon: Store,        color: '#10b981', category: 'creator' },
   literature:      { id: 'literature',      label: 'Word Studio',  icon: BookOpen,     color: '#38bdf8', category: 'creator' },
   novaphone:       { id: 'novaphone',       label: 'NovaPhone',    icon: PhoneCall,    color: '#10b981', category: 'mesh' },
   novamail:        { id: 'novamail',        label: 'NovaMail',     icon: Mail,         color: '#7dd3fc', category: 'mesh' },

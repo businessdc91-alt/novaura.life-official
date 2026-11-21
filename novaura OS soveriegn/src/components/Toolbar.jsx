@@ -4,7 +4,7 @@ import {
   BookOpen, PhoneCall, Mail, Users, Bot, ShieldCheck,
   Palette, Settings, Layers, CreditCard, FileText, HardDrive,
   Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Sparkles,
-  TrendingUp, Music, ShoppingBag, Gamepad2
+  TrendingUp, Music, ShoppingBag, Gamepad2, Store
 } from 'lucide-react';
 import { APP_MAP } from '../config/appRegistry.js';
 
@@ -27,6 +27,7 @@ const TOOLBAR_APP_DEFS = {
   terminal:        { id: 'terminal',        label: 'Terminal',     icon: TerminalIcon, color: '#34d399' },
   browser:         { id: 'browser',         label: 'Browser',      icon: Globe,        color: '#60a5fa' },
   website_builder: { id: 'website_builder', label: 'Builder',      icon: Hammer,       color: '#06b6d4' },
+  commerce_studio: { id: 'commerce_studio', label: 'Commerce',     icon: Store,        color: '#10b981' },
   literature:      { id: 'literature',      label: 'Word Studio',  icon: BookOpen,     color: '#38bdf8' },
   novaphone:       { id: 'novaphone',       label: 'NovaPhone',    icon: PhoneCall,    color: '#10b981' },
   novamail:        { id: 'novamail',        label: 'NovaMail',     icon: Mail,         color: '#7dd3fc' },
@@ -64,6 +65,7 @@ const DEFAULT_TOOLBAR_APPS = [
   'terminal',
   'browser',
   'website_builder',
+  'commerce_studio',
   'literature',
   'novaphone',
   'novamail',
