@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { getController } from '../../services/aunlock/controller.js';
 import { describeJobs } from '../../services/aunlock/panelModel.js';
+import { describeConnectedDevices } from '../../services/aunlock/connectedPanel.js';
 
 export default function AunlockWindow() {
   const controller = getController();
@@ -65,6 +66,7 @@ export default function AunlockWindow() {
 
 function JobPanel({ controller, jobId, onChange, setNotice }) {
   const [auth, setAuth] = useState('');
+  const [devices, setDevices] = useState(null); // null = not scanned yet
 
   async function act(fn, label) {
     try {
@@ -74,6 +76,18 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
       setNotice(e.message);
     }
     await onChange();
+  }
+
+  async function scan() {
+    try {
+      const list = await controller.listConnectedDevices();
+      const { rows } = describeConnectedDevices(list);
+      setDevices(rows);
+      setNotice(`Found ${rows.length} connected device${rows.length === 1 ? '' : 's'}`);
+    } catch (e) {
+      setDevices([]);
+      setNotice(e.message);
+    }
   }
 
   return (
@@ -89,7 +103,7 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
       </div>
       <div className="flex flex-wrap gap-2">
         <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
-          onClick={() => act(() => controller.intakeDevice(jobId), 'Device identified')}>Connect / identify device</button>
+          onClick={scan}>Scan for devices</button>
         <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
           onClick={() => act(() => controller.recover(jobId), 'Recovered')}>Recover files</button>
         <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
@@ -97,6 +111,29 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
         <button className="px-3 py-1 rounded bg-red-900/60 hover:bg-red-800/60"
           onClick={() => act(() => controller.discardJob(jobId), 'Job data discarded')}>Discard job + data</button>
       </div>
+
+      {devices && devices.length === 0 && (
+        <p className="text-xs opacity-60">No device detected — connect one over USB and scan again.</p>
+      )}
+      {devices && devices.length > 0 && (
+        <ul className="space-y-1">
+          {devices.map((row) => (
+            <li key={row.id} className="flex items-center justify-between rounded bg-black/20 px-2 py-1">
+              <span className="truncate">
+                <span className="font-medium">{row.label}</span>
+                {row.sub && <span className="opacity-60"> · {row.sub}</span>}
+                {!row.selectable && <span className="ml-2 text-amber-400">this PC — not an intake target</span>}
+              </span>
+              <button
+                disabled={!row.selectable}
+                className={`ml-2 px-2 py-0.5 rounded text-xs ${row.selectable ? 'bg-amber-600 hover:bg-amber-500' : 'bg-white/5 opacity-40 cursor-not-allowed'}`}
+                onClick={() => row.selectable && act(() => controller.intakeDevice(jobId, row.raw), 'Device intaken')}>
+                Intake
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
