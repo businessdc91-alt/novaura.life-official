@@ -41,6 +41,45 @@ $out=foreach($d in (Get-Disk)){
 }
 @($out) | ConvertTo-Json -Depth 4 -Compress"#;
 
+/// Whether a PowerShell query is strictly read-only: every `Verb-Noun` cmdlet it names is on the
+/// read-only allowlist, and it contains no file-redirection operator. This is an ALLOWLIST, not a
+/// denylist, so a future edit that introduces ANY unapproved cmdlet — `Set-Volume`,
+/// `Mount-DiskImage`, `Out-File`, … — is rejected, and the enumerate command refuses to run a
+/// query that fails it (fail-closed).
+pub fn query_is_read_only(query: &str) -> bool {
+    const ALLOWED: [&str; 4] = [
+        "Get-BitLockerVolume",
+        "Get-Partition",
+        "Get-Disk",
+        "ConvertTo-Json",
+    ];
+    if query.contains('>') {
+        return false; // no output redirection to a file
+    }
+    query
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|tok| is_cmdlet_shaped(tok))
+        .all(|tok| ALLOWED.contains(&tok))
+}
+
+/// A token shaped like a PowerShell cmdlet (`Verb-Noun`): an uppercase-initial alphabetic verb, a
+/// single dash, and an uppercase-initial alphanumeric noun. Parameters (`-Depth`, `-eq`) and
+/// property/method names (`BusType`, `TrimEnd`) are not cmdlet-shaped.
+fn is_cmdlet_shaped(tok: &str) -> bool {
+    match tok.split_once('-') {
+        Some((verb, noun)) => {
+            !verb.is_empty()
+                && verb.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && verb.chars().all(|c| c.is_ascii_alphabetic())
+                && !noun.is_empty()
+                && noun.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && !noun.contains('-')
+                && noun.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+        None => false,
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSpec {
@@ -218,17 +257,38 @@ mod tests {
         assert_eq!(normalize_devices("[]").len(), 0);
     }
 
-    // The enumerate query must stay strictly read-only — guard against a future edit slipping a
-    // mutating cmdlet into it.
+    // The enumerate query must stay strictly read-only. The guard is an ALLOWLIST (plus a
+    // redirection ban), so a future edit that introduces ANY unapproved cmdlet trips it — not
+    // only the hand-picked few a substring denylist would name.
     #[test]
     fn cim_query_is_read_only() {
-        let q = AUNLOCK_CIM_QUERY;
-        for banned in [
-            "Clear-Disk", "Format-", "Remove-", "Set-Disk", "Initialize-Disk",
-            "Clear-Content", "Set-Partition", "Reset-", "-Wipe", "New-Partition",
+        assert!(query_is_read_only(AUNLOCK_CIM_QUERY));
+        assert!(
+            AUNLOCK_CIM_QUERY.contains("Get-Disk") && AUNLOCK_CIM_QUERY.contains("ConvertTo-Json")
+        );
+    }
+
+    #[test]
+    fn guard_rejects_cmdlets_a_denylist_would_miss() {
+        // read-write / out-of-scope cmdlets the old substring denylist did NOT list
+        for bad in [
+            "Get-Disk | Set-Volume -NewFileSystemLabel x | ConvertTo-Json",
+            "Get-Disk | Out-File c:\\x.json",
+            "Get-Disk | Mount-DiskImage",
+            "Get-Disk | Resize-Partition -Size 1",
+            "Get-Disk | Optimize-Volume",
+            "Get-Disk | Set-Content c:\\x",
         ] {
-            assert!(!q.contains(banned), "query must stay read-only; found {banned}");
+            assert!(!query_is_read_only(bad), "guard must reject: {bad}");
         }
-        assert!(q.contains("Get-") && q.contains("ConvertTo-Json"));
+        // output redirection to a file is a write too
+        assert!(!query_is_read_only("Get-Disk > c:\\x.json"));
+        assert!(!query_is_read_only("Get-Disk >> c:\\x.json"));
+    }
+
+    #[test]
+    fn guard_allows_the_read_only_cmdlets() {
+        assert!(query_is_read_only("Get-Disk | ConvertTo-Json"));
+        assert!(query_is_read_only("Get-BitLockerVolume; Get-Partition -DriveLetter C"));
     }
 }

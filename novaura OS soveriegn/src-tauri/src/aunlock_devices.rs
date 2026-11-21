@@ -12,7 +12,7 @@
 mod aunlock_devices_rules;
 
 pub use aunlock_devices_rules::DeviceSpec;
-use aunlock_devices_rules::{normalize_devices, AUNLOCK_CIM_QUERY};
+use aunlock_devices_rules::{normalize_devices, query_is_read_only, AUNLOCK_CIM_QUERY};
 
 /// Enumerate connected devices and read their specs. Returns the normalized records, an empty
 /// list when nothing is connected (or off-Windows), or an `Err` when PowerShell can't run — the
@@ -22,6 +22,10 @@ pub async fn aunlock_enumerate_devices() -> Result<Vec<DeviceSpec>, String> {
     #[cfg(windows)]
     {
         use std::process::Command;
+        // Fail-closed: never spawn a query that isn't strictly read-only (the allowlist guard).
+        if !query_is_read_only(AUNLOCK_CIM_QUERY) {
+            return Err("internal: enumeration query failed its read-only guard".to_string());
+        }
         let output = Command::new("powershell")
             .args([
                 "-NoProfile",
