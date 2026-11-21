@@ -10,6 +10,8 @@ import { jobsToPurge } from './retention.js';
 import { deviceRecord } from './deviceModel.js';
 import { provenanceRecord, canProceed } from './authorization.js';
 import { sanitizationMethodFor, buildCert } from './sanitizationCert.js';
+import { getCatalog } from './catalog.js';
+import { placeholderNative } from './native.js';
 
 const rand = () => Math.random().toString(36).slice(2, 8);
 
@@ -83,4 +85,13 @@ export function createController({ catalog, native, now = Date.now, operator = '
       return catalog.listJobs();
     },
   };
+}
+
+let shared = null;
+
+/** The one controller over the OS catalog. The native layer is the Phase 1a placeholder until
+ * Phase 1b swaps in the real USB/drive/wipe implementation. */
+export function getController() {
+  if (!shared) shared = createController({ catalog: getCatalog(), native: placeholderNative });
+  return shared;
 }

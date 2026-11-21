@@ -8,6 +8,7 @@ import {
 const CybeniBuilderWindow = lazy(() => import('../components/windows/CybeniBuilderWindow.jsx'));
 const FilesWindow = lazy(() => import('../components/windows/FilesWindow.jsx'));
 const TerminalWindow = lazy(() => import('../components/windows/TerminalWindow.jsx'));
+const AunlockWindow = lazy(() => import('../components/windows/AunlockWindow.jsx'));
 const BrowserWindow = lazy(() => import('../components/windows/BrowserWindow.jsx'));
 const WebsiteBuilderWindow = lazy(() => import('../components/windows/WebsiteBuilderWindow.jsx'));
 const BusinessCardWindow = lazy(() => import('../components/windows/BusinessCardWindow.jsx'));
@@ -93,6 +94,18 @@ export const APP_REGISTRY = [
     title: 'Sovereign Command Console',
     component: TerminalWindow,
     defaultSize: { width: 780, height: 500 },
+  },
+  {
+    // Gated: not shown in the launcher; opened only via the terminal command `aunlock`.
+    id: 'aunlock',
+    label: 'Aunlock Nova',
+    category: 'system',
+    icon: HardDrive,
+    color: '#f59e0b',
+    title: 'Aunlock Nova — Refurbisher Suite',
+    component: AunlockWindow,
+    defaultSize: { width: 920, height: 620 },
+    hidden: true,
   },
   {
     id: 'browser',

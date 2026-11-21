@@ -252,6 +252,13 @@ export default function TerminalWindow() {
         break;
       }
 
+      // Gated: the refurbisher suite is hidden from the launcher and opens only here.
+      case 'aunlock': {
+        kernel?.wm?.openWindow('aunlock');
+        appendLine({ type: 'output', text: 'Opening Aunlock Nova — Refurbisher Suite…' });
+        break;
+      }
+
       case 'vault': {
         const sub = args[0]?.toLowerCase();
         if (sub === 'list') {
