@@ -46,6 +46,23 @@ The following features are being implemented by the Kimi Swarm to transition Nov
   wipe confirmed. 715 JS + 35 Rust tests green. Next plan: check library, host AI planner,
   UI, Deep mode. Spec/plan under `novaura OS soveriegn/docs/superpowers/`.
 
+- [x] **Aunlock Nova — Refurbisher Suite** (Phase 1a + 1b-A built 2026-11-21). One Sovereign subapp
+  for device refurb/repair shops; **never circumvents a lock** (hard anti-goal — no BIOS/login/
+  lockscreen/encryption/Activation-Lock bypass; the authorization gate keeps the work clean).
+  **Phase 1a (software spine):** catalog over Dexie v25 (`aunlock_*` tables), 3-job/10-day
+  retention, authorization gate (recover & sanitize refuse any job with no recorded authorization),
+  NIST 800-88 tamper-evident certificate, deny-by-default device classification, hidden
+  terminal-only `aunlock` launcher command → tabbed `AunlockWindow`. **Phase 1b-A (native device
+  bridge):** real **read-only** Windows enumeration (`aunlock_devices_rules.rs` `normalize_devices`
+  + `aunlock_enumerate_devices` Tauri command over a read-only PowerShell CIM query — a CI test
+  bans mutating cmdlets), `nativeDevices.js` bridge, controller **device picker that refuses the
+  host system disk** (deny-by-default), and a scan/pick UI. Recover & wipe remain placeholders
+  (their own 1b slices). Checks: `npm test` **793 pass / 0 fail**; `npm run tauri:test` **47 pass**;
+  `npm run tauri:check` + `vite build` exit `0`. **Gated live check pending** — plug a device into
+  the real desktop build (`src-tauri/aunlock/livecheck-enumerate.md`). Next: owner-authorized
+  recovery, NIST wipe, LAN recovery stick, distro center. Spec/plans under
+  `novaura OS soveriegn/docs/superpowers/`.
+
 ---
 
 ## 2. PROJECT INVENTORY & HEALTH SCORES
