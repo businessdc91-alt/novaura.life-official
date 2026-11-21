@@ -32,7 +32,8 @@ resold and that keeps the operator clear of handling property they can't account
 - **Sanitize + certify:** a NIST 800-88 wipe of a device **that has recorded authorization**,
   producing a sanitization certificate and a chain-of-custody record.
 - **Hub:** runs inside Sovereign, opened by a gated terminal command; the catalog and any
-  staged recovered data live in the local DB / encrypted vault.
+  staged recovered data live in the local DB / encrypted vault. The job view shows up to
+  **3 active jobs as separate tabs**.
 
 ## Non-goals (v1)
 
@@ -69,8 +70,9 @@ regardless of how it is framed.
 - Native capability (USB enumeration, drive mount, LAN) lives in **Rust**; the UI is a
   Sovereign panel.
 - Catalog + staged data use the existing local DB / encrypted vault. Recovered client data
-  is **minimized and purgeable** (default: staged for the active job, encrypted at rest,
-  explicit purge).
+  is **retained at most 10 days and only for the 3 most recent jobs** — a rolling window,
+  each job in its own tab; a 4th job, or the 10-day expiry, purges the oldest automatically.
+  Encrypted at rest; a manual purge is also available.
 - Reuse existing Sovereign infrastructure: the terminal-command registry, Dexie database,
   vault, and window system.
 
@@ -102,6 +104,11 @@ regardless of how it is framed.
   only function when the owner unlocks/trusts.
 - **Catalog:** device records, intake/provenance, runs, recovered-file manifests, and certs
   in the local DB; recovered bytes staged in the vault, purgeable.
+- **Window:** Aunlock runs in Sovereign's window system as a tabbed panel (up to 3 job
+  tabs). Detaching a tab/app into its own native Windows-desktop window, and launching it
+  standalone from a shortcut, are provided by the separate **App Shell** layer (its own
+  design) — Aunlock *inherits* them; it does not build its own. Until the App Shell lands,
+  Aunlock is an in-Sovereign panel.
 
 ## What's left to the builder
 
