@@ -209,6 +209,17 @@ class SovereignDatabase extends Dexie {
       commerce_domains: 'id, storeId, domain, registrar, status, updatedAt',
     });
 
+    // v25 — Aunlock Nova (refurbisher suite): device intake, jobs, provenance/authorization,
+    // sanitization certs, and recovered-file manifests. See src/services/aunlock/catalog.js.
+    // Recovered data is retained at most 10 days and only for the 3 most recent jobs.
+    this.version(25).stores({
+      aunlock_jobs: 'id, status, createdAt, closedAt',
+      aunlock_devices: 'id, jobId, kind, serial, updatedAt',
+      aunlock_provenance: 'jobId',
+      aunlock_certs: 'id, jobId, createdAt',
+      aunlock_recovered: '[jobId+path], jobId',
+    });
+
     this.identities = this.table('identities');
     this.domain_records = this.table('domain_records');
     this.domain_claims = this.table('domain_claims');
@@ -218,6 +229,11 @@ class SovereignDatabase extends Dexie {
     this.probe_targets = this.table('probe_targets');
     this.probe_runs = this.table('probe_runs');
     this.probe_findings = this.table('probe_findings');
+    this.aunlock_jobs = this.table('aunlock_jobs');
+    this.aunlock_devices = this.table('aunlock_devices');
+    this.aunlock_provenance = this.table('aunlock_provenance');
+    this.aunlock_certs = this.table('aunlock_certs');
+    this.aunlock_recovered = this.table('aunlock_recovered');
     this.commerce_stores = this.table('commerce_stores');
     this.commerce_products = this.table('commerce_products');
     this.commerce_orders = this.table('commerce_orders');
