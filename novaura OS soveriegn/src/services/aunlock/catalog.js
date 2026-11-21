@@ -19,6 +19,10 @@ export function createCatalog({ jobs, devices, provenance, certs, recovered }) {
     async getJob(id) {
       return (await jobs.get(id)) ?? null;
     },
+    /** Upsert a job (used to advance its status through the lifecycle). */
+    async putJob(job) {
+      await jobs.put(job);
+    },
     async listJobs() {
       return jobs.toArray();
     },
