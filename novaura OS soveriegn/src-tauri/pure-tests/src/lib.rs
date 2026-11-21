@@ -14,3 +14,9 @@ pub mod addition_sessions_rules;
 
 #[path = "../../src/sentinel_runner_rules.rs"]
 pub mod sentinel_runner_rules;
+
+#[path = "../../src/repair_rules.rs"]
+pub mod repair_rules;
+
+#[path = "../../src/aunlock_devices_rules.rs"]
+pub mod aunlock_devices_rules;
