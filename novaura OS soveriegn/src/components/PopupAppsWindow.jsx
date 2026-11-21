@@ -8,7 +8,7 @@ import {
   Palette, Settings, Layers, CreditCard, FileText, HardDrive,
   Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Sparkles,
   TrendingUp, Music, ShoppingBag, Gamepad2, Search, X, Grid,
-  Maximize2, Minimize2, Check, ExternalLink, Store
+  Maximize2, Minimize2, Check, ExternalLink, Store, Wrench
 } from 'lucide-react';
 import { APP_REGISTRY, APP_MAP } from '../config/appRegistry.js';
 
@@ -38,6 +38,7 @@ const TOOLBAR_APP_DEFS = {
   novasocial:      { id: 'novasocial',      label: 'Social',       icon: Users,        color: '#a78bfa', category: 'mesh' },
   ailounge:        { id: 'ailounge',        label: 'AI Lounge',    icon: Bot,          color: '#34d399', category: 'mesh' },
   sentinel:        { id: 'sentinel',        label: 'Sentinel',     icon: ShieldCheck,  color: '#10b981', category: 'system' },
+  sovereign_repair:{ id: 'sovereign_repair',label: 'Auto-Repair',  icon: Wrench,       color: '#06b6d4', category: 'system' },
   credential_enclave: { id: 'credential_enclave', label: 'Enclave', icon: KeyRound,    color: '#10b981', category: 'system' },
   card_forge:      { id: 'card_forge',      label: 'TCG Forge',    icon: Layers,       color: '#f97316', category: 'creator' },
   card_creator:    { id: 'card_creator',    label: 'Biz Card',     icon: CreditCard,   color: '#f59e0b', category: 'creator' },

@@ -10,6 +10,7 @@ pub mod sentinel_runner;
 pub mod aunlock_devices;
 pub mod games;
 pub mod templates;
+pub mod repair;
 mod password;
 pub mod profiles;
 mod transfers;
@@ -2004,6 +2005,10 @@ pub fn run() {
             profiles::profile_switch,
             profiles::autostart_get,
             profiles::autostart_set,
+            repair::repair_read_source,
+            repair::repair_apply_staged_patch,
+            repair::repair_rollback_snapshot,
+            repair::repair_run_verification,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -4,7 +4,7 @@ import {
   CreditCard, FileText, Layers, BookOpen, PhoneCall, Mail,
   Users, Bot, ShieldCheck, Settings, FolderOpen, Sparkles,
   MonitorCog, Cpu, Zap, Palette, Hammer, HardDrive, Flame,
-  GitBranch, KeyRound, GitPullRequest, Store
+  GitBranch, KeyRound, GitPullRequest, Store, Wrench
 } from 'lucide-react';
 import { APP_REGISTRY, getAppById } from '../config/appRegistry.js';
 
@@ -58,6 +58,7 @@ const CATEGORIES = [
       { id: 'credential_enclave', label: 'Credential Enclave', icon: KeyRound, desc: 'Hardware-Bound Zero-Knowledge Vault & 2FA' },
       { id: 'files', label: 'Storage', icon: FolderOpen, desc: 'Files Explorer & Vault' },
       { id: 'sentinel', label: 'Sentinel', icon: ShieldCheck, desc: 'Hardware Identity Governance' },
+      { id: 'sovereign_repair', label: 'Auto-Repair', icon: Wrench, desc: 'Pop-Out Self-Healing & Main Distro Proposals' },
       { id: 'personalization', label: 'Themes & Visuals', icon: Palette, desc: 'Themes, Fonts & Engine' },
       { id: 'settings', label: 'Settings', icon: Settings, desc: 'Node Diagnostics & Keys' },
     ],

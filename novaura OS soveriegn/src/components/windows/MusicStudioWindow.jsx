@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Music2, Sparkles, Library, Disc3, Globe, Scissors, Cpu, Settings2, X } from 'lucide-react';
+import { Music2, Sparkles, Library, Disc3, Globe, Scissors, Cpu, Settings2, X, Activity } from 'lucide-react';
 import { listTracks, listAlbums, generateSong, getMusicSettings, setMusicSettings, pickMusicModel, warmMusicModel } from '../../services/music/musicStudio.js';
 import { DEFAULT_SPEC } from '../../services/music/musicCatalog.js';
 import { probeComfy, installedModels, MODEL_CATALOG, isModelInstalled } from '../../services/engines/comfyEngine.js';
@@ -8,12 +8,14 @@ import CreatePanel from './music/CreatePanel.jsx';
 import LibraryPanel from './music/LibraryPanel.jsx';
 import AlbumsPanel from './music/AlbumsPanel.jsx';
 import EditPanel from './music/EditPanel.jsx';
+import AnalyzeRevisePanel from './music/AnalyzeRevisePanel.jsx';
 import EngineSetup from './engines/EngineSetup.jsx';
 import { PlayerBar } from './music/shared.jsx';
 import ModelReasoningSubmenu from '../shared/ModelReasoningSubmenu.jsx';
 
 const NAV = [
   ['create', 'Create', Sparkles],
+  ['analyze', 'Analyze & Revise', Activity],
   ['library', 'Library', Library],
   ['albums', 'Albums', Disc3],
   ['published', 'Published', Globe],
@@ -31,6 +33,7 @@ export default function MusicStudioWindow({ props: windowProps } = {}) {
   const [current, setCurrent] = useState(null);
   const [queue, setQueue] = useState([]);
   const [editTrack, setEditTrack] = useState(null);
+  const [analyzeTrack, setAnalyzeTrack] = useState(null);
   const [engineReady, setEngineReady] = useState(false);
   const [musicReady, setMusicReady] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -148,8 +151,9 @@ export default function MusicStudioWindow({ props: windowProps } = {}) {
         </nav>
         <main className="flex-1 min-w-0 min-h-0">
           {tab === 'create' && <CreatePanel spec={spec} setSpec={setSpec} onCreate={create} jobs={jobs} engineReady={engineReady} goEngine={() => setTab('engine')} say={say} />}
-          {tab === 'library' && <LibraryPanel tracks={tracks} albums={albums} current={current} onPlay={play} say={say} onEdit={(t) => { setEditTrack(t); setTab('edit'); }} />}
-          {tab === 'published' && <LibraryPanel tracks={tracks} albums={albums} current={current} onPlay={play} say={say} onEdit={(t) => { setEditTrack(t); setTab('edit'); }} publishedOnly />}
+          {tab === 'analyze' && <AnalyzeRevisePanel initialTrack={analyzeTrack} tracks={tracks} musicReady={musicReady} say={say} onSaved={refresh} />}
+          {tab === 'library' && <LibraryPanel tracks={tracks} albums={albums} current={current} onPlay={play} say={say} onEdit={(t) => { setEditTrack(t); setTab('edit'); }} onAnalyze={(t) => { setAnalyzeTrack(t); setTab('analyze'); }} />}
+          {tab === 'published' && <LibraryPanel tracks={tracks} albums={albums} current={current} onPlay={play} say={say} onEdit={(t) => { setEditTrack(t); setTab('edit'); }} onAnalyze={(t) => { setAnalyzeTrack(t); setTab('analyze'); }} publishedOnly />}
           {tab === 'albums' && <AlbumsPanel albums={albums} tracks={tracks} onPlay={play} say={say} />}
           {tab === 'edit' && <EditPanel initialTrack={editTrack} musicReady={musicReady} say={say} onSaved={refresh} />}
           {tab === 'engine' && (

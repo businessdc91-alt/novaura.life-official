@@ -60,7 +60,8 @@ const AwakeningsWindow = lazy(() => import('../components/windows/AwakeningsWind
 const GildedCageWindow = lazy(() => import('../components/windows/GildedCageWindow.jsx'));
 const AuraMindLabWindow = lazy(() => import('../components/windows/AuraMindLabWindow.jsx'));
 const SovereignCommerceWindow = lazy(() => import('../components/windows/SovereignCommerceWindow.jsx'));
-import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy, Brain, Store } from 'lucide-react';
+const SovereignRepairWindow = lazy(() => import('../components/windows/SovereignRepairWindow.jsx'));
+import { HardDrive, Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Radio, Search, TrendingUp, Music, ShoppingBag, Gamepad2, Palette as PaletteIcon, Crown, Crosshair, Gift, Trophy, Brain, Store, Wrench } from 'lucide-react';
 
 
 
@@ -231,6 +232,17 @@ export const APP_REGISTRY = [
     title: 'Sentinel Shield Security Governance',
     component: SentinelShieldWindow,
     defaultSize: { width: 840, height: 560 },
+  },
+  {
+    id: 'sovereign_repair',
+    label: 'Auto-Repair Studio',
+    category: 'system',
+    icon: Wrench,
+    color: '#06b6d4',
+    title: 'Sovereign Auto-Repair Studio (Cybeni · Aura · Nova)',
+    component: SovereignRepairWindow,
+    defaultSize: { width: 1080, height: 700 },
+    popout: true,
   },
   {
     id: 'settings',

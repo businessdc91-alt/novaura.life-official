@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Play, Heart, MoreHorizontal, Image as ImageIcon, Globe, Download, Trash2, Disc3, Scissors, Loader2, Search, Send, X, Share2 } from 'lucide-react';
-import { generateCover, updateTrack, deleteTrack, addToAlbum, publishTrack, unpublishTrack, getBlob } from '../../../services/music/musicStudio.js';
+import { Play, Heart, MoreHorizontal, Image as ImageIcon, Globe, Download, Trash2, Disc3, Scissors, Loader2, Search, Send, X, Share2, Activity, PlusCircle } from 'lucide-react';
+import { generateCover, updateTrack, deleteTrack, addToAlbum, publishTrack, unpublishTrack, getBlob, extendTrack } from '../../../services/music/musicStudio.js';
 import { buildZip, downloadBytes } from '../../../services/cybeni/projectStore.js';
 import { withImageModel } from '../../../services/engines/imageGen.js';
 import { getConnectedPeers } from '../../../services/sovereignMesh.js';
@@ -65,7 +65,7 @@ function SendDialog({ track, onClose, say }) {
   );
 }
 
-function TrackCard({ track, albums, onPlay, playing, say, onEdit }) {
+function TrackCard({ track, albums, onPlay, playing, say, onEdit, onAnalyze }) {
   const [menu, setMenu] = useState(false);
   const [busy, setBusy] = useState('');
   const [sending, setSending] = useState(false);
@@ -111,6 +111,8 @@ function TrackCard({ track, albums, onPlay, playing, say, onEdit }) {
                 <button onClick={() => act('Packing…', () => downloadSharePack(track))} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10"><Share2 className="w-3.5 h-3.5" /> Download share pack (.zip)</button>
                 <button onClick={() => act('Saving…', () => downloadTrack(track))} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10"><Download className="w-3.5 h-3.5" /> Download audio</button>
                 <button onClick={() => { setMenu(false); onEdit(track); }} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10"><Scissors className="w-3.5 h-3.5" /> Edit / make loop</button>
+                {onAnalyze && <button onClick={() => { setMenu(false); onAnalyze(track); }} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10 text-fuchsia-300"><Activity className="w-3.5 h-3.5" /> Analyze &amp; AI Revise</button>}
+                <button onClick={() => act('Extending +90s…', async () => { const ext = await extendTrack(track, { addSeconds: 90, onProgress: (p) => p.status && setBusy(p.status) }); say(`Created "${ext.title}" (${fmtTime(ext.seconds)})!`, 'good'); })} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10 text-cyan-300"><PlusCircle className="w-3.5 h-3.5" /> Extend song (+90s)</button>
                 <div className="h-px bg-white/10 my-1" />
                 <button onClick={() => { if (window.confirm(`Delete "${track.title}"?`)) act('Deleting…', () => deleteTrack(track.id)); }} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/10 text-rose-300"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
               </div>
@@ -123,7 +125,7 @@ function TrackCard({ track, albums, onPlay, playing, say, onEdit }) {
   );
 }
 
-export default function LibraryPanel({ tracks, albums, current, onPlay, say, onEdit, publishedOnly = false }) {
+export default function LibraryPanel({ tracks, albums, current, onPlay, say, onEdit, onAnalyze, publishedOnly = false }) {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const shown = useMemo(() => tracks.filter(t => {
@@ -154,7 +156,7 @@ export default function LibraryPanel({ tracks, albums, current, onPlay, say, onE
         <div className="text-center text-white/40 text-[13px] mt-16">{publishedOnly ? 'Nothing published yet. Use a track’s menu to publish it.' : 'No tracks yet. Head to Create.'}</div>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
-          {shown.map(t => <TrackCard key={t.id} track={t} albums={albums} onPlay={onPlay} playing={current?.id === t.id} say={say} onEdit={onEdit} />)}
+          {shown.map(t => <TrackCard key={t.id} track={t} albums={albums} onPlay={onPlay} playing={current?.id === t.id} say={say} onEdit={onEdit} onAnalyze={onAnalyze} />)}
         </div>
       )}
     </div>

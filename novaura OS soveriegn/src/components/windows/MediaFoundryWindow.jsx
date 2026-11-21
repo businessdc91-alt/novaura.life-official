@@ -6,26 +6,29 @@
 // 4. Interactive Prompt Studio: Local ComfyUI dispatch + Universal BYOK cloud generation
 // 5. Sovereign Media Vault: Dexie-backed artwork gallery with prompt metadata and file export
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Sparkles, Flame, Server, Download, Copy, Check, Terminal, ExternalLink,
-  Layers, Image as ImageIcon, Sliders, RefreshCw, AlertTriangle, CheckCircle2,
-  Cpu, HardDrive, Zap, Play, Eye, Trash2, FolderOpen, ArrowDownToLine, Code,
-  Settings, Key, ShieldCheck, Box, HelpCircle, Film, Mic, Music, Volume2, Radio
+  Layers, Image as ImageIcon, RefreshCw, AlertTriangle, CheckCircle2,
+  Cpu, HardDrive, Zap, Play, ArrowDownToLine,
+  ShieldCheck, Box, Film, Mic, Music, Volume2, Radio, Palette, CreditCard, BookOpen
 } from 'lucide-react';
 import {
   getComfyUIEndpoint, saveComfyUIEndpoint, probeComfyUIStatus, getComfyUIObjectInfo,
-  buildComfyUIWorkflow, queueComfyUIPrompt, pollComfyUIHistory,
   SOTA_MODELS_CATALOG, generateComfyUISetupScript, generateModelDownloadScript,
-  COMFYUI_HACK_TIPS, generateBYOKImage, saveArtworkToVault, loadArtworksFromVault,
+  COMFYUI_HACK_TIPS, loadArtworksFromVault,
   synthesizeProceduralAudioTrack, synthesizeSpeechLocal, saveAudioToVault, loadAudioFromVault
 } from '../../services/mediaFoundryService.js';
 import { detectHostComputeHardware } from '../../services/neuralHypervisorService.js';
 import { getEngineConfig } from '../../services/engines/comfyEngine.js';
 import { chooseImageCheckpoint } from '../../services/engines/checkpoints.js';
+import PixStudioTab from './media/PixStudioTab.jsx';
+import VideoFromImageTab from './media/VideoFromImageTab.jsx';
+import ComicMangaTab from './media/ComicMangaTab.jsx';
+import { sendImageToCreativeStudio, sendImageToCardForge } from '../../services/media/creativeBridge.js';
 
-export default function MediaFoundryWindow({ windowId, props, onClose }) {
-  const [activeTab, setActiveTab] = useState('comfy'); // 'comfy' | 'studio' | 'models' | 'hacks' | 'vault'
+export default function MediaFoundryWindow({ props }) {
+  const [activeTab, setActiveTab] = useState(() => props?.tab || 'studio'); // 'studio' | 'comic' | 'video' | 'comfy' | 'models' | 'audio' | 'hacks' | 'vault'
   const [endpoint, setEndpoint] = useState(getComfyUIEndpoint());
   const [daemonState, setDaemonState] = useState({ online: false, stats: null, queue: { running: 0, pending: 0 }, error: null });
   const [isProbing, setIsProbing] = useState(false);
@@ -38,26 +41,13 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
   const [selectedModelScript, setSelectedModelScript] = useState(null);
   const [copiedModelScript, setCopiedModelScript] = useState(false);
 
-  // Studio State
-  const [engineMode, setEngineMode] = useState('comfy'); // 'comfy' | 'byok'
-  const [prompt, setPrompt] = useState('A sovereign cyberpunk computing sanctuary overlooking a bioluminescent quantum skyline, volumetric neon lighting, cinematic 8k masterpiece');
-  const [negativePrompt, setNegativePrompt] = useState('blurry, deformed, oversaturated, low quality, artifact, watermark');
+  // Selected ComfyUI Checkpoint & Cross-Tab Handoff State
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
-  const [width, setWidth] = useState(1024);
-  const [height, setHeight] = useState(1024);
-  const [steps, setSteps] = useState(20);
-  const [cfg, setCfg] = useState(7.0);
-  const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1000000000));
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationStatus, setGenerationStatus] = useState('');
-  const [generatedImage, setGeneratedImage] = useState(null);
-
-  // BYOK State
-  const [byokApiKey, setByokApiKey] = useState(() => {
-    try { return localStorage.getItem('novaura_byok_image_key') || ''; } catch { return ''; }
-  });
-  const [byokModel, setByokModel] = useState('dall-e-3');
-  const [byokEndpoint, setByokEndpoint] = useState('https://api.openai.com/v1/images/generations');
+  const [videoHandoff, setVideoHandoff] = useState(() => ({
+    imageUrl: props?.sourceImageUrl || '',
+    prompt: props?.prompt || '',
+  }));
+  const [comicHandoff, setComicHandoff] = useState(null);
 
   // Vault State
   const [vaultArtworks, setVaultArtworks] = useState([]);
@@ -72,7 +62,6 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
   const [audioPrompt, setAudioPrompt] = useState('Deep cyberpunk synth bassline with rhythmic arpeggios and ambient stereo delay');
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [generatedAudioUrl, setGeneratedAudioUrl] = useState(null);
-  const [generatedAudioBlob, setGeneratedAudioBlob] = useState(null);
 
   // TTS State
   const [ttsText, setTtsText] = useState('NovAura Sovereign OS runs on your own hardware. All neural weights, embeddings, and cryptographic identities are hosted on-device.');
@@ -86,32 +75,77 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
   const [notice, setNotice] = useState(null);
   const [errorNotice, setErrorNotice] = useState(null);
 
-  // Hardware detection & initial load
+  // Cross-app handoff listener (e.g. "Animate to Video" from Card Forge or Vault)
   useEffect(() => {
-    const hw = detectHostComputeHardware();
-    setHardware(hw);
-    refreshDaemon();
-    loadVault();
-    loadAudioVault();
-
-    // Populate voices
-    if ('speechSynthesis' in window) {
-      const updateVoices = () => {
-        const v = window.speechSynthesis.getVoices();
-        setAvailableVoices(v);
-        if (v.length > 0 && !selectedVoice) setSelectedVoice(v[0].name);
-      };
-      updateVoices();
-      window.speechSynthesis.onvoiceschanged = updateVoices;
-    }
+    const onContext = (e) => {
+      if (e.detail?.appId !== 'media_foundry') return;
+      const p = e.detail.props || {};
+      if (p.sourceImageUrl) {
+        setVideoHandoff({ imageUrl: p.sourceImageUrl, prompt: p.prompt || '' });
+      }
+      if (p.tab) setActiveTab(p.tab);
+    };
+    window.addEventListener('novaura:app_context', onContext);
+    return () => window.removeEventListener('novaura:app_context', onContext);
   }, []);
 
-  const loadAudioVault = async () => {
+  const loadAudioVault = useCallback(async () => {
     try {
       const items = await loadAudioFromVault();
       setVaultAudios(items);
     } catch {}
-  };
+  }, []);
+
+  const loadVault = useCallback(async () => {
+    try {
+      const items = await loadArtworksFromVault();
+      setVaultArtworks(items);
+    } catch {}
+  }, []);
+
+  const refreshDaemon = useCallback(async () => {
+    setIsProbing(true);
+    try {
+      const status = await probeComfyUIStatus(endpoint);
+      setDaemonState(status);
+
+      if (status.online) {
+        const ckpts = await getComfyUIObjectInfo(endpoint);
+        setAvailableCheckpoints(ckpts);
+        if (ckpts.length > 0 && !selectedCheckpoint) {
+          const { defaultModel } = await getEngineConfig();
+          setSelectedCheckpoint(chooseImageCheckpoint(ckpts, defaultModel) || ckpts[0]);
+        }
+      }
+    } catch (err) {
+      setErrorNotice(`Probe error: ${err.message}`);
+    } finally {
+      setIsProbing(false);
+    }
+  }, [endpoint, selectedCheckpoint]);
+
+  // Hardware detection & initial load
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setHardware(detectHostComputeHardware());
+      refreshDaemon();
+      loadVault();
+      loadAudioVault();
+    });
+
+    if ('speechSynthesis' in window) {
+      const updateVoices = () => {
+        const v = window.speechSynthesis.getVoices();
+        setAvailableVoices(v);
+        setSelectedVoice(prev => prev || v[0]?.name || '');
+      };
+      updateVoices();
+      window.speechSynthesis.onvoiceschanged = updateVoices;
+    }
+    return () => { cancelled = true; };
+  }, [refreshDaemon, loadVault, loadAudioVault]);
 
   const handleGenerateMusic = async () => {
     setIsGeneratingAudio(true);
@@ -125,7 +159,6 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
       });
 
       const url = URL.createObjectURL(blob);
-      setGeneratedAudioBlob(blob);
       setGeneratedAudioUrl(url);
 
       await saveAudioToVault({
@@ -163,35 +196,6 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
     }
   };
 
-  const refreshDaemon = useCallback(async () => {
-    setIsProbing(true);
-    try {
-      const status = await probeComfyUIStatus(endpoint);
-      setDaemonState(status);
-
-      if (status.online) {
-        const ckpts = await getComfyUIObjectInfo(endpoint);
-        setAvailableCheckpoints(ckpts);
-        if (ckpts.length > 0 && !selectedCheckpoint) {
-          // The AI Engines default model (already loaded at startup), else an image model: names sort the music checkpoints first.
-          const { defaultModel } = await getEngineConfig();
-          setSelectedCheckpoint(chooseImageCheckpoint(ckpts, defaultModel) || ckpts[0]);
-        }
-      }
-    } catch (err) {
-      setErrorNotice(`Probe error: ${err.message}`);
-    } finally {
-      setIsProbing(false);
-    }
-  }, [endpoint, selectedCheckpoint]);
-
-  const loadVault = async () => {
-    try {
-      const items = await loadArtworksFromVault();
-      setVaultArtworks(items);
-    } catch {}
-  };
-
   const handleCopySetupScript = () => {
     const script = generateComfyUISetupScript(installPath);
     navigator.clipboard.writeText(script);
@@ -218,97 +222,6 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
     refreshDaemon();
   };
 
-  const handleSaveByokKey = (key) => {
-    setByokApiKey(key);
-    try { localStorage.setItem('novaura_byok_image_key', key); } catch {}
-  };
-
-  // Generation Handler
-  const handleExecuteGeneration = async () => {
-    if (!prompt.trim()) {
-      setErrorNotice('Prompt cannot be empty.');
-      return;
-    }
-
-    setIsGenerating(true);
-    setErrorNotice(null);
-    setNotice(null);
-    setGeneratedImage(null);
-
-    try {
-      if (engineMode === 'comfy') {
-        if (!daemonState.online) {
-          throw new Error('ComfyUI daemon is offline at ' + endpoint + '. Launch ComfyUI or switch to BYOK Cloud mode.');
-        }
-
-        const ckpt = selectedCheckpoint || (availableCheckpoints.length > 0 ? availableCheckpoints[0] : null);
-        if (!ckpt) {
-          throw new Error('No checkpoint loaded in ComfyUI. Download a checkpoint from the Models tab first.');
-        }
-
-        setGenerationStatus('Compiling workflow graph & dispatching to ComfyUI queue...');
-        const workflow = buildComfyUIWorkflow({
-          prompt,
-          negativePrompt,
-          width,
-          height,
-          steps,
-          cfg,
-          seed,
-          checkpointName: ckpt,
-        });
-
-        const queueRes = await queueComfyUIPrompt(workflow, endpoint);
-        setGenerationStatus(`Queued as job #${queueRes.number}. Executing KSampler & VAE Decode...`);
-
-        const images = await pollComfyUIHistory(queueRes.promptId, endpoint);
-        if (images.length > 0) {
-          const finalUrl = images[0].url;
-          setGeneratedImage(finalUrl);
-          setNotice('Image generated successfully via local ComfyUI!');
-          // Save to Vault
-          await saveArtworkToVault({
-            title: prompt.slice(0, 36) + '...',
-            prompt,
-            imageUrl: finalUrl,
-            provider: 'comfyui',
-            metadata: { checkpoint: ckpt, steps, cfg, seed, width, height },
-          });
-          loadVault();
-        }
-      } else {
-        // Universal BYOK
-        if (!byokApiKey.trim()) {
-          throw new Error('Please enter your BYOK API key in the BYOK settings below.');
-        }
-        setGenerationStatus('Dispatching prompt to Universal BYOK Cloud endpoint...');
-        const imgUrl = await generateBYOKImage({
-          prompt,
-          apiKey: byokApiKey,
-          endpointUrl: byokEndpoint,
-          model: byokModel,
-          size: `${width}x${height}`,
-        });
-
-        setGeneratedImage(imgUrl);
-        setNotice('Image successfully synthesized via Universal BYOK Cloud!');
-        await saveArtworkToVault({
-          title: prompt.slice(0, 36) + '...',
-          prompt,
-          imageUrl: imgUrl,
-          provider: 'byok',
-          metadata: { model: byokModel, endpoint: byokEndpoint, width, height },
-        });
-        loadVault();
-      }
-    } catch (err) {
-      setErrorNotice(err.message || 'Generation failed.');
-    } finally {
-      setIsGenerating(false);
-      setGenerationStatus('');
-    }
-  };
-
   const handleDownloadImage = (url, name = 'novaura_generation.png') => {
     const a = document.createElement('a');
     a.href = url;
@@ -322,8 +235,8 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans select-none overflow-hidden">
       {/* 1. Header Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 backdrop-blur-md shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900/90 border-b border-slate-800 backdrop-blur-md shrink-0 gap-2">
+        <div className="flex items-center gap-3 shrink-0">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-rose-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20">
             <Flame className="w-4 h-4" />
           </div>
@@ -331,35 +244,30 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-white tracking-wide">Sovereign Media Foundry</span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-500/40 text-amber-300 font-semibold">
-                ComfyUI Forge Lab
+                PixAI + ComfyUI Pro
               </span>
             </div>
             <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2 mt-0.5">
               <span>Host GPU: {hardware?.gpuRenderer || 'Generic GPU'}</span>
               <span>•</span>
-              <span className="text-emerald-400 font-semibold">{daemonState.online ? 'ComfyUI Connected (:8188)' : 'ComfyUI Offline'}</span>
+              <span className={daemonState.online ? 'text-emerald-400 font-semibold' : 'text-slate-400'}>
+                {daemonState.online ? 'ComfyUI Connected (:8188)' : 'ComfyUI Offline (BYOK Ready)'}
+              </span>
             </div>
           </div>
         </div>
 
         {/* Tab Navigation & Status */}
-        <div className="flex items-center gap-2">
-          {/* Daemon Status Indicator */}
-          <div className="flex items-center gap-2 bg-slate-950/80 px-2.5 py-1 rounded-xl border border-slate-800 text-[11px] font-mono">
-            <span className={`w-2 h-2 rounded-full ${daemonState.online ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-rose-500'}`} />
-            <span className="text-slate-300">
-              {daemonState.online ? `Jobs Running: ${daemonState.queue.running} | Queue: ${daemonState.queue.pending}` : 'Offline'}
-            </span>
-          </div>
-
-          {/* Navigation Tabs */}
-          <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-xl border border-slate-800 text-xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-xl border border-slate-800 text-xs overflow-x-auto">
             {[
-              { id: 'comfy', label: 'ComfyUI Automation', icon: Terminal },
-              { id: 'models', label: 'Model Downloads', icon: Download },
-              { id: 'studio', label: 'Image Studio', icon: Sparkles },
-              { id: 'audio', label: 'Music & Voice', icon: Music },
-              { id: 'hacks', label: 'Hack-Level Tips', icon: Zap },
+              { id: 'studio', label: 'Pix Studio', icon: Sparkles },
+              { id: 'comic', label: 'Comic & Manga', icon: BookOpen },
+              { id: 'video', label: 'Image → Video', icon: Film },
+              { id: 'comfy', label: 'ComfyUI', icon: Terminal },
+              { id: 'models', label: 'Models', icon: Download },
+              { id: 'audio', label: 'Audio & TTS', icon: Music },
+              { id: 'hacks', label: 'Pro Tips', icon: Zap },
               { id: 'vault', label: `Vault (${vaultArtworks.length + vaultAudios.length})`, icon: Layers },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -368,7 +276,7 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
                     isActive
                       ? 'bg-amber-600 text-white shadow-md shadow-amber-500/20'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
@@ -384,7 +292,7 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
           <button
             onClick={refreshDaemon}
             disabled={isProbing}
-            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition-colors border border-slate-700 cursor-pointer"
+            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition-colors border border-slate-700 cursor-pointer shrink-0"
             title="Refresh Daemon Status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isProbing ? 'animate-spin text-amber-400' : ''}`} />
@@ -642,214 +550,53 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
           </div>
         )}
 
-        {/* TAB 3: PROMPT STUDIO */}
+        {/* TAB 3: PIXAI VISUAL STUDIO */}
         {activeTab === 'studio' && (
-          <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* Left Controls Column (5 cols) */}
-            <div className="lg:col-span-5 space-y-4">
-              {/* Engine Selector */}
-              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-white">Inference Engine</label>
-                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-                    <button
-                      onClick={() => setEngineMode('comfy')}
-                      className={`px-3 py-1 rounded-lg font-medium cursor-pointer transition-all ${
-                        engineMode === 'comfy' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Local ComfyUI
-                    </button>
-                    <button
-                      onClick={() => setEngineMode('byok')}
-                      className={`px-3 py-1 rounded-lg font-medium cursor-pointer transition-all ${
-                        engineMode === 'byok' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Universal BYOK
-                    </button>
-                  </div>
-                </div>
+          <PixStudioTab
+            daemonOnline={daemonState.online}
+            comfyEndpoint={endpoint}
+            availableCheckpoints={availableCheckpoints}
+            selectedCheckpoint={selectedCheckpoint}
+            onSelectCheckpoint={setSelectedCheckpoint}
+            onVaultUpdated={loadVault}
+            onSendToVideo={(cand) => {
+              setVideoHandoff({ imageUrl: cand.url, prompt: cand.prompt });
+              setActiveTab('video');
+            }}
+            onSendToComic={(cand) => {
+              setComicHandoff({ url: cand.url, id: cand.id });
+              setActiveTab('comic');
+            }}
+            onNotice={setNotice}
+            onError={setErrorNotice}
+          />
+        )}
 
-                {engineMode === 'comfy' ? (
-                  <div className="space-y-2">
-                    <label className="text-[11px] text-slate-400 block">ComfyUI Active Checkpoint</label>
-                    {availableCheckpoints.length > 0 ? (
-                      <select
-                        value={selectedCheckpoint}
-                        onChange={(e) => setSelectedCheckpoint(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs text-white font-mono outline-none focus:border-amber-500"
-                      >
-                        {availableCheckpoints.map(c => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <div className="p-2.5 bg-amber-950/40 border border-amber-500/30 rounded-xl text-[11px] text-amber-300">
-                        {daemonState.online
-                          ? 'No checkpoints placed in models/checkpoints yet.'
-                          : 'ComfyUI is offline. Start the batch file or switch to BYOK.'}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <label className="text-[11px] text-slate-400 block">Your Private API Key (BYOK)</label>
-                    <input
-                      type="password"
-                      placeholder="sk-..."
-                      value={byokApiKey}
-                      onChange={(e) => handleSaveByokKey(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs text-white font-mono outline-none focus:border-purple-500"
-                    />
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <div>
-                        <label className="text-[10px] text-slate-400 block mb-0.5">Model</label>
-                        <input
-                          type="text"
-                          value={byokModel}
-                          onChange={(e) => setByokModel(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-xs text-white font-mono"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-slate-400 block mb-0.5">Custom Endpoint</label>
-                        <input
-                          type="text"
-                          value={byokEndpoint}
-                          onChange={(e) => setByokEndpoint(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-xs text-white font-mono"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+        {/* TAB 3A: COMIC BOOK & MANGA PAGE DESIGNER */}
+        {activeTab === 'comic' && (
+          <ComicMangaTab
+            incomingImage={comicHandoff}
+            daemonOnline={daemonState.online}
+            comfyEndpoint={endpoint}
+            availableCheckpoints={availableCheckpoints}
+            selectedCheckpoint={selectedCheckpoint}
+            onVaultUpdated={loadVault}
+            onNotice={setNotice}
+            onError={setErrorNotice}
+          />
+        )}
 
-              {/* Prompt Controls */}
-              <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                <div>
-                  <label className="text-xs font-bold text-white block mb-1">Positive Prompt</label>
-                  <textarea
-                    rows={3}
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-xs text-white outline-none focus:border-amber-500 resize-none font-sans"
-                    placeholder="Enter visual prompt..."
-                  />
-                </div>
-
-                {engineMode === 'comfy' && (
-                  <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">Negative Prompt</label>
-                    <textarea
-                      rows={2}
-                      value={negativePrompt}
-                      onChange={(e) => setNegativePrompt(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-xs text-slate-300 outline-none focus:border-amber-500 resize-none font-sans"
-                      placeholder="Undesired traits..."
-                    />
-                  </div>
-                )}
-
-                {/* Dimensions & Parameters */}
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <label className="text-slate-400 block mb-1">Resolution</label>
-                    <select
-                      value={`${width}x${height}`}
-                      onChange={(e) => {
-                        const [w, h] = e.target.value.split('x').map(Number);
-                        setWidth(w);
-                        setHeight(h);
-                      }}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-xs text-white font-mono"
-                    >
-                      <option value="1024x1024">1024 x 1024 (1:1 Square)</option>
-                      <option value="1280x720">1280 x 720 (16:9 Landscape)</option>
-                      <option value="720x1280">720 x 1280 (9:16 Portrait)</option>
-                      <option value="832x1216">832 x 1216 (SDXL Standard)</option>
-                    </select>
-                  </div>
-
-                  {engineMode === 'comfy' && (
-                    <div>
-                      <label className="text-slate-400 block mb-1">Steps ({steps})</label>
-                      <input
-                        type="range"
-                        min="1"
-                        max="50"
-                        value={steps}
-                        onChange={(e) => setSteps(Number(e.target.value))}
-                        className="w-full accent-amber-500"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  onClick={handleExecuteGeneration}
-                  disabled={isGenerating}
-                  className="w-full py-3 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-lg shadow-amber-600/30 transition-all cursor-pointer"
-                >
-                  {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-white" />}
-                  <span>{isGenerating ? (generationStatus || 'Synthesizing...') : 'Generate Artwork'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Right Output Canvas Column (7 cols) */}
-            <div className="lg:col-span-7 flex flex-col items-center justify-center p-4 rounded-2xl bg-slate-900/60 border border-slate-800 min-h-[460px] relative overflow-hidden">
-              {isGenerating ? (
-                <div className="text-center space-y-4">
-                  <div className="relative w-16 h-16 mx-auto">
-                    <div className="absolute inset-0 rounded-full border-4 border-amber-500/20 animate-ping" />
-                    <div className="w-16 h-16 rounded-full border-4 border-amber-500 border-t-transparent animate-spin" />
-                  </div>
-                  <div>
-                    <div className="text-sm font-bold text-white">Synthesizing High-Fidelity Pixels</div>
-                    <p className="text-xs text-amber-300 font-mono mt-1">{generationStatus}</p>
-                  </div>
-                </div>
-              ) : generatedImage ? (
-                <div className="w-full h-full flex flex-col items-center justify-between gap-3">
-                  <div className="relative group max-h-[500px] overflow-hidden rounded-xl border border-slate-800">
-                    <img
-                      src={generatedImage}
-                      alt="Generated Artwork"
-                      className="max-h-[460px] object-contain rounded-xl shadow-2xl"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2 w-full max-w-md">
-                    <button
-                      onClick={() => handleDownloadImage(generatedImage)}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-slate-700"
-                    >
-                      <ArrowDownToLine className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Download PNG</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setActiveTab('vault');
-                      }}
-                      className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-lg shadow-amber-600/20"
-                    >
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>View in Vault</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center space-y-3 p-8 text-slate-500">
-                  <ImageIcon className="w-12 h-12 mx-auto stroke-1 text-slate-600" />
-                  <div className="text-sm font-semibold text-slate-400">Media Canvas Standby</div>
-                  <p className="text-xs max-w-sm mx-auto text-slate-500">
-                    Configure your prompt on the left and click Generate Artwork to execute local KSampler or BYOK cloud generation.
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+        {/* TAB 3B: IMAGE-TO-VIDEO (I2V) STUDIO */}
+        {activeTab === 'video' && (
+          <VideoFromImageTab
+            sourceImageUrl={videoHandoff.imageUrl}
+            sourcePrompt={videoHandoff.prompt}
+            daemonOnline={daemonState.online}
+            comfyEndpoint={endpoint}
+            onVaultUpdated={loadVault}
+            onNotice={setNotice}
+            onError={setErrorNotice}
+          />
         )}
 
         {/* TAB 4: HACK-LEVEL TIPS & SECRETS */}
@@ -983,6 +730,39 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
                         >
                           <ArrowDownToLine className="w-3.5 h-3.5" />
                           <span>Export Image</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            sendImageToCreativeStudio({ imageUrl: selectedArtwork.metadata?.imageUrl, title: selectedArtwork.title });
+                            setSelectedArtwork(null);
+                            setNotice('Opened artwork in Creative Studio!');
+                          }}
+                          className="w-full py-2 bg-pink-600 hover:bg-pink-500 text-white rounded-xl font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Palette className="w-3.5 h-3.5" />
+                          <span>Edit in Creative Studio</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            sendImageToCardForge({ imageUrl: selectedArtwork.metadata?.imageUrl, title: selectedArtwork.title, prompt: selectedArtwork.content });
+                            setSelectedArtwork(null);
+                            setNotice('Sent artwork to TCG Card Forge!');
+                          }}
+                          className="w-full py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>Bake into TCG Card</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setVideoHandoff({ imageUrl: selectedArtwork.metadata?.imageUrl, prompt: selectedArtwork.content || '' });
+                            setSelectedArtwork(null);
+                            setActiveTab('video');
+                          }}
+                          className="w-full py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Film className="w-3.5 h-3.5" />
+                          <span>Animate to Video (I2V)</span>
                         </button>
                         <button
                           onClick={() => {
@@ -1155,7 +935,7 @@ export default function MediaFoundryWindow({ windowId, props, onClose }) {
                       </span>
                       <a
                         href={generatedAudioUrl}
-                        download={`sovereign_${audioGenre}_${Date.now()}.wav`}
+                        download={`sovereign_${audioGenre}_${audioTempo}bpm.wav`}
                         className="text-[11px] text-purple-400 hover:text-purple-300 underline flex items-center gap-1 cursor-pointer"
                       >
                         <ArrowDownToLine className="w-3 h-3" />

@@ -76,7 +76,8 @@ ${t}` : t })));
   };
 
   const groups = Object.entries(GENRE_GROUPS).map(([group, list]) => [group, list.filter(([name]) => !genreQuery || name.toLowerCase().includes(genreQuery.toLowerCase()))]).filter(([, l]) => l.length);
-  const maxSeconds = spec.mode === 'loop' ? 120 : 240;
+  const maxSeconds = spec.mode === 'loop' ? 120 : 600;
+  const fmtLen = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   return (
     <div className="flex h-full min-h-0">
@@ -187,13 +188,38 @@ ${t}` : t })));
           </Section>
         )}
 
-        <Section title="Tempo, key & length" hint={`${spec.bpm} BPM · ${spec.key} · ${spec.seconds}s`} open={false}>
+        <Section title="Tempo, key & length" hint={`${spec.bpm} BPM · ${spec.key} · ${fmtLen(spec.seconds)}${spec.seconds > 210 && spec.mode !== 'loop' ? ' (Extended Multi-Section)' : ''}`} open={false}>
           <div className="grid grid-cols-2 gap-3 text-[11px] text-white/60">
             <label>BPM {spec.bpm}
               <input type="range" min={50} max={220} value={spec.bpm} onChange={e => set({ bpm: Number(e.target.value) })} className="w-full accent-fuchsia-500" />
             </label>
-            <label>Length {spec.seconds}s
-              <input type="range" min={spec.mode === 'loop' ? 15 : 30} max={maxSeconds} step={5} value={spec.seconds} onChange={e => set({ seconds: Number(e.target.value) })} className="w-full accent-fuchsia-500" />
+            <label>Length {fmtLen(spec.seconds)} ({spec.seconds}s)
+              <input type="range" min={spec.mode === 'loop' ? 15 : 30} max={maxSeconds} step={15} value={spec.seconds} onChange={e => set({ seconds: Number(e.target.value) })} className="w-full accent-fuchsia-500" />
+              {spec.mode !== 'loop' && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {[
+                    [90, '1:30'],
+                    [180, '3:00'],
+                    [300, '5:00'],
+                    [450, '7:30'],
+                    [600, '10:00'],
+                  ].map(([sec, lbl]) => (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => set({ seconds: sec })}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${spec.seconds === sec ? 'bg-fuchsia-600 text-white' : 'bg-white/10 text-white/60 hover:text-white'}`}
+                    >
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {spec.seconds > 210 && spec.mode !== 'loop' && (
+                <span className="block text-[10px] text-fuchsia-300 mt-1">
+                  Auto-chains {Math.min(4, Math.ceil((spec.seconds + 6) / 180))} structured sections with beat-locked crossfades.
+                </span>
+              )}
             </label>
             <label>Key
               <select value={spec.key} onChange={e => set({ key: e.target.value })} className="w-full mt-0.5 bg-black/40 border border-white/10 rounded px-2 py-1 text-white">{KEYS.map(k => <option key={k}>{k}</option>)}</select>

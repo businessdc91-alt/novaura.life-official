@@ -416,6 +416,17 @@ export const APP_CAPABILITY_PROFILES = {
     canAccessRawDisk: false,
   },
 
+  sovereign_repair: {
+    id: 'sovereign_repair',
+    name: 'Sovereign Auto-Repair Studio',
+    allowedPublish: ['repair:*', 'window:recover'],
+    allowedSubscribe: ['repair:*', 'crash:*', 'theme:changed', 'window:*'],
+    allowedAppCalls: {},
+    dataScope: ['repair_sessions', 'repair_hotfixes', 'repair_proposals', 'node_feedback'],
+    canAccessVaultSecrets: false,
+    canAccessRawDisk: false,
+  },
+
   card_creator: {
     id: 'card_creator',
     name: '3D Business Card Architect',

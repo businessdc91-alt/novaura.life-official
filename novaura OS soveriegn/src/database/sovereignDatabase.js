@@ -31,6 +31,8 @@ export const BACKUP_TABLES = [
   'founder_directives',
   // v24: Sovereign Commerce Studio
   'commerce_stores', 'commerce_products', 'commerce_orders', 'commerce_ledger', 'commerce_campaigns', 'commerce_domains',
+  // v26: Sovereign Self-Repair & Auto-Healing Studio
+  'repair_sessions', 'repair_hotfixes', 'repair_proposals',
 ];
 
 class SovereignDatabase extends Dexie {
@@ -220,7 +222,18 @@ class SovereignDatabase extends Dexie {
       aunlock_recovered: '[jobId+path], jobId',
     });
 
+    // v26 — Sovereign Auto-Repair Studio: crash/repair sessions, reversible runtime hotfixes,
+    // and encrypted upstream main-distro patch proposals.
+    this.version(26).stores({
+      repair_sessions: 'id, status, agent, targetKind, targetRef, createdAt, updatedAt',
+      repair_hotfixes: 'id, kind, targetApp, enabled, createdAt',
+      repair_proposals: 'id, clientId, direction, status, severity, createdAt',
+    });
+
     this.identities = this.table('identities');
+    this.repair_sessions = this.table('repair_sessions');
+    this.repair_hotfixes = this.table('repair_hotfixes');
+    this.repair_proposals = this.table('repair_proposals');
     this.domain_records = this.table('domain_records');
     this.domain_claims = this.table('domain_claims');
     this.template_installs = this.table('template_installs');

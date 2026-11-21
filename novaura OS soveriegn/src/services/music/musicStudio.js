@@ -10,7 +10,8 @@ import { ensureComfyRunning, probeComfy, availableOptions, nodeInfo, requireNode
 import { warmModel } from '../engines/engineAutostart.js';
 import { generateImage, coverPrompt } from '../engines/imageGen.js';
 import { compose, offlineIdeas, DEFAULT_SPEC, GENRES, ERAS, MOODS, VOICES, LOOP_SCENES } from './musicCatalog.js';
-import { decodeAudio, makeSeamlessLoop, wavBlob, durationOf } from './audioTools.js';
+import { decodeAudio, makeSeamlessLoop, wavBlob, durationOf, concatWithCrossfade, splitIntoChunks, applyDspMastering } from './audioTools.js';
+import { analyzeSongAudio, planExtendedSections, critiqueAndPlanRevision } from './songAnalyzer.js';
 import { listCybeniModels, runModel, suggestRoles } from '../cybeni/models.js';
 import { marketplacePublish } from '../marketplacePublishService.js';
 
@@ -271,6 +272,76 @@ export async function generateSong(rawSpec, { onProgress } = {}) {
   }
   const { tags, lyrics } = compose(spec);
   const seed = Math.floor(Math.random() * 2 ** 31);
+
+  // Extended Multi-Section Song Chaining (> 210s up to 600s / 10 minutes)
+  if (spec.mode !== 'loop' && Number(spec.seconds) > 210) {
+    const sections = planExtendedSections(spec);
+    const decodedParts = [];
+    for (const part of sections) {
+      onProgress?.({ status: `Extended Song (${part.index + 1}/${part.total}): ${part.label}` });
+      const partTags = part.arcCue ? `${tags}, ${part.arcCue}` : tags;
+      const wf = await buildSongWorkflow({
+        ...model,
+        tags: partTags,
+        lyrics: part.lyrics || lyrics,
+        seconds: part.seconds,
+        bpm: spec.bpm,
+        key: spec.key,
+        timeSignature: spec.timeSignature,
+        language: spec.language,
+        seed: seed + part.index * 17,
+        batch: 1,
+        songPlan: part.songPlan,
+      });
+      const outs = (await runWorkflow(wf, {
+        onProgress: (p) => onProgress?.({
+          ...p,
+          status: p.status || `Part ${part.index + 1}/${part.total} (${part.label}): step ${p.value || 0}/${p.max || 8}`,
+        }),
+      })).filter(o => o.kind === 'audio');
+      if (!outs.length) throw new Error(`Section ${part.index + 1} produced no audio.`);
+      const partBlob = await fetchOutput(outs[0]);
+      decodedParts.push(await decodeAudio(partBlob));
+    }
+
+    onProgress?.({ status: `Stitching ${sections.length} sections with beat-locked crossfades…` });
+    const stitched = concatWithCrossfade(decodedParts, {
+      bpm: spec.bpm,
+      beatsPerBar: Number(spec.timeSignature) || 4,
+      crossfadeSec: 3.0,
+      trimEdges: true,
+    });
+    const finalBlob = wavBlob(stitched);
+    const finalSeconds = durationOf(stitched);
+
+    const track = {
+      id: id('trk'),
+      title: spec.title || `Extended ${spec.genre}`,
+      spec: { ...spec, seconds: Math.round(finalSeconds) },
+      tags,
+      lyrics,
+      model: model.checkpoint,
+      seed,
+      seconds: finalSeconds,
+      extended: { parts: sections.length, targetSeconds: spec.seconds },
+      loop: null,
+      audioBlobId: await putBlob('audio', finalBlob),
+      audioMime: 'audio/wav',
+      engineFile: `extended_${sections.length}parts.wav`,
+      coverBlobId: null,
+      albumId: null,
+      liked: 0,
+      published: 0,
+      createdAt: Date.now(),
+    };
+    await db.music_tracks.put(track);
+    emit();
+    if (settings.autoCover) {
+      generateCover(track).catch(err => console.warn('[MusicStudio] Cover generation skipped:', err.message));
+    }
+    return [track];
+  }
+
   const batch = spec.mode === 'loop' ? 1 : Math.min(2, Math.max(1, settings.variations));
   onProgress?.({ status: `Composing with ${model.checkpoint}` });
   // Loops render longer than asked: the loop is cut from where the music plays.
@@ -368,6 +439,188 @@ export async function remixAudio(fileBlob, rawSpec, { strength = 0.6, onProgress
   await db.music_tracks.put(track);
   emit();
   return track;
+}
+
+/**
+ * Extend any existing library track by adding a new chained ACE-Step 1.5 continuation section
+ * (+60s..+180s) stitched onto the active end via beat-locked equal-power crossfade.
+ */
+export async function extendTrack(track, { addSeconds = 90, direction = 'soaring bridge, final chorus, and resolving outro', onProgress } = {}) {
+  const origBlob = await getBlob(track.audioBlobId);
+  if (!origBlob) throw new Error('Could not load original audio blob to extend.');
+  const origAudio = await decodeAudio(origBlob);
+
+  await ensureComfyRunning({ onStatus: (status) => onProgress?.({ status }) });
+  const model = await pickMusicModel();
+  if (!model) throw new Error('Install ACE-Step 1.5 from the Engine tab first.');
+
+  const spec = { ...DEFAULT_SPEC, ...(track.spec || {}) };
+  const base = compose(spec);
+  const extSec = Math.max(30, Math.min(180, Number(addSeconds) || 90));
+  const seed = Math.floor(Math.random() * 2 ** 31);
+
+  onProgress?.({ status: `Synthesizing +${extSec}s continuation for "${track.title}"…` });
+  const wf = await buildSongWorkflow({
+    ...model,
+    tags: `${track.tags || base.tags}, seamless continuation, ${direction}`,
+    lyrics: spec.mode === 'instrumental' ? '[Instrumental]\n[Bridge]\n[Outro]' : '[Bridge]\n[Final Chorus]\n[Outro]',
+    seconds: extSec,
+    bpm: spec.bpm,
+    key: spec.key,
+    timeSignature: spec.timeSignature,
+    language: spec.language,
+    seed,
+    batch: 1,
+    songPlan: true,
+  });
+  const out = (await runWorkflow(wf, { onProgress })).find(o => o.kind === 'audio');
+  if (!out) throw new Error('Extension generation returned no audio.');
+  const extAudio = await decodeAudio(await fetchOutput(out));
+
+  onProgress?.({ status: 'Crossfading continuation onto original track…' });
+  const merged = concatWithCrossfade([origAudio, extAudio], {
+    bpm: spec.bpm,
+    beatsPerBar: Number(spec.timeSignature) || 4,
+    crossfadeSec: 2.5,
+    trimEdges: true,
+  });
+  const mergedBlob = wavBlob(merged);
+  const mergedSeconds = durationOf(merged);
+
+  const extendedTrack = {
+    id: id('trk'),
+    title: `${track.title} (Extended)`,
+    spec: { ...spec, seconds: Math.round(mergedSeconds) },
+    tags: track.tags || base.tags,
+    lyrics: track.lyrics || '',
+    model: model.checkpoint,
+    seed,
+    seconds: mergedSeconds,
+    extended: { fromId: track.id, addedSeconds: extSec },
+    audioBlobId: await putBlob('audio', mergedBlob),
+    audioMime: 'audio/wav',
+    engineFile: out.filename,
+    coverBlobId: track.coverBlobId || null,
+    albumId: track.albumId || null,
+    liked: 0,
+    published: 0,
+    createdAt: Date.now(),
+  };
+  await db.music_tracks.put(extendedTrack);
+  emit();
+  return extendedTrack;
+}
+
+/**
+ * Analyze an uploaded, live-recorded, or library audio Blob with real PCM DSP metrics
+ * and generate an AI Producer critique & concrete revision plan.
+ */
+export async function analyzeAndPlanTrack(audioBlob, { title = 'Untitled Track', genre = 'Pop', lyrics = '', goal = 'flow', userNotes = '' } = {}) {
+  const decoded = await decodeAudio(audioBlob);
+  const analysis = analyzeSongAudio(decoded);
+  const chatFn = async (messages) => {
+    const sys = messages.find(m => m.role === 'system')?.content || '';
+    const usr = messages.find(m => m.role === 'user')?.content || '';
+    return askText(sys, usr, { maxTokens: 1100, temperature: 0.45 });
+  };
+  const plan = await critiqueAndPlanRevision(analysis, {
+    title,
+    genre,
+    lyrics,
+    goal,
+    userNotes,
+    chatFn,
+  });
+  return { decoded, analysis, plan };
+}
+
+/**
+ * Revise an uploaded/recorded song to improve flow and sound quality:
+ *  - mode='dsp': Instant offline 3-band EQ, soft-knee compressor, stereo width, dead-air trim, limiter
+ *  - mode='ai_remix': Chunk-safe ACE-Step 1.5 audio-to-audio flow/arrangement revision
+ *  - mode='both': ACE-Step 1.5 arrangement revision followed by DSP mastering polish
+ */
+export async function reviseTrackAudio(
+  audioBlob,
+  {
+    title = 'Revised Track',
+    analysis = null,
+    plan = null,
+    mode = 'dsp',
+    remixStrength = 0.45,
+    dspParams = null,
+    spec = {},
+    onProgress,
+  } = {}
+) {
+  let workingAudio = await decodeAudio(audioBlob);
+  const effectiveDsp = dspParams || plan?.dspParams || analysis?.recommendedDsp || {};
+
+  if (mode === 'ai_remix' || mode === 'both') {
+    await ensureComfyRunning({ onStatus: (status) => onProgress?.({ status }) });
+    const model = await pickMusicModel();
+    if (!model) {
+      const err = new Error('AI Arrangement Revision requires ACE-Step 1.5 (install in Engine tab), or use Instant DSP Master offline.');
+      err.code = 'NO_MUSIC_MODEL';
+      throw err;
+    }
+    await requireNodes(['LoadAudio', 'VAEEncodeAudio']);
+
+    const chunks = splitIntoChunks(workingAudio, 180, 3.0);
+    const remixedParts = [];
+    const bpm = Math.round(spec.bpm || analysis?.estimatedBpm || 115);
+    const key = spec.key || analysis?.estimatedKey || 'C major';
+    const tags = plan?.revisedTags || compose({ ...DEFAULT_SPEC, ...spec }).tags;
+    const lyrics = plan?.revisedLyrics || spec.lyrics || '[Instrumental]';
+    const seed = Math.floor(Math.random() * 2 ** 31);
+
+    for (let i = 0; i < chunks.length; i++) {
+      onProgress?.({ status: `AI Re-Arranging ${chunks.length > 1 ? `part ${i + 1}/${chunks.length}` : 'full song'} with ACE-Step…` });
+      const chunkWav = wavBlob(chunks[i]);
+      const chunkSec = Math.max(10, Math.round(durationOf(chunks[i])));
+      const uploadedName = await uploadInput(chunkWav, `sovereign_revise_${Date.now()}_${i}.wav`);
+      const wf = await buildSongWorkflow({
+        ...model,
+        tags,
+        lyrics,
+        seconds: chunkSec,
+        bpm,
+        key,
+        timeSignature: spec.timeSignature || '4',
+        language: spec.language || 'en',
+        seed: seed + i * 11,
+        batch: 1,
+        songPlan: true,
+      });
+      wf[9] = { class_type: 'LoadAudio', inputs: { audio: uploadedName } };
+      wf[10] = { class_type: 'VAEEncodeAudio', inputs: { audio: ['9', 0], vae: ['1', 2] } };
+      wf[6].inputs.latent_image = ['10', 0];
+      wf[6].inputs.denoise = Math.min(0.85, Math.max(0.22, Number(remixStrength) || 0.45));
+
+      const out = (await runWorkflow(wf, { onProgress })).find(o => o.kind === 'audio');
+      if (!out) throw new Error('ACE-Step revision returned no audio.');
+      remixedParts.push(await decodeAudio(await fetchOutput(out)));
+    }
+
+    workingAudio = remixedParts.length > 1
+      ? concatWithCrossfade(remixedParts, { bpm, beatsPerBar: 4, crossfadeSec: 2.5, trimEdges: false })
+      : remixedParts[0];
+  }
+
+  if (mode === 'dsp' || mode === 'both') {
+    onProgress?.({ status: 'Applying Sovereign 3-Band EQ, Compression & Mastering Chain…' });
+    workingAudio = applyDspMastering(workingAudio, effectiveDsp);
+  }
+
+  const outBlob = wavBlob(workingAudio);
+  const analysisAfter = analyzeSongAudio(workingAudio);
+  return {
+    title: `${title} (${mode === 'dsp' ? 'Mastered' : mode === 'both' ? 'AI Revised + Mastered' : 'AI Revised'})`,
+    blob: outBlob,
+    audio: workingAudio,
+    analysisAfter,
+    mode,
+  };
 }
 
 /** Save an uploaded or edited file into the library. */

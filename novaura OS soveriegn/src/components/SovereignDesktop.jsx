@@ -34,6 +34,8 @@ import { Phone, PhoneCall, PhoneOff, Video, ChevronUp, ChevronDown, Sparkles } f
 import SovereignLeftSidebar from './SovereignLeftSidebar';
 import SovereignRightSidebar from './SovereignRightSidebar';
 import SovereignChatBar from './SovereignChatBar';
+import CrashBanner from './desktop/CrashBanner';
+import { installFlightRecorder } from '../services/repair/flightRecorder';
 import { Toaster } from 'sonner';
 import { useGraphics } from '../contexts/GraphicsContext';
 
@@ -76,6 +78,11 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
   });
   const [focusedId, setFocusedId] = useState(null);
   const [meshToasts, setMeshToasts] = useState([]);
+
+  // Install lightweight flight recorder, cross-window repair bridge, and active hotfixes on boot
+  useEffect(() => {
+    installFlightRecorder();
+  }, []);
 
   // Apply theme to document data-theme attribute whenever it changes
   useEffect(() => {
@@ -481,6 +488,9 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
 
       {/* 8. Always-Present Floating Aura & Nova Companions */}
       <FloatingCompanions />
+
+      {/* 8b. Global Crash / Glitch Banner (Hidden when healthy; 1-click Pop-Out Auto-Repair) */}
+      <CrashBanner />
 
       {/* 9. Full App Launcher Modal (Cmd+K) */}
       <AppLauncherModal

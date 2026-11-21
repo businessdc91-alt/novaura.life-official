@@ -144,6 +144,9 @@ export const STRUCTURES = {
   'Story ballad': ['Intro', 'Verse 1', 'Verse 2', 'Chorus', 'Verse 3', 'Chorus', 'Outro'],
   'Build & drop': ['Intro', 'Verse', 'Pre-Chorus', 'Drop', 'Verse', 'Pre-Chorus', 'Drop', 'Outro'],
   'Rap': ['Intro', 'Verse 1', 'Hook', 'Verse 2', 'Hook', 'Verse 3', 'Hook', 'Outro'],
+  'Epic 6-Minute Journey': ['Intro', 'Verse 1', 'Pre-Chorus', 'Chorus', 'Verse 2', 'Chorus', 'Instrumental Solo', 'Bridge', 'Final Chorus', 'Outro'],
+  'Extended Club Mix (8m)': ['Extended Intro', 'Verse 1', 'Build', 'Drop 1', 'Breakdown', 'Verse 2', 'Build 2', 'Drop 2', 'Extended Outro'],
+  'Progressive Suite (10m)': ['Overture', 'Movement I: Verse', 'Chorus', 'Interlude', 'Movement II: Verse', 'Instrumental Solo', 'Bridge', 'Climactic Finale', 'Coda'],
 };
 
 export const KEYS = ['C major', 'G major', 'D major', 'A major', 'E major', 'F major', 'B-flat major', 'E-flat major', 'A minor', 'E minor', 'B minor', 'D minor', 'G minor', 'C minor', 'F-sharp minor', 'C-sharp minor'];

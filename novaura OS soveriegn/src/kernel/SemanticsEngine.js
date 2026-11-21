@@ -146,6 +146,7 @@ class SemanticsEngine {
       { id: 'novamail', name: 'NovaMail', description: 'Encrypted sovereign mail client' },
       { id: 'social', name: 'NovaSocial', description: 'P2P decentralized social network' },
       { id: 'sentinel', name: 'Sentinel Shield', description: 'Security, privacy and audit dashboard' },
+      { id: 'sovereign_repair', name: 'Auto-Repair Studio', description: 'Pop-out Cybeni/Aura/Nova self-healing, diagnostics, and upstream distro proposals' },
       { id: 'hypervisor', name: 'Neural Hypervisor', description: 'Local model deck, Ollama/LM Studio monitor & hardware speedometer' },
       { id: 'media_foundry', name: 'Media Foundry', description: 'ComfyUI Forge lab, 1-click installer, model downloads & media studio' },
       { id: 'mind_lab', name: 'Aura Mind Lab', description: 'Chemistry, hardware interoception, dynamic learning & neural augmentations' },
@@ -184,6 +185,9 @@ class SemanticsEngine {
     if (text.includes('open disk') || text.includes('open drive') || text.includes('disk architect') || text.includes('clean disk') || text.includes('boot manager')) return this.executeAction('window:open', { type: 'disk_architect' });
     if (text.includes('open settings')) return this.executeAction('window:open', { type: 'settings' });
     if (text.includes('open shield') || text.includes('open sentinel')) return this.executeAction('window:open', { type: 'sentinel' });
+    if (text.includes('auto repair') || text.includes('repair studio') || text.includes('report error') || text.includes('report bug') || text.includes('fix glitch') || text.includes('self heal')) {
+      return this.executeAction('window:open', { type: 'sovereign_repair' });
+    }
     if (text.includes('open mind lab') || text.includes('mind lab') || text.includes('open augmentations') || text.includes('neural augmentations')) {
       return this.executeAction('window:open', { type: 'mind_lab' });
     }

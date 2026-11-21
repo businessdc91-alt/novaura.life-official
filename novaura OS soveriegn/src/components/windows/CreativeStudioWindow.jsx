@@ -206,16 +206,35 @@ export default function CreativeStudioWindow({ props: windowProps = null } = {})
     lastOpenId.current = openId || null;
     try { replacePristine(await openVaultFile(store, fileId)); } catch (err) { store.notify(err.message); }
   }, [store, replacePristine]);
+  const openFromImageUrl = useCallback(async (imageUrl, title, openId) => {
+    if (openId && lastOpenId.current === openId) return;
+    lastOpenId.current = openId || null;
+    try {
+      const res = await fetch(imageUrl);
+      if (!res.ok) throw new Error(`Could not load handed-off image (${res.status}).`);
+      const blob = await res.blob();
+      const safeTitle = String(title || 'Sovereign_Artwork').replace(/[^a-zA-Z0-9._ -]/g, '_').slice(0, 60);
+      const filename = /\.(png|jpe?g|webp)$/i.test(safeTitle) ? safeTitle : `${safeTitle}.png`;
+      const file = new File([blob], filename, { type: blob.type || 'image/png' });
+      replacePristine(await openFileBlob(store, file, filename));
+      store.notify(`Opened "${filename}" in Creative Studio`);
+    } catch (err) {
+      store.notify(`Could not open image: ${err.message}`);
+    }
+  }, [store, replacePristine]);
   useEffect(() => {
     if (windowProps?.fileId) openFromFiles(windowProps.fileId, windowProps.openId);
-  }, [windowProps?.fileId, windowProps?.openId, openFromFiles]);
+    else if (windowProps?.imageUrl) openFromImageUrl(windowProps.imageUrl, windowProps.title, windowProps.openId);
+  }, [windowProps?.fileId, windowProps?.imageUrl, windowProps?.title, windowProps?.openId, openFromFiles, openFromImageUrl]);
   useEffect(() => {
     const onContext = (e) => {
-      if (e.detail?.appId === 'creative_studio' && e.detail.props?.fileId) openFromFiles(e.detail.props.fileId, e.detail.props.openId);
+      if (e.detail?.appId !== 'creative_studio') return;
+      if (e.detail.props?.fileId) openFromFiles(e.detail.props.fileId, e.detail.props.openId);
+      else if (e.detail.props?.imageUrl) openFromImageUrl(e.detail.props.imageUrl, e.detail.props.title, e.detail.props.openId);
     };
     window.addEventListener('novaura:app_context', onContext);
     return () => window.removeEventListener('novaura:app_context', onContext);
-  }, [openFromFiles]);
+  }, [openFromFiles, openFromImageUrl]);
   // ── Crash recovery: copies of unsaved work, written on a timer and when the studio closes ──
   const [recovered, setRecovered] = useState(null);
   useEffect(() => {

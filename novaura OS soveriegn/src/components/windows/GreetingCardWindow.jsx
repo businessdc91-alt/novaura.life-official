@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Heart, Sparkles, Send, Download, Music, VolumeX, Eye, RotateCw,
-  Gift, Users, Check, Radio, Copy, Clock, Inbox, ShieldCheck, ChevronRight
+  Sparkles, Send, Download, Music, Eye, RotateCw,
+  Gift, Check, Inbox, ShieldCheck, Printer, Upload, Layers, CreditCard, Palette, X, Wand2
 } from 'lucide-react';
 import {
   CARD_OCCASIONS, CARD_THEMES, PARTICLE_EFFECTS, AUDIO_MELODIES,
@@ -12,24 +12,36 @@ import {
 import { getConnectedPeers, getLocalIdentity, getContacts } from '../../services/sovereignMesh.js';
 import { useKernel } from '../../kernel/useKernel.js';
 import { triggerDownload } from '../../services/fileStorageService.js';
+import {
+  GREETING_BORDERS,
+  renderGreetingCardSheet,
+  downloadCanvasPng,
+} from '../../services/print/printEngine.js';
+import { sendImageToCreativeStudio, sendImageToMediaFoundry } from '../../services/media/creativeBridge.js';
 
-export default function GreetingCardWindow() {
+export default function GreetingCardWindow({ props: windowProps } = {}) {
   const { kernel } = useKernel();
-  const [activeTab, setActiveTab] = useState('design'); // 'design' | 'inbox' | 'sent'
-  
+  const [activeTab, setActiveTab] = useState('design'); // 'design' | 'print' | 'inbox' | 'sent'
+
   // Card Design State
   const [occasion, setOccasion] = useState(CARD_OCCASIONS[0].id);
   const [themeId, setThemeId] = useState('gold_luxury');
   const [particleEffect, setParticleEffect] = useState('confetti');
   const [audioMelody, setAudioMelody] = useState('birthday');
   const [coverEmoji, setCoverEmoji] = useState('🎂');
-  const [title, setTitle] = useState('Happy Birthday!');
+  const [coverArtUrl, setCoverArtUrl] = useState(() => windowProps?.coverArtUrl || '');
+  const [printBorderId, setPrintBorderId] = useState('gold_filigree');
+  const [title, setTitle] = useState(() => windowProps?.title || 'Happy Birthday!');
   const [message, setMessage] = useState(
     'Wishing you radiant joy, peak cognitive clarity, and unstoppable momentum in the year ahead. May your sovereign node thrive!'
   );
+  const [insideQuote, setInsideQuote] = useState('May every season bring warmth, wonder, and unforgettable memories.');
+  const [signatureLine, setSignatureLine] = useState('');
+  const [backColophon, setBackColophon] = useState('Crafted & Printed with Love');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPeerId, setRecipientPeerId] = useState('');
-  
+  const [printSide, setPrintSide] = useState('exterior'); // 'exterior' | 'interior'
+
   // Interactive 3D Preview State
   const [isOpen, setIsOpen] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -42,18 +54,23 @@ export default function GreetingCardWindow() {
   const [savedContacts, setSavedContacts] = useState([]);
   const [receivedCards, setReceivedCards] = useState([]);
   const [sentCards, setSentCards] = useState([]);
-  const [selectedInboxCard, setSelectedInboxCard] = useState(null);
 
   const canvasRef = useRef(null);
+  const printCanvasRef = useRef(null);
+  const coverArtInputRef = useRef(null);
   const localId = getLocalIdentity();
   const activeTheme = CARD_THEMES[themeId] || CARD_THEMES.gold_luxury;
 
-  // Sync mesh peers, contacts, and card history
+  // Sync mesh peers, contacts, card history, and cross-app cover art handoffs
   useEffect(() => {
-    setOnlinePeers(getConnectedPeers());
-    setReceivedCards(getReceivedGreetingCards());
-    setSentCards(getSentGreetingCards());
-    getContacts().then(c => setSavedContacts(c || []));
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setOnlinePeers(getConnectedPeers());
+      setReceivedCards(getReceivedGreetingCards());
+      setSentCards(getSentGreetingCards());
+    });
+    getContacts().then(c => { if (!cancelled) setSavedContacts(c || []); });
 
     const onPeerUpdate = () => {
       setOnlinePeers(getConnectedPeers());
@@ -64,16 +81,118 @@ export default function GreetingCardWindow() {
       setSendSuccess(`New card arrived from ${e.detail?.senderName || 'Peer'}!`);
       setTimeout(() => setSendSuccess(''), 4000);
     };
+    const onAppContext = (e) => {
+      if (e.detail?.appId !== 'greeting_card') return;
+      const p = e.detail.props || {};
+      if (p.coverArtUrl) {
+        setCoverArtUrl(p.coverArtUrl);
+        if (p.title) setTitle(p.title);
+        setSendSuccess('Loaded cover artwork from Media Foundry!');
+        setTimeout(() => setSendSuccess(''), 3500);
+      }
+    };
 
     window.addEventListener('novaura:mesh_updated', onPeerUpdate);
     window.addEventListener('novaura:greeting_card_received', onCardReceived);
+    window.addEventListener('novaura:app_context', onAppContext);
 
     return () => {
+      cancelled = true;
       window.removeEventListener('novaura:mesh_updated', onPeerUpdate);
       window.removeEventListener('novaura:greeting_card_received', onCardReceived);
+      window.removeEventListener('novaura:app_context', onAppContext);
       stopMelody();
     };
   }, []);
+
+  // Render live 300 DPI Bi-Fold Mail Sheet preview when on Print tab
+  useEffect(() => {
+    let cancelled = false;
+    const canvas = printCanvasRef.current;
+    if (!canvas || activeTab !== 'print') return () => { cancelled = true; };
+    renderGreetingCardSheet(
+      canvas,
+      {
+        title,
+        message,
+        insideQuote,
+        signatureLine: signatureLine || `With warmth, ${localId?.handle || 'Your Friend'}`,
+        backColophon,
+        recipientName,
+        senderName: localId?.handle || 'NovAura Studio',
+        coverEmoji,
+        coverArtUrl,
+        printBorderId,
+      },
+      printSide
+    ).catch(() => {
+      if (!cancelled) {
+        // Ignore transient image load cancel
+      }
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, printSide, title, message, insideQuote, signatureLine, backColophon, recipientName, localId?.handle, coverEmoji, coverArtUrl, printBorderId]);
+
+  const handleUploadCoverArt = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCoverArtUrl(String(reader.result || ''));
+      setSendSuccess(`Applied cover artwork "${file.name}"!`);
+      setTimeout(() => setSendSuccess(''), 3000);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const buildPrintPayload = () => ({
+    title,
+    message,
+    insideQuote,
+    signatureLine: signatureLine || `With warmth, ${localId?.handle || 'Your Friend'}`,
+    backColophon,
+    recipientName,
+    senderName: localId?.handle || 'NovAura Studio',
+    coverEmoji,
+    coverArtUrl,
+    printBorderId,
+  });
+
+  const handleExportPrintSheet = async (side) => {
+    const offscreen = document.createElement('canvas');
+    await renderGreetingCardSheet(offscreen, buildPrintPayload(), side);
+    const slug = (title || 'greeting_card').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    downloadCanvasPng(offscreen, `${slug}_5x7_300dpi_${side}.png`);
+    setSendSuccess(`Exported 3000×2100 (300 DPI 5"×7" Bi-Fold ${side.toUpperCase()}) PNG!`);
+    setTimeout(() => setSendSuccess(''), 3500);
+  };
+
+  const handleOpenMailPrintDialog = async () => {
+    const extCanvas = document.createElement('canvas');
+    const intCanvas = document.createElement('canvas');
+    await renderGreetingCardSheet(extCanvas, buildPrintPayload(), 'exterior');
+    await renderGreetingCardSheet(intCanvas, buildPrintPayload(), 'interior');
+    const extUrl = extCanvas.toDataURL('image/png');
+    const intUrl = intCanvas.toDataURL('image/png');
+    const w = window.open('', '_blank', 'width=1050,height=760');
+    if (!w) return;
+    w.document.write(`<!doctype html><html><head><title>Print Greeting Card (5x7 Bi-Fold)</title>
+      <style>@page { size: 10in 7in landscape; margin: 0; } body { margin: 0; background: #111; text-align: center; }
+      img { width: 100%; max-width: 10in; page-break-after: always; display: block; margin: 0 auto 12px; }
+      @media print { body { background: #fff; } img { margin: 0; } }</style>
+      </head><body><img src="${extUrl}" /><img src="${intUrl}" /><script>window.onload=()=>window.print();</script></body></html>`);
+    w.document.close();
+  };
+
+  const handleEditPrintInCreativeStudio = async () => {
+    const offscreen = document.createElement('canvas');
+    await renderGreetingCardSheet(offscreen, buildPrintPayload(), printSide);
+    sendImageToCreativeStudio({
+      imageUrl: offscreen.toDataURL('image/png'),
+      title: `${title}_5x7_${printSide}`,
+    });
+    setSendSuccess('Opened 300 DPI greeting sheet in Creative Studio!');
+    setTimeout(() => setSendSuccess(''), 3000);
+  };
 
   // Update canvas particle effect whenever effect or theme changes
   useEffect(() => {
@@ -240,13 +359,22 @@ export default function GreetingCardWindow() {
         {/* Navigation Tabs */}
         <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
           <button
-            onClick={() => { setActiveTab('design'); setSelectedInboxCard(null); }}
+            onClick={() => setActiveTab('design')}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-colors cursor-pointer ${
               activeTab === 'design' ? 'bg-pink-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Create Card</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('print')}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-colors cursor-pointer ${
+              activeTab === 'print' ? 'bg-amber-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>Mail-Ready Print (5&quot;×7&quot;)</span>
           </button>
           <button
             onClick={() => setActiveTab('inbox')}
@@ -270,6 +398,20 @@ export default function GreetingCardWindow() {
 
         {/* Global Action Tools */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('novaura-open-window', { detail: { appId: 'card_forge', toggle: false } }))}
+            className="hidden xl:flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-[11px] border border-slate-700 cursor-pointer"
+            title="Switch to TCG Card Forge"
+          >
+            <Layers className="w-3 h-3" /> TCG Cards
+          </button>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('novaura-open-window', { detail: { appId: 'card_creator', toggle: false } }))}
+            className="hidden xl:flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-[11px] border border-slate-700 cursor-pointer"
+            title="Switch to Business Card Pro"
+          >
+            <CreditCard className="w-3 h-3" /> Business Cards
+          </button>
           <button
             onClick={toggleAudio}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
@@ -611,12 +753,21 @@ export default function GreetingCardWindow() {
                     </span>
 
                     <div className="my-auto space-y-4">
-                      <div
-                        style={{ filter: `drop-shadow(0 0 20px ${activeTheme.primary})` }}
-                        className="text-7xl animate-bounce"
-                      >
-                        {coverEmoji}
-                      </div>
+                      {coverArtUrl ? (
+                        <img
+                          src={coverArtUrl}
+                          alt="Card Cover Artwork"
+                          className="w-48 h-48 mx-auto rounded-2xl object-cover border-2 shadow-xl"
+                          style={{ borderColor: activeTheme.primary }}
+                        />
+                      ) : (
+                        <div
+                          style={{ filter: `drop-shadow(0 0 20px ${activeTheme.primary})` }}
+                          className="text-7xl animate-bounce"
+                        >
+                          {coverEmoji}
+                        </div>
+                      )}
                       <div>
                         <h2 className="text-2xl font-black text-white leading-tight">
                           {title}
@@ -688,6 +839,164 @@ export default function GreetingCardWindow() {
           </>
         )}
 
+        {/* Mail-Ready 300 DPI Bi-Fold Print Studio Tab */}
+        {activeTab === 'print' && (
+          <div className="flex-1 flex overflow-hidden">
+            <div className="w-[380px] border-r border-slate-800/80 bg-slate-900/60 p-5 overflow-y-auto space-y-4 shrink-0">
+              <div>
+                <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Printer className="w-4 h-4 text-amber-400" />
+                  <span>Mail-Ready 5&quot;×7&quot; Holiday &amp; Greeting Print</span>
+                </h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  300 DPI bi-fold sheets (3000×2100 px) with fold ticks. Print double-sided on cardstock, fold in half, and mail in a standard A7 envelope!
+                </p>
+              </div>
+
+              {/* Cover Artwork Upload or AI Studio */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-amber-300">Front Cover Artwork</span>
+                  {coverArtUrl && (
+                    <button type="button" onClick={() => setCoverArtUrl('')} className="text-[10px] text-rose-400 flex items-center gap-0.5 cursor-pointer">
+                      <X className="w-3 h-3" /> Clear Art
+                    </button>
+                  )}
+                </div>
+                <input ref={coverArtInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && handleUploadCoverArt(e.target.files[0])} />
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => coverArtInputRef.current?.click()}
+                    className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white font-semibold flex items-center justify-center gap-1 cursor-pointer border border-slate-700"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-amber-400" /> Upload Photo/Art
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendImageToMediaFoundry({ tab: 'studio', prompt: `${title} holiday greeting card illustration` })}
+                    className="py-1.5 px-2 rounded-lg bg-pink-600/90 hover:bg-pink-500 text-xs text-white font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Wand2 className="w-3.5 h-3.5" /> Generate AI Art
+                  </button>
+                </div>
+              </div>
+
+              {/* Decorative Printable Borders */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">Decorative Print Border (6 Styles)</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {GREETING_BORDERS.map(b => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => setPrintBorderId(b.id)}
+                      className={`px-2.5 py-2 rounded-xl text-[11px] font-semibold text-left border flex items-center gap-2 cursor-pointer ${
+                        printBorderId === b.id
+                          ? 'border-amber-400 bg-amber-950/40 text-white'
+                          : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'
+                      }`}
+                    >
+                      <span className="w-3.5 h-3.5 rounded-full shrink-0 border border-white/25" style={{ background: b.primary }} />
+                      <span className="truncate">{b.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-300">Inside Left Quote / Verse</label>
+                <textarea
+                  rows={2}
+                  value={insideQuote}
+                  onChange={(e) => setInsideQuote(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-300">Inside Signature Line</label>
+                <input
+                  type="text"
+                  value={signatureLine}
+                  onChange={(e) => setSignatureLine(e.target.value)}
+                  placeholder={`With warmth, ${localId?.handle || 'Your Friend'}`}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-300">Back Panel Colophon</label>
+                <input
+                  type="text"
+                  value={backColophon}
+                  onChange={(e) => setBackColophon(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleOpenMailPrintDialog}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" /> Print Mail-Ready Duplex Sheet Now
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleExportPrintSheet('exterior')}
+                    className="py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer border border-slate-700"
+                  >
+                    <Download className="w-3.5 h-3.5 text-amber-400" /> Exterior PNG
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportPrintSheet('interior')}
+                    className="py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer border border-slate-700"
+                  >
+                    <Download className="w-3.5 h-3.5 text-cyan-400" /> Interior PNG
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleEditPrintInCreativeStudio}
+                  className="w-full py-2 rounded-xl bg-pink-600/90 hover:bg-pink-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Palette className="w-3.5 h-3.5" /> Edit Print Sheet in Creative Studio
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 flex flex-col items-center justify-center p-6 bg-slate-950 gap-4 overflow-auto">
+              <div className="flex items-center gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setPrintSide('exterior')}
+                  className={`px-4 py-1.5 rounded-lg font-bold cursor-pointer ${printSide === 'exterior' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Exterior Sheet (Back Left | Front Cover Right)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintSide('interior')}
+                  className={`px-4 py-1.5 rounded-lg font-bold cursor-pointer ${printSide === 'interior' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Interior Sheet (Inside Left | Message Right)
+                </button>
+              </div>
+              <canvas
+                ref={printCanvasRef}
+                className="max-w-full max-h-[500px] rounded-xl shadow-2xl border border-slate-700 bg-white"
+              />
+              <div className="text-[11px] text-slate-400 font-mono">
+                Exact 3000×2100 px (10&quot;×7&quot; @ 300 DPI) → Fold down center score marks → Fits standard A7 (5.25&quot;×7.25&quot;) mailing envelope
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Received Cards Tab */}
         {activeTab === 'inbox' && (
           <div className="flex-1 p-8 overflow-y-auto max-w-4xl mx-auto w-full space-y-6">
@@ -714,7 +1023,6 @@ export default function GreetingCardWindow() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {receivedCards.map((card, idx) => {
-                  const theme = CARD_THEMES[card.themeId] || CARD_THEMES.gold_luxury;
                   return (
                     <div
                       key={card.id || idx}
@@ -723,7 +1031,7 @@ export default function GreetingCardWindow() {
                       <div className="flex items-center justify-between">
                         <span className="text-3xl">{card.coverEmoji || '🎂'}</span>
                         <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
-                          {new Date(card.timestamp || Date.now()).toLocaleDateString()}
+                          {card.timestamp ? new Date(card.timestamp).toLocaleDateString() : 'Recent'}
                         </span>
                       </div>
                       <div>

@@ -4,7 +4,7 @@ import {
   BookOpen, PhoneCall, Mail, Users, Bot, ShieldCheck,
   Palette, Settings, Layers, CreditCard, FileText, HardDrive,
   Cpu, Flame, GitBranch, KeyRound, GitPullRequest, Sparkles,
-  TrendingUp, Music, ShoppingBag, Gamepad2, Store
+  TrendingUp, Music, ShoppingBag, Gamepad2, Store, Wrench
 } from 'lucide-react';
 import { APP_MAP } from '../config/appRegistry.js';
 
@@ -34,6 +34,7 @@ const TOOLBAR_APP_DEFS = {
   novasocial:      { id: 'novasocial',      label: 'Social',       icon: Users,        color: '#a78bfa' },
   ailounge:        { id: 'ailounge',        label: 'AI Lounge',    icon: Bot,          color: '#34d399' },
   sentinel:        { id: 'sentinel',        label: 'Sentinel',     icon: ShieldCheck,  color: '#10b981' },
+  sovereign_repair:{ id: 'sovereign_repair',label: 'Auto-Repair',  icon: Wrench,       color: '#06b6d4' },
   credential_enclave: { id: 'credential_enclave', label: 'Enclave', icon: KeyRound,    color: '#10b981' },
   card_forge:      { id: 'card_forge',      label: 'TCG Forge',    icon: Layers,       color: '#f97316' },
   card_creator:    { id: 'card_creator',    label: 'Biz Card',     icon: CreditCard,   color: '#f59e0b' },
