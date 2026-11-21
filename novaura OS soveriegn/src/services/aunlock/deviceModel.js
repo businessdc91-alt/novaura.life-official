@@ -25,6 +25,13 @@ export function deviceRecord({ jobId, id, raw = {} } = {}) {
       battery: raw.battery ?? null,
     },
     lockState: LOCKS.has(raw.lock) ? raw.lock : 'unknown',
+    // Bridge safety flags (Phase 1b). systemDisk is passed through, NOT defaulted to false, so an
+    // unclassified device never reads as a safe intake target — the controller refuses any
+    // systemDisk !== false.
+    bus: raw.bus ?? null,
+    removable: raw.removable ?? false,
+    systemDisk: raw.systemDisk ?? null,
+    nativeId: raw.nativeId ?? null,
     updatedAt: Date.now(),
   };
 }

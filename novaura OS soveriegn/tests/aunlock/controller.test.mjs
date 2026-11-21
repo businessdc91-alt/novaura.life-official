@@ -5,7 +5,7 @@ import { createCatalog } from '../../src/services/aunlock/catalog.js';
 import { createController } from '../../src/services/aunlock/controller.js';
 
 const baseNative = {
-  async enumerate() { return { kind: 'laptop', serial: 'S1', lock: 'user', storage: '500GB HDD' }; },
+  async enumerate() { return [{ kind: 'laptop', serial: 'S1', lock: 'user', storage: '500GB HDD', systemDisk: false }]; },
   async recover() { return [{ path: 'photos/a.jpg', size: 100 }, { path: 'docs/b.pdf', size: 50 }]; },
   async wipe() { return { ok: true, startedAt: 10, finishedAt: 20 }; },
 };
@@ -105,7 +105,7 @@ test('discardJob removes a job and its recovered data on demand', async () => {
 });
 
 test('recover/sanitize on a locked device with no authorization are both refused', async () => {
-  const lockedNative = { ...baseNative, async enumerate() { return { kind: 'laptop', serial: 'S', lock: 'bios', storage: '500GB HDD' }; } };
+  const lockedNative = { ...baseNative, async enumerate() { return [{ kind: 'laptop', serial: 'S', lock: 'bios', storage: '500GB HDD', systemDisk: false }]; } };
   const { ctl, catalog } = make({ native: lockedNative });
   const j = await ctl.newJob();
   await ctl.intakeDevice(j.id);
@@ -113,4 +113,37 @@ test('recover/sanitize on a locked device with no authorization are both refused
   assert.equal((await ctl.sanitize(j.id)).ok, false);
   assert.deepEqual(await catalog.listRecovered(j.id), []);
   assert.deepEqual(await catalog.listCerts(j.id), []);
+});
+
+test('listConnectedDevices returns the native blob list without storing', async () => {
+  const { ctl, catalog } = make({ native: { enumerate: async () => ([{ kind: 'drive', serial: 'S1', systemDisk: false }]) } });
+  const j = await ctl.newJob();
+  const list = await ctl.listConnectedDevices();
+  assert.equal(list.length, 1);
+  assert.deepEqual(await catalog.listDevices(j.id), []); // nothing written
+});
+
+test('intakeDevice refuses the host system disk', async () => {
+  const { ctl, catalog } = make();
+  const j = await ctl.newJob();
+  const r = await ctl.intakeDevice(j.id, { kind: 'drive', serial: 'OS', systemDisk: true });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /system disk/i);
+  assert.deepEqual(await catalog.listDevices(j.id), []);
+});
+
+test('intakeDevice stores a chosen non-system device', async () => {
+  const { ctl, catalog } = make();
+  const j = await ctl.newJob();
+  await ctl.intakeDevice(j.id, { kind: 'drive', serial: 'S9', systemDisk: false });
+  const devs = await catalog.listDevices(j.id);
+  assert.equal(devs[0].serial, 'S9');
+  assert.equal(devs[0].systemDisk, false);
+});
+
+test('intakeDevice with no blob still intakes the first enumerated (Phase 1a path)', async () => {
+  const { ctl, catalog } = make();
+  const j = await ctl.newJob();
+  await ctl.intakeDevice(j.id);
+  assert.equal((await catalog.listDevices(j.id)).length, 1);
 });

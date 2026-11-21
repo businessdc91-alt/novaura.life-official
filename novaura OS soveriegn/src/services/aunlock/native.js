@@ -1,7 +1,10 @@
-// native.js — Phase 1a placeholder for the hardware layer. The real USB enumeration, drive
-// mount/recovery, and NIST 800-88 wipe arrive in Phase 1b (Rust/Tauri + the LAN recovery stick)
-// and replace this module. Until then, device operations report that the hardware phase is
-// pending — the catalog, jobs, provenance/authorization gate, and certificate logic all work.
+// native.js — placeholders for the hardware layer.
+//
+// Phase 1b-A replaced ENUMERATION with the real read-only bridge: getController() now wires
+// `nativeDevices.js` for `enumerate`, so the placeholder enumerate below is no longer used (kept
+// only as a safe fallback). Drive mount/recovery and the NIST 800-88 wipe are still ahead (their
+// own Phase 1b slices), so `recover`/`wipe` keep reporting that the hardware phase is pending —
+// the catalog, jobs, provenance/authorization gate, and certificate logic all work.
 
 export const placeholderNative = {
   async enumerate() {

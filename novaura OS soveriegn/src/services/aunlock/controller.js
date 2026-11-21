@@ -12,6 +12,7 @@ import { provenanceRecord, canProceed } from './authorization.js';
 import { sanitizationMethodFor, buildCert } from './sanitizationCert.js';
 import { getCatalog } from './catalog.js';
 import { placeholderNative } from './native.js';
+import { createNativeDevices } from './nativeDevices.js';
 
 const rand = () => Math.random().toString(36).slice(2, 8);
 
@@ -45,8 +46,26 @@ export function createController({ catalog, native, now = Date.now, operator = '
       await catalog.deleteJobCascade(jobId);
     },
 
-    async intakeDevice(jobId) {
-      const raw = await native.enumerate();
+    /** The connected devices the native bridge sees right now — a read-only list, nothing stored.
+     * The window shows these so the operator picks which one to intake. */
+    listConnectedDevices() {
+      return native.enumerate();
+    },
+
+    /** Intake a device onto the job. With `raw` (a chosen blob from listConnectedDevices), intake
+     * that one; without it, intake the first enumerated device (the Phase 1a path). The host's own
+     * system disk is refused outright — deny-by-default: anything whose systemDisk is not an
+     * explicit `false` is treated as a possible system disk and rejected, so the OS drive can never
+     * become an intake/sanitize target. */
+    async intakeDevice(jobId, raw) {
+      if (raw === undefined) {
+        const list = await native.enumerate();
+        raw = Array.isArray(list) ? list[0] : list;
+      }
+      if (!raw) return { ok: false, reason: 'No device detected to intake.' };
+      if (raw.systemDisk !== false) {
+        return { ok: false, reason: "That is this computer's system disk — not an intake target." };
+      }
       const device = deviceRecord({ jobId, id: `dev_${now()}_${rand()}`, raw });
       await catalog.putDevice(device);
       return device;
@@ -104,9 +123,23 @@ export function createController({ catalog, native, now = Date.now, operator = '
 
 let shared = null;
 
-/** The one controller over the OS catalog. The native layer is the Phase 1a placeholder until
- * Phase 1b swaps in the real USB/drive/wipe implementation. */
+const isTauri = () => typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
+const tauriInvoke = async (cmd, args) => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke(cmd, args);
+};
+
+/** The one controller over the OS catalog. `enumerate` is the real read-only device bridge
+ * (Phase 1b-A); recover and wipe remain Phase 1a placeholders until their own slices land. */
 export function getController() {
-  if (!shared) shared = createController({ catalog: getCatalog(), native: placeholderNative });
+  if (!shared) {
+    const devices = createNativeDevices({ invoke: tauriInvoke, isTauri });
+    const native = {
+      enumerate: () => devices.enumerate(),
+      recover: placeholderNative.recover,
+      wipe: placeholderNative.wipe,
+    };
+    shared = createController({ catalog: getCatalog(), native });
+  }
   return shared;
 }

@@ -35,3 +35,14 @@ test('specs are carried through verbatim', () => {
   assert.equal(d.specs.storage, '256GB SSD');
   assert.equal(d.specs.battery, '72%');
 });
+
+test('systemDisk, bus, removable and nativeId pass through (systemDisk not defaulted to false)', () => {
+  const d = deviceRecord({ jobId: 'j', id: 'dev_6', raw: { kind: 'drive', systemDisk: false, bus: 'USB', removable: true, nativeId: 'n1' } });
+  assert.equal(d.systemDisk, false);
+  assert.equal(d.bus, 'USB');
+  assert.equal(d.removable, true);
+  assert.equal(d.nativeId, 'n1');
+  // An unclassified device must NOT read as a safe (false) system disk — deny-by-default.
+  const u = deviceRecord({ jobId: 'j', id: 'dev_7', raw: { kind: 'drive' } });
+  assert.notEqual(u.systemDisk, false);
+});
