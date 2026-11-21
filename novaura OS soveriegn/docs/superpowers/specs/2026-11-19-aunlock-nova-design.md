@@ -6,11 +6,13 @@
 
 ## Intent & why
 
-An internal Sovereign operator tool for a device refurbishment / repair shop. Plug a
-device in over USB, or boot it onto the LAN, and the tool: identifies the device and its
-specs, lets the operator access and recover the **owner's** files and drives, logs where
-the device came from and the authorization to work on it, and produces a sanitized,
-certified, resale-ready machine. It replaces an ad-hoc manual workflow — the goal is to
+A single Sovereign subapp — the refurbisher's whole bench, built for device refurbishment /
+repair shops to use end to end. Plug a device in over USB, or boot it onto the LAN, and the
+tool: identifies the device and its specs, lets the operator access and recover the
+**owner's** files and drives, logs where the device came from and the authorization to work
+on it, produces a sanitized, certified, resale-ready machine, and then **revives** it by
+recommending and installing the right Linux distro for that hardware. Intake → recover →
+sanitize/cert → revive, in one app. It replaces an ad-hoc manual workflow — the goal is to
 make the legitimate work *fast and on-record*, with the paperwork that lets devices be
 resold and that keeps the operator clear of handling property they can't account for.
 
@@ -31,6 +33,13 @@ resold and that keeps the operator clear of handling property they can't account
   to work on it (receipt, decommission manifest, owner present), timestamp, operator.
 - **Sanitize + certify:** a NIST 800-88 wipe of a device **that has recorded authorization**,
   producing a sanitization certificate and a chain-of-custody record.
+- **Revive (distro center):** a curated catalog of Linux distros, each with an honest
+  write-up (what it's most like — Windows/Mac and which edition — strengths, flaws, and
+  what it's best for: gaming, AI inference, atomic/immutable, full control, lightweight,
+  reviving old hardware); a **spec-matched recommendation** that reads the machine's CPU/RAM/
+  GPU/age (from intake) and names the distros that will make *that* box snappy; and
+  **one-click → checksum-and-signature-verified download → bootable USB**. Writing/installing
+  is operator-initiated.
 - **Hub:** runs inside Sovereign, opened by a gated terminal command; the catalog and any
   staged recovered data live in the local DB / encrypted vault. The job view shows up to
   **3 active jobs as separate tabs**.
@@ -104,15 +113,28 @@ regardless of how it is framed.
   only function when the owner unlocks/trusts.
 - **Catalog:** device records, intake/provenance, runs, recovered-file manifests, and certs
   in the local DB; recovered bytes staged in the vault, purgeable.
-- **Window:** Aunlock runs in Sovereign's window system as a tabbed panel (up to 3 job
-  tabs). Detaching a tab/app into its own native Windows-desktop window, and launching it
-  standalone from a shortcut, are provided by the separate **App Shell** layer (its own
-  design) — Aunlock *inherits* them; it does not build its own. Until the App Shell lands,
-  Aunlock is an in-Sovereign panel.
+- **Window / delivery:** Aunlock is one subapp with a tabbed panel (up to 3 job tabs). It
+  can run in Sovereign's window system **and** as its own native Windows-desktop window
+  launched from a desktop shortcut, auto-updating on the Sovereign runtime (so it stays in
+  step with the ecosystem); a job tab can be dragged out into its own desktop window. This
+  standalone-window delivery is built as a **reusable pattern** so other Sovereign subapps
+  can adopt it later — but it is part of this app, not a prerequisite project.
+
+## Build phasing (one app, sequenced modules)
+
+One subapp, built in order so value ships early and the plan stays plannable:
+1. **Device pipeline** — intake/ID, provenance log, file/drive recovery (USB + LAN recovery
+   stick), sanitize + cert, tabbed 3-job view.
+2. **Revive (distro center)** — catalog, spec-matched recommender, verified download, write
+   bootable USB.
+3. **Standalone-window delivery** — native desktop window + shortcut + auto-update + tab
+   tear-off, built reusably.
 
 ## What's left to the builder
 
 - Exact Rust crates for USB enumeration and Windows drive mounting; the live-Linux base and
-  build for the recovery stick; the sanitization-certificate format/template; the
-  terminal-command wiring (follow the existing Sovereign command registry). TDD throughout;
-  native/hardware paths that can't run in CI get a gated live check like Sentinel's Task 9.
+  build for the recovery stick; the sanitization-certificate format/template; the distro
+  catalog's data source and its signature/checksum verification; the standalone-window
+  mechanism (Tauri multi-window) and the shortcut/auto-update wiring; the terminal-command
+  wiring (follow the existing Sovereign command registry). TDD throughout; native/hardware
+  paths that can't run in CI get a gated live check like Sentinel's Task 9.
