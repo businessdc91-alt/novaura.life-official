@@ -7,6 +7,7 @@ pub mod native_build;
 pub mod local_ai_stream;
 pub mod preview;
 pub mod sentinel_runner;
+pub mod aunlock_devices;
 pub mod games;
 pub mod templates;
 mod password;
@@ -1958,6 +1959,7 @@ pub fn run() {
             preview::addition_clear,
             sentinel_runner::sentinel_sandbox_start,
             sentinel_runner::sentinel_sandbox_stop,
+            aunlock_devices::aunlock_enumerate_devices,
             native_build::cybeni_native_toolchains,
             native_build::cybeni_native_compile,
             llm::llm_catalog,

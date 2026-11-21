@@ -12,6 +12,35 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The read-only PowerShell query the `aunlock_enumerate_devices` command runs. It only *reads*
+/// device/disk state and projects it to the field names `normalize_devices` expects; a test
+/// (`cim_query_is_read_only`) bans any mutating cmdlet so this can never drift into writing.
+/// BitLocker status is best-effort (missing/blocked → `Encrypted` null → lock "unknown",
+/// deny-by-default). The hardware read is proven by the Task 6 live check, not CI.
+pub const AUNLOCK_CIM_QUERY: &str = r#"$ErrorActionPreference='SilentlyContinue';
+$enc=@{};
+foreach($v in (Get-BitLockerVolume)){
+  if($v.MountPoint){
+    $p=Get-Partition -DriveLetter ($v.MountPoint.TrimEnd(':'));
+    if($p){ $enc[[int]$p.DiskNumber]= ($v.ProtectionStatus -eq 'On') }
+  }
+}
+$out=foreach($d in (Get-Disk)){
+  [pscustomobject]@{
+    Kind='drive';
+    Model=$d.FriendlyName;
+    SerialNumber=("$($d.SerialNumber)").Trim();
+    Size=$d.Size;
+    BusType=[string]$d.BusType;
+    MediaType=[string]$d.MediaType;
+    RemovableMedia=([string]$d.BusType -eq 'USB');
+    IsBoot=[bool]$d.IsBoot;
+    IsSystem=[bool]$d.IsSystem;
+    Encrypted=$(if($enc.ContainsKey([int]$d.Number)){$enc[[int]$d.Number]}else{$null})
+  }
+}
+@($out) | ConvertTo-Json -Depth 4 -Compress"#;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSpec {
@@ -187,5 +216,19 @@ mod tests {
     #[test]
     fn empty_array_returns_empty() {
         assert_eq!(normalize_devices("[]").len(), 0);
+    }
+
+    // The enumerate query must stay strictly read-only — guard against a future edit slipping a
+    // mutating cmdlet into it.
+    #[test]
+    fn cim_query_is_read_only() {
+        let q = AUNLOCK_CIM_QUERY;
+        for banned in [
+            "Clear-Disk", "Format-", "Remove-", "Set-Disk", "Initialize-Disk",
+            "Clear-Content", "Set-Partition", "Reset-", "-Wipe", "New-Partition",
+        ] {
+            assert!(!q.contains(banned), "query must stay read-only; found {banned}");
+        }
+        assert!(q.contains("Get-") && q.contains("ConvertTo-Json"));
     }
 }
