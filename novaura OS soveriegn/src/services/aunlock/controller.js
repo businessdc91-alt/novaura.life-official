@@ -22,12 +22,27 @@ export function createController({ catalog, native, now = Date.now, operator = '
     if (job) await catalog.putJob({ ...job, status, ...extra });
   };
   const gate = async (jobId) => canProceed(await catalog.getProvenance(jobId));
+  const sweep = async () => {
+    for (const id of jobsToPurge(await catalog.listJobs(), { now })) await catalog.deleteJobCascade(id);
+  };
 
   return {
     async newJob() {
       const job = await catalog.createJob({ now });
-      for (const id of jobsToPurge(await catalog.listJobs(), { now })) await catalog.deleteJobCascade(id);
+      await sweep();
       return job;
+    },
+
+    /** Drop jobs past the 10-day / 3-job window and all their data. Run on window open so the
+     * TTL is honoured even when no new job is started. */
+    async sweepRetention() {
+      await sweep();
+    },
+
+    /** Manual purge: delete a job and all its recovered data on demand (a client asks, a device
+     * is returned). */
+    async discardJob(jobId) {
+      await catalog.deleteJobCascade(jobId);
     },
 
     async intakeDevice(jobId) {

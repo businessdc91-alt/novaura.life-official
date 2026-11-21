@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, X, Sparkles, Layers } from 'lucide-react';
 import { APP_REGISTRY, useAppRegistryVersion } from '../config/appRegistry.js';
+import { isLauncherVisible } from '../config/launcherVisibility.js';
 
 export const CATEGORIES = [
   { id: 'all', label: 'All Applications' },
@@ -24,18 +25,7 @@ export default function AppLauncherModal({ isOpen, onClose, onLaunchApp }) {
 
   if (!isOpen) return null;
 
-  const filteredApps = APP_REGISTRY.filter(app => {
-    if (app.hidden) {
-      const q = search.trim().toLowerCase();
-      if (!q || (!q.includes('founder') && !q.includes('admin') && !q.includes('office') && !q.includes('enclave') && !app.label.toLowerCase().includes(q))) {
-        return false;
-      }
-    }
-    const matchesCategory = activeCategory === 'all' || app.category === activeCategory;
-    const matchesSearch = app.label.toLowerCase().includes(search.toLowerCase()) ||
-                          app.title.toLowerCase().includes(search.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  const filteredApps = APP_REGISTRY.filter(app => isLauncherVisible(app, search, activeCategory));
 
   return (
     <div

@@ -15,9 +15,10 @@ export default function AunlockWindow() {
   const [notice, setNotice] = useState('');
 
   async function refresh() {
+    await controller.sweepRetention(); // honour the 10-day TTL on open, not only on new jobs
     const list = await controller.listJobs();
     setJobs(list);
-    setActive((cur) => cur || (list.length ? list[list.length - 1].id : null));
+    setActive((cur) => (cur && list.some((j) => j.id === cur) ? cur : (list.length ? list[list.length - 1].id : null)));
   }
   useEffect(() => { refresh(); /* eslint-disable-next-line */ }, []);
 
@@ -93,6 +94,8 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
           onClick={() => act(() => controller.recover(jobId), 'Recovered')}>Recover files</button>
         <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
           onClick={() => act(() => controller.sanitize(jobId), 'Sanitized')}>Sanitize + certificate</button>
+        <button className="px-3 py-1 rounded bg-red-900/60 hover:bg-red-800/60"
+          onClick={() => act(() => controller.discardJob(jobId), 'Job data discarded')}>Discard job + data</button>
       </div>
     </div>
   );

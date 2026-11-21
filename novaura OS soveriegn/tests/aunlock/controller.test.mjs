@@ -81,6 +81,29 @@ test('an authorized sanitize wipes, stores a signed-off cert, and sets the job d
   assert.equal((await catalog.getJob(j.id)).status, 'done');
 });
 
+test('sweepRetention purges jobs past the 10-day TTL without creating a new job', async () => {
+  let t = 1;
+  const { ctl, catalog } = make({ now: () => t });
+  const old = await ctl.newJob();
+  await ctl.intakeDevice(old.id);
+  t = 1 + 11 * 864e5; // 11 days later
+  await ctl.sweepRetention();
+  assert.equal((await ctl.listJobs()).some((j) => j.id === old.id), false);
+  assert.deepEqual(await catalog.listDevices(old.id), []);
+});
+
+test('discardJob removes a job and its recovered data on demand', async () => {
+  const { ctl, catalog } = make();
+  const j = await ctl.newJob();
+  await ctl.intakeDevice(j.id);
+  await ctl.authorize(j.id, { authorization: 'owner present' });
+  await ctl.recover(j.id);
+  assert.equal((await catalog.listRecovered(j.id)).length, 2);
+  await ctl.discardJob(j.id);
+  assert.equal(await catalog.getJob(j.id), null);
+  assert.deepEqual(await catalog.listRecovered(j.id), []);
+});
+
 test('recover/sanitize on a locked device with no authorization are both refused', async () => {
   const lockedNative = { ...baseNative, async enumerate() { return { kind: 'laptop', serial: 'S', lock: 'bios', storage: '500GB HDD' }; } };
   const { ctl, catalog } = make({ native: lockedNative });

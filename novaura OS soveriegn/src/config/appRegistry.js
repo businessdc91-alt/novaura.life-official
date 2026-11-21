@@ -106,6 +106,7 @@ export const APP_REGISTRY = [
     component: AunlockWindow,
     defaultSize: { width: 920, height: 620 },
     hidden: true,
+    terminalOnly: true, // hard-gated: never shown in the launcher, even on a name search
   },
   {
     id: 'browser',
