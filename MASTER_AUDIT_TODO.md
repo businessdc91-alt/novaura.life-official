@@ -35,6 +35,19 @@ The following features are being implemented by the Kimi Swarm to transition Nov
 
 ---
 
+## 🛡️ Sovereign — Security builds (2026-11)
+
+- [x] **Sentinel Probe — Safety Foundation** (built & live-checked 2026-11-20). An AI
+  security-probing agent that tests only owner-verified assets. Foundation delivered:
+  ownership gate (hard technical gate), single-use ed25519 scope token, **no-egress Windows
+  Sandbox runner** + file control channel, fail-closed redaction, `probe_runs`/`probe_findings`
+  data model (Dexie v23), and an echo check proving the loop end to end. Real-sandbox live
+  check passed: served on loopback, **internet egress blocked**, teardown + working-folder
+  wipe confirmed. 715 JS + 35 Rust tests green. Next plan: check library, host AI planner,
+  UI, Deep mode. Spec/plan under `novaura OS soveriegn/docs/superpowers/`.
+
+---
+
 ## 2. PROJECT INVENTORY & HEALTH SCORES
 
 | Project | Type | Lines | Health | Status | Blockers |
@@ -1237,6 +1250,24 @@ Owner direction: nothing on the mesh is capped at kilobytes, and people must be 
   - **Creative Studio Phase 2**: `npm test` 505/509 pass, 0 fail (4 Python-interop skipped); `oxlint` 0 errors & 0 warnings across 70 Creative Studio/test files (0 errors across 385 `src/` files); headless Edge `scripts/browser-test.mjs` 93/93 across 16 suites + 3/3 `psdExport.browser.mjs` (`--vite`); real-UI `scripts/smoke/creative-studio.mjs` 86/86 checks pass (4000×3000 frame median 16.7 ms, p95 16.8 ms, zero page errors); `vite build` 3,663 modules green.
   - **Cybeni 7 Additions**: `node --test tests/cybeni/pipeline.test.mjs tests/cybeni/additions7.test.mjs` 15/15 pass; full `npm test` 511/515 pass, 0 fail (4 Python-interop skipped); `npx oxlint` 0 errors across all 13 modified/created Cybeni files; `npm run build` (`vite build`) 3,665 modules built in 1m 33s with exit code 0.
   - **Cybeni C++20 & C# Standalone Bridge**: `tests/cybeni/nativeCppCsharp.test.mjs` + full `npm test` 517/521 pass, 0 fail (4 Python-skipped); `oxlint` 0 errors across 12 modified/created files; `npm run tauri:check` exit 0 (`native_build.rs` checked in 2.14s); real `g++.exe` (`cpp_cli`, `cpp_d2d`, `cpp_synth`) and `csc.exe` (`cs_winforms`, `cs_ecs`) smoke builds exited 0; `vite build` 3,668 modules built in 43.91s with exit code 0.
+- [x] **Sovereign OS Bulletproof Security & SOC 2 Hardening Pass (`2026-11-19`)**:
+  - **Zero-Plaintext Credential Enclave & Idle Auto-Lock**: `src/services/credentialEnclaveService.js` + `src/components/windows/CredentialEnclaveWindow.jsx` removed the hardcoded `novaura_sovereign_operator_2026` default passphrase button, fixed PBKDF2-HMAC-SHA256 UI copy (`600,000 iterations`), removed plaintext `localStorage` persistence for `novaura_ssh_keys` & `novaura_totp_accounts`, added automatic legacy-to-AES-256-GCM encryption migration on unlock, added configurable idle auto-lock (`1m..60m / Manual`, default `15m`) + `visibilitychange` timeout check, and wiped React volatile secret state upon lock.
+  - **Tamper-Evident `SentinelShield` & Fail-Closed Permissions**: `src/kernel/subsystems/SentinelShield.js` added SHA-256 `prevHash -> hash` canonical audit chaining (`GENESIS_HASH`, serialized logging queue), `verifyAuditChain()`, `exportAuditLogs('json' | 'csv')` with CSV formula-injection neutralization, and fail-closed `checkPermission()` on high-risk capabilities (`terminal:exec`, `fs:delete_system`, `cloud:egress`, `firmware:reboot`, `enclave:export`).
+  - **Rust Transport & Vault Erasure Hardening**: `src-tauri/src/cloud.rs` added `FORBIDDEN_HEADERS` denylist (`Host`, `Cookie`, `Transfer-Encoding`, `Content-Length`, `Proxy-Authorization`, `X-Forwarded-*`, `Expect`, etc.) and kernel `CLOUD_AIRGAP_ENABLED` (`AtomicBool`) + `cloud_set_airgap`/`cloud_get_airgap` Tauri commands; `src-tauri/src/lib.rs` added `sanitize_vault_filename()`, `zero_and_remove_file()`, and `purge_vault_state` Tauri command wired into `sovereignDatabase.js` `resetDatabaseToFactory()`.
+  - **Compliance Policy Engine & Prompt Secret Guard**: `src/services/security/complianceService.js` (`scanAndRedactOutboundSecrets`, `evaluateSoc2Controls`, `KNOWN_EXTERNAL_ENDPOINTS`, `executeCryptographicWipe`) wired into `cloudProviders.js`, `AISubsystem.js`, and `NovaKernel.js` boot sync.
+  - **UI & Documentation**: `MailListPane.jsx` & `MailReadingPane.jsx` surface Verified vs Unsigned/Unverified Ed25519 DID badges; `SettingsDiagnosticsWindow.jsx` + `SecurityCompliancePanel.jsx` adds the `Security & SOC 2` dashboard; `docs/compliance/SOC2_SECURITY_ARCHITECTURE.md` maps controls across CC6.1, CC6.6, CC6.7, CC7.2, C1.1, and P4.1.
+  - **Checks (`2026-11-19`)**: `tests/security/soc2Hardening.test.mjs` `10/10` pass; full `npm test` `721/725` pass (`0` fail, `4` Python-skipped); `oxlint` `0` errors & `0` warnings on new/rewritten security modules (`0` errors across all `14` modified files); `npm run tauri:check` exit `0`; `cargo check --tests --manifest-path N:\src-tauri\Cargo.toml` exit `0`; `npm run tauri:test` `35/35` pass; `vite build` `3,689` modules built in `1m 47s` with exit `0`.
+- [x] **Sovereign Commerce Studio — Automated Dropshipping, Multi-Rail Checkout & Dual Mesh/Web Hosting (`2026-11-20`)**:
+  - **Database Schema (`version(24)`)**: Added `commerce_stores`, `commerce_products`, `commerce_orders`, `commerce_ledger`, `commerce_campaigns`, `commerce_domains` in `src/database/sovereignDatabase.js` and `BACKUP_TABLES`.
+  - **Core Commerce Services (`src/services/commerce/`)**:
+    - `pricingEngine.js`: integer-cent markup + `.99` pricing, exact **5% net-profit platform split** (never 5% gross, tax excluded), proportional refund reversal, ledger P&L rollup, and 7-gate `evaluateFulfillmentGuardrails()` (`DUPLICATE_IGNORED`, `HOLD_RISK_REVIEW`, `HOLD_ADDRESS_INVALID`, `HOLD_AWAITING_SETTLEMENT`, `HOLD_OUT_OF_STOCK`, `HOLD_MARGIN_BREACH`, `AUTO_PURCHASE`).
+    - `supplierAdapters.js`: real CJdropshipping, Printful, Printify, AliExpress DS, and Custom Wholesale order payload builders, live catalog search & quotes, tracking polling, and CSV wholesale importer (zero fake catalogs/orders).
+    - `paymentAdapters.js`: multi-rail Square (Cards + Cash App Pay + Square Checking), Stripe (Cards + Apple Pay + Cash App Pay + Connect `application_fee_amount`), and PayPal Commerce (PayPal + Venmo + Package Tracking sync), plus constant-time Web Crypto HMAC-SHA256 webhook verifiers for Stripe & Square.
+    - `domainService.js`: dual hosting router (`https://novaura.xyz/<slug>/storefront/merchandise`, custom TLD root routes, and `nova://<slug>.nova`), cheapest-TLD candidate auto-generator (`.xyz`, `.shop`, `.store`... + transparent markup), and live RDAP / Porkbun / Cloudflare / Namecheap availability checks.
+    - `aiStoreArchitect.js`: conversational AI niche, store, priced catalog draft (`draft_needs_supplier`), and break-even ROAS ad campaign pack generator powered by `kernel.ai` (Ollama/LM Studio/Built-in/BYOK Cloud).
+    - `storefrontBuilder.js` + `commerceStoreService.js`: XSS-escaped, `storeSlug`-isolated standalone storefront HTML (1-click Ed25519-signed `.nova` mesh publish via `publishHostedSite`) AND 1-click exportable 24/7 zero-dependency multi-tenant Node.js server ZIP (`server.mjs`, `seed.json`, `package.json`, `Dockerfile`, `.env.example`, `README.md`) supporting subpath routing, custom TLD `Host` routing, merchant self-signup (`scrypt` + HMAC tokens), multi-rail checkout, and verified webhooks.
+  - **Sovereign OS App UI & Wiring**: Created 6-tab `SovereignCommerceWindow.jsx` (`StoreArchitectTab`, `CatalogSuppliersTab`, `DomainsHostingTab`, `PaymentsFulfillmentTab`, `AdStudioTab`, `ProfitLedgerTab`) and registered `commerce_studio` across `appRegistry.js`, `SovereignLeftSidebar.jsx`, `PopupAppsWindow.jsx`, `Toolbar.jsx`, `InterAppSecurityBroker.js`, and `SemanticsEngine.js`.
+  - **Checks (`2026-11-20`)**: `tests/commerce/commerceStudio.test.mjs` `8/8` pass (including `node --check` on exported `server.mjs`); full `npm test` `729/733` pass (`0` fail, `4` Python-skipped); `oxlint` `0` errors & `0` warnings across all `15` new Commerce Studio files (`0` errors across all `7` modified registration files); `vite build` `3,703` modules built in `1m 26s` with exit `0`.
 - [ ] Open / Remaining Optional: Dillan to inspect one exported PSD in Photopea/Photoshop; installed NSIS/Tauri build smoke click; optional WebGL compositor if 8K+ canvases demand GPU fragment shaders.
 
 ---

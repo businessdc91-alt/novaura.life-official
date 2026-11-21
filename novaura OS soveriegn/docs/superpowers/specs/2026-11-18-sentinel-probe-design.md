@@ -1,6 +1,6 @@
 # Sentinel Probe — AI security-probing agent for owned assets — Design
 
-**Status:** drafted 2026-11-18, awaiting owner review. Decisions from the brainstorming session are recorded in the last section. Nothing is built yet.
+**Status:** Safety foundation **built and live-checked 2026-11-20**. Delivered: the ownership gate, the single-use signed scope token, the no-egress Windows Sandbox runner with its file channel, fail-closed redaction, the `probe_runs`/`probe_findings` data model, and the echo check that proves the loop. The real-sandbox live check passed — served on loopback, **internet egress blocked**, teardown and working-folder wipe confirmed. The check library, host AI planner, UI and Deep mode are the next plan. See `docs/superpowers/plans/2026-11-18-sentinel-probe-foundation.md`.
 
 ## What this is
 
