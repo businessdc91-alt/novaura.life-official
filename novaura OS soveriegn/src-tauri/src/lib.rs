@@ -8,6 +8,7 @@ pub mod local_ai_stream;
 pub mod preview;
 pub mod sentinel_runner;
 pub mod aunlock_devices;
+pub mod aunlock_recover;
 pub mod aunlock_recover_rules;
 pub mod games;
 pub mod templates;
@@ -1962,6 +1963,11 @@ pub fn run() {
             sentinel_runner::sentinel_sandbox_start,
             sentinel_runner::sentinel_sandbox_stop,
             aunlock_devices::aunlock_enumerate_devices,
+            aunlock_recover::aunlock_read_health,
+            aunlock_recover::aunlock_resolve_volumes,
+            aunlock_recover::aunlock_list_dir,
+            aunlock_recover::aunlock_recover_files,
+            aunlock_recover::aunlock_purge_recovered,
             native_build::cybeni_native_toolchains,
             native_build::cybeni_native_compile,
             llm::llm_catalog,

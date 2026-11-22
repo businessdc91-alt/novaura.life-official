@@ -257,22 +257,44 @@ pub fn resolve_volumes(json: &str, serial: Option<&str>, size_bytes: Option<u64>
             return Vec::new();
         }
     }
-    matched
+    matched.into_iter().map(volume_spec_from).collect()
+}
+
+fn volume_spec_from(o: &Value) -> VolumeSpec {
+    let fs_type = non_empty_str(o, "FileSystem");
+    let enc_flag = o.get("Encrypted").and_then(Value::as_bool);
+    let known_fs = fs_type.as_deref().is_some_and(is_mountable_fs);
+    VolumeSpec {
+        drive_letter: non_empty_str(o, "DriveLetter"),
+        fs_type,
+        label: non_empty_str(o, "FileSystemLabel"),
+        size_bytes: opt_u64(o, "VolumeSize"),
+        encrypted: enc_flag.unwrap_or(false),
+        readable: known_fs && enc_flag.is_some(),
+    }
+}
+
+/// Find the volume mounted at `drive_letter` across ALL disks in the volumes-query JSON. `None`
+/// when absent, malformed, or ambiguous (more than one row claims the letter): deny-by-default.
+pub fn volume_by_letter(json: &str, drive_letter: &str) -> Option<VolumeSpec> {
+    let want = drive_letter.trim().trim_end_matches(':').to_ascii_uppercase();
+    if want.len() != 1 {
+        return None;
+    }
+    let val: Value = serde_json::from_str(json).ok()?;
+    let items: Vec<&Value> = match &val {
+        Value::Array(arr) => arr.iter().filter(|v| v.is_object()).collect(),
+        Value::Object(_) => vec![&val],
+        _ => return None,
+    };
+    let mut hits = items
         .into_iter()
-        .map(|o| {
-            let fs_type = non_empty_str(o, "FileSystem");
-            let enc_flag = o.get("Encrypted").and_then(Value::as_bool);
-            let known_fs = fs_type.as_deref().is_some_and(is_mountable_fs);
-            VolumeSpec {
-                drive_letter: non_empty_str(o, "DriveLetter"),
-                fs_type,
-                label: non_empty_str(o, "FileSystemLabel"),
-                size_bytes: opt_u64(o, "VolumeSize"),
-                encrypted: enc_flag.unwrap_or(false),
-                readable: known_fs && enc_flag.is_some(),
-            }
-        })
-        .collect()
+        .filter(|o| non_empty_str(o, "DriveLetter").is_some_and(|l| l.eq_ignore_ascii_case(&want)));
+    let first = hits.next()?;
+    if hits.next().is_some() {
+        return None;
+    }
+    Some(volume_spec_from(first))
 }
 
 /// Recoverable only when plaintext, readable, and a known mountable filesystem.
@@ -399,6 +421,77 @@ pub fn staged_rel_path(drive_letter: &str, source: &Path) -> String {
         }
     }
     out
+}
+
+/// Make one path component safe to create on Windows: invalid characters (including `:`, which
+/// would open an alternate data stream) and control chars become `_`; reserved device names
+/// (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or without an extension, any case) get a leading
+/// `_`; trailing dots/spaces become `_`; empty, `.` and `..` become `_`.
+pub fn sanitize_path_component(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
+        .collect();
+    if s != "." && s != ".." {
+        break_trailing(&mut s);
+    }
+    if s.is_empty() || s == "." || s == ".." {
+        return "_".to_string();
+    }
+    let stem = s.split('.').next().unwrap_or("").trim_end();
+    let up = stem.to_ascii_uppercase();
+    let reserved = matches!(up.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((up.starts_with("COM") || up.starts_with("LPT"))
+            && up.len() == 4
+            && matches!(up.as_bytes()[3], b'1'..=b'9'));
+    if reserved {
+        s.insert(0, '_');
+    }
+    s
+}
+
+// Replace any further trailing dot/space (a run like "a. ." needs every char replaced).
+fn break_trailing(s: &mut String) {
+    let trimmed = s.trim_end_matches(|c| c == '.' || c == ' ').len();
+    let extra = s.len() - trimmed;
+    if extra > 0 {
+        s.truncate(trimmed);
+        s.push_str(&"_".repeat(extra));
+    }
+}
+
+/// Sanitize a `staged_rel_path` result: the first component (the drive letter) is kept, every
+/// following `/`-separated component goes through `sanitize_path_component`.
+pub fn sanitize_staged_rel(rel: &str) -> String {
+    rel.split('/')
+        .enumerate()
+        .map(|(i, c)| if i == 0 { c.to_string() } else { sanitize_path_component(c) })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// One staged-file record: `u32 LE sealed_key_len || sealed_key || u32 LE ct_len || ct`.
+pub fn encode_record(sealed_key: &[u8], ct: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + sealed_key.len() + ct.len());
+    out.extend_from_slice(&(sealed_key.len() as u32).to_le_bytes());
+    out.extend_from_slice(sealed_key);
+    out.extend_from_slice(&(ct.len() as u32).to_le_bytes());
+    out.extend_from_slice(ct);
+    out
+}
+
+/// Parse the record at `pos`; returns `(sealed_key, ct, next_pos)`. `Err` on any truncation or
+/// overrun (never panics).
+pub fn split_record(buf: &[u8], pos: usize) -> Result<(&[u8], &[u8], usize), CryptoError> {
+    fn take(buf: &[u8], pos: usize) -> Result<(&[u8], usize), CryptoError> {
+        let end4 = pos.checked_add(4).ok_or(CryptoError::Format)?;
+        let len = u32::from_le_bytes(buf.get(pos..end4).ok_or(CryptoError::Format)?.try_into().map_err(|_| CryptoError::Format)?) as usize;
+        let end = end4.checked_add(len).ok_or(CryptoError::Format)?;
+        Ok((buf.get(end4..end).ok_or(CryptoError::Format)?, end))
+    }
+    let (k, p) = take(buf, pos)?;
+    let (c, p) = take(buf, p)?;
+    Ok((k, c, p))
 }
 
 // ---- Streaming AEAD frame format (staged-file encryption) ----------------------------------
@@ -833,5 +926,61 @@ mod tests {
         let mut sealed = encrypt_chunks(&key, b"abc");
         sealed.extend_from_slice(&[0, 0, 0, 0]);
         assert!(matches!(decrypt_chunks(&key, &sealed), Err(CryptoError::Format)));
+    }
+
+    #[test]
+    fn component_replaces_ads_colon_and_bad_chars() {
+        assert_eq!(sanitize_path_component("file.txt:Zone.Identifier"), "file.txt_Zone.Identifier");
+        assert_eq!(sanitize_path_component("a<b>c|d?e*f\"g"), "a_b_c_d_e_f_g");
+    }
+    #[test]
+    fn component_rejects_reserved_device_names() {
+        for n in ["CON", "con", "PRN", "Aux", "NUL", "COM1", "com9", "LPT1", "lpt9", "CON.txt", "nul.tar.gz"] {
+            let out = sanitize_path_component(n);
+            assert!(out.starts_with('_'), "{n} -> {out}");
+        }
+        assert_eq!(sanitize_path_component("COM0"), "COM0");
+        assert_eq!(sanitize_path_component("console"), "console");
+    }
+    #[test]
+    fn component_fixes_trailing_dot_space_and_empty() {
+        assert_eq!(sanitize_path_component("name. "), "name__");
+        assert_eq!(sanitize_path_component(""), "_");
+        assert_eq!(sanitize_path_component(".."), "_");
+        assert_eq!(sanitize_path_component("."), "_");
+        assert_eq!(sanitize_path_component("a\u{1}b"), "a_b");
+    }
+    #[test]
+    fn rel_path_sanitizes_each_component_but_keeps_drive() {
+        assert_eq!(sanitize_staged_rel("C/Users/bob/NUL/a:b.txt"), "C/Users/bob/_NUL/a_b.txt");
+        assert_eq!(sanitize_staged_rel("C/../x"), "C/_/x");
+    }
+    #[test]
+    fn record_roundtrips_and_rejects_malformed() {
+        let mut buf = encode_record(b"sealedkey", b"ciphertext");
+        buf.extend(encode_record(b"k2", b"c2"));
+        let (k, c, next) = split_record(&buf, 0).unwrap();
+        assert_eq!((k, c), (&b"sealedkey"[..], &b"ciphertext"[..]));
+        let (k2, c2, end) = split_record(&buf, next).unwrap();
+        assert_eq!((k2, c2), (&b"k2"[..], &b"c2"[..]));
+        assert_eq!(end, buf.len());
+        assert!(split_record(&buf, end).is_err());
+        assert!(split_record(&buf[..3], 0).is_err());
+        assert!(split_record(&[255, 255, 255, 255, 0], 0).is_err());
+        assert!(split_record(&buf[..buf.len() - 1], next).is_err());
+    }
+
+    #[test]
+    fn volume_by_letter_finds_unique_and_denies_otherwise() {
+        let j = r#"[{"Serial":"A","DriveLetter":"E","FileSystem":"NTFS","Encrypted":false,"VolumeSize":5},
+                    {"Serial":"B","DriveLetter":"F","FileSystem":"NTFS","Encrypted":true}]"#;
+        let e = volume_by_letter(j, "e:").unwrap();
+        assert!(volume_is_recoverable(&e));
+        assert!(!volume_is_recoverable(&volume_by_letter(j, "F").unwrap()));
+        assert!(volume_by_letter(j, "G").is_none());
+        assert!(volume_by_letter(j, "EF").is_none());
+        assert!(volume_by_letter("garbage", "E").is_none());
+        let dup = r#"[{"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},{"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false}]"#;
+        assert!(volume_by_letter(dup, "E").is_none());
     }
 }
