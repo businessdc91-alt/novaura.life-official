@@ -7,6 +7,7 @@ import {
   GitBranch, KeyRound, GitPullRequest, Store, Wrench
 } from 'lucide-react';
 import { APP_REGISTRY, getAppById } from '../config/appRegistry.js';
+import { SIDEBAR_Z_LEFT, SIDEBAR_Z_DEMOTED } from './desktop/windowLayering.js';
 
 // Sovereign App Categories
 const CATEGORIES = [
@@ -153,7 +154,10 @@ function RailDropButton({ icon: Icon, label, isOpen, onToggle, onOpen }) {
   );
 }
 
-export default function SovereignLeftSidebar({ openApp, openWindows = [] }) {
+export default function SovereignLeftSidebar({ openApp, openWindows = [], demoted = false }) {
+  // Drop beneath the window layer while a window is maximized so the menu never
+  // overlaps the window's wording; ride on top otherwise.
+  const zIndex = demoted ? SIDEBAR_Z_DEMOTED : SIDEBAR_Z_LEFT;
   const [collapsed, setCollapsed] = useState(true);
   const [time, setTime] = useState(new Date());
   const [search, setSearch] = useState('');
@@ -187,7 +191,7 @@ export default function SovereignLeftSidebar({ openApp, openWindows = [] }) {
         {openDropdown && (
           <div className="fixed inset-0 z-[7450]" onClick={() => setOpenDropdown(null)} />
         )}
-        <div className="fixed left-0 top-1/2 -translate-y-1/2 z-[7500] pointer-events-auto select-none">
+        <div style={{ zIndex }} className="fixed left-0 top-1/2 -translate-y-1/2 pointer-events-auto select-none">
           <div className="flex flex-col items-center gap-1.5 py-3 px-1.5 bg-black/70 backdrop-blur-md border border-white/[0.08] border-l-0 rounded-r-2xl shadow-2xl">
             {/* Expand drawer button */}
             <button
@@ -232,7 +236,7 @@ export default function SovereignLeftSidebar({ openApp, openWindows = [] }) {
 
   // Expanded categorized drawer with RGB flow borders
   return (
-    <div className="fixed left-0 top-1/2 -translate-y-1/2 z-[7500] pointer-events-auto select-none">
+    <div style={{ zIndex }} className="fixed left-0 top-1/2 -translate-y-1/2 pointer-events-auto select-none">
       <div className="rgb-border rgb-border-subtle rounded-r-2xl shadow-2xl">
         <div className="rgb-flow-layer" />
         <div className="relative z-10 bg-black/95 rounded-r-2xl w-64 max-h-[85vh] flex flex-col border border-white/[0.08] border-l-0 backdrop-blur-2xl">

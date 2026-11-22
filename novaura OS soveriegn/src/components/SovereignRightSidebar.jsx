@@ -8,8 +8,12 @@ import { getLocalIdentity, getUnreadCount, getPeerCount } from '../services/sove
 import { getMyPhoneNumber } from '../services/sovereignCallService.js';
 import { getHardwareFingerprint } from '../services/nativeService.js';
 import { useKernel } from '../kernel/useKernel.js';
+import { SIDEBAR_Z_RIGHT, SIDEBAR_Z_DEMOTED } from './desktop/windowLayering.js';
 
-export default function SovereignRightSidebar({ openApp, preferences, onUpdatePreferences }) {
+export default function SovereignRightSidebar({ openApp, preferences, onUpdatePreferences, demoted = false }) {
+  // Drop beneath the window layer while a window is maximized so it never
+  // overlaps the window's edge; ride on top otherwise.
+  const zIndex = demoted ? SIDEBAR_Z_DEMOTED : SIDEBAR_Z_RIGHT;
   const { kernel } = useKernel();
   const [isOpen, setIsOpen] = useState(false);
   const [identity, setIdentity] = useState(null);
@@ -71,7 +75,8 @@ export default function SovereignRightSidebar({ openApp, preferences, onUpdatePr
       <button
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Toggle System HUD Sidebar"
-        className={`fixed top-14 right-0 z-[7600] flex items-center justify-center w-7 h-12 bg-slate-900/90 hover:bg-slate-800 border-l border-y border-cyan-500/30 text-cyan-400 rounded-l-xl transition-all shadow-lg backdrop-blur-md cursor-pointer ${
+        style={{ zIndex }}
+        className={`fixed top-14 right-0 flex items-center justify-center w-7 h-12 bg-slate-900/90 hover:bg-slate-800 border-l border-y border-cyan-500/30 text-cyan-400 rounded-l-xl transition-all shadow-lg backdrop-blur-md cursor-pointer ${
           isOpen ? '-translate-x-72' : 'translate-x-0'
         }`}
       >
@@ -80,7 +85,8 @@ export default function SovereignRightSidebar({ openApp, preferences, onUpdatePr
 
       {/* Slide-out Sidebar Drawer with RGB flow layer */}
       <aside
-        className={`fixed top-12 right-0 bottom-0 z-[7600] w-72 transition-transform duration-300 ease-in-out flex flex-col shadow-2xl pointer-events-auto ${
+        style={{ zIndex }}
+        className={`fixed top-12 right-0 bottom-0 w-72 transition-transform duration-300 ease-in-out flex flex-col shadow-2xl pointer-events-auto ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >

@@ -56,6 +56,8 @@ export default function DraggableWindow({
   focused = false,
   titleColor = '#22d3ee',
   borderStyle = null,
+  windowId = null,
+  onMaximizeChange = null,
 }) {
   const windowRef = useRef(null);
   const pointerAction = useRef(null);
@@ -80,6 +82,16 @@ export default function DraggableWindow({
   // Read inside the pointer handlers, which are registered once.
   const onPopOutRef = useRef(onPopOut);
   onPopOutRef.current = onPopOut;
+
+  // Tell the desktop when this window starts/stops covering the screen, so the
+  // sidebars can drop beneath a maximized window and return when it is restored,
+  // closed, or popped out. Via a ref so the callback's identity never churns deps.
+  const onMaximizeChangeRef = useRef(onMaximizeChange);
+  onMaximizeChangeRef.current = onMaximizeChange;
+  useEffect(() => {
+    onMaximizeChangeRef.current?.(windowId, maximized);
+  }, [maximized, windowId]);
+  useEffect(() => () => onMaximizeChangeRef.current?.(windowId, false), [windowId]);
 
   useEffect(() => {
     const handlePointerMove = (event) => {

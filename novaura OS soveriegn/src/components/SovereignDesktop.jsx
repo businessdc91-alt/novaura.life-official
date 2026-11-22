@@ -35,6 +35,7 @@ import SovereignLeftSidebar from './SovereignLeftSidebar';
 import SovereignRightSidebar from './SovereignRightSidebar';
 import SovereignChatBar from './SovereignChatBar';
 import CrashBanner from './desktop/CrashBanner';
+import { coversDesktop } from './desktop/windowLayering';
 import { installFlightRecorder } from '../services/repair/flightRecorder';
 import { Toaster } from 'sonner';
 import { useGraphics } from '../contexts/GraphicsContext';
@@ -78,6 +79,10 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
   });
   const [focusedId, setFocusedId] = useState(null);
   const [meshToasts, setMeshToasts] = useState([]);
+  // Ids of windows that currently fill the desktop (maximized + visible). While any
+  // exist, the left/right sidebars drop beneath the window layer so they don't
+  // overlap the window's wording; DraggableWindow reports changes up.
+  const [maximizedIds, setMaximizedIds] = useState(() => new Set());
 
   // Install lightweight flight recorder, cross-window repair bridge, and active hotfixes on boot
   useEffect(() => {
@@ -339,6 +344,26 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
     }
   }, [kernel]);
 
+  // A window reports here whenever it is maximized or restored; stable identity so
+  // DraggableWindow's effect deps never churn.
+  const handleMaximizeChange = useCallback((id, isMax) => {
+    if (!id) return;
+    setMaximizedIds(prev => {
+      const has = prev.has(id);
+      if (isMax === has) return prev;
+      const next = new Set(prev);
+      if (isMax) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  // True while any window is actually filling the desktop (maximized and not
+  // minimized) — the signal that demotes both sidebars beneath the window layer.
+  const anyMaximized = windows.some(w => coversDesktop({
+    maximized: maximizedIds.has(w.id),
+    minimized: w.state === 'minimized',
+  }));
+
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-background font-sans select-none flex flex-col">
       {/* 1. Dynamic High-Fidelity Particle Background, calmed while windows are open over it */}
@@ -362,15 +387,17 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
         onCloseWindow={handleCloseWindow}
       />
 
-      {/* 3. Left App Drawer Sidebar */}
+      {/* 3. Left App Drawer Sidebar — drops under a maximized window */}
       <SovereignLeftSidebar
         openApp={openApp}
         openWindows={windows}
+        demoted={anyMaximized}
       />
 
-      {/* 4. Right Telemetry & Identity HUD Sidebar */}
+      {/* 4. Right Telemetry & Identity HUD Sidebar — drops under a maximized window */}
       <SovereignRightSidebar
         openApp={openApp}
+        demoted={anyMaximized}
       />
 
       {/* 5. Main Desktop Canvas with Desktop Icons & Windows — bounded above the bottom dock */}
@@ -404,6 +431,8 @@ export default function SovereignDesktop({ authRecord, onRevoke }) {
               minimized={win.state === 'minimized'}
               focused={isWinFocused}
               titleColor={appDef.color}
+              windowId={win.id}
+              onMaximizeChange={handleMaximizeChange}
               onFocus={() => handleFocusWindow(win.id)}
               onClose={() => handleCloseWindow(win.id)}
               onMinimize={() => handleMinimizeWindow(win.id)}
