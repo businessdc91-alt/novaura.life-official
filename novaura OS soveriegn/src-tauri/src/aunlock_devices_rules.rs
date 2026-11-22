@@ -46,6 +46,10 @@ $out=foreach($d in (Get-Disk)){
 /// denylist, so a future edit that introduces ANY unapproved cmdlet — `Set-Volume`,
 /// `Mount-DiskImage`, `Out-File`, … — is rejected, and the enumerate command refuses to run a
 /// query that fails it (fail-closed).
+///
+/// Assumes CONSTANT, developer-authored queries (the hardcoded `AUNLOCK_*` constants): it is a
+/// code-review tripwire, NOT a sanitizer for untrusted input. Never pass user-supplied text to
+/// the PowerShell `-Command`. Cmdlet matching is case-insensitive because PowerShell is.
 pub fn query_is_read_only(query: &str) -> bool {
     const ALLOWED: [&str; 4] = [
         "Get-BitLockerVolume",
@@ -59,20 +63,20 @@ pub fn query_is_read_only(query: &str) -> bool {
     query
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
         .filter(|tok| is_cmdlet_shaped(tok))
-        .all(|tok| ALLOWED.contains(&tok))
+        .all(|tok| ALLOWED.iter().any(|a| a.eq_ignore_ascii_case(tok)))
 }
 
-/// A token shaped like a PowerShell cmdlet (`Verb-Noun`): an uppercase-initial alphabetic verb, a
-/// single dash, and an uppercase-initial alphanumeric noun. Parameters (`-Depth`, `-eq`) and
+/// A token shaped like a PowerShell cmdlet (`Verb-Noun`): an letter-initial alphabetic verb, a
+/// single dash, and an letter-initial alphanumeric noun. Parameters (`-Depth`, `-eq`) and
 /// property/method names (`BusType`, `TrimEnd`) are not cmdlet-shaped.
 fn is_cmdlet_shaped(tok: &str) -> bool {
     match tok.split_once('-') {
         Some((verb, noun)) => {
             !verb.is_empty()
-                && verb.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && verb.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
                 && verb.chars().all(|c| c.is_ascii_alphabetic())
                 && !noun.is_empty()
-                && noun.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && noun.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
                 && !noun.contains('-')
                 && noun.chars().all(|c| c.is_ascii_alphanumeric())
         }
@@ -290,5 +294,21 @@ mod tests {
     fn guard_allows_the_read_only_cmdlets() {
         assert!(query_is_read_only("Get-Disk | ConvertTo-Json"));
         assert!(query_is_read_only("Get-BitLockerVolume; Get-Partition -DriveLetter C"));
+    }
+
+    #[test]
+    fn guard_is_case_insensitive_fail_closed() {
+        for bad in [
+            "get-disk | set-volume -NewFileSystemLabel x | convertto-json",
+            "Get-Disk | SET-VOLUME -NewFileSystemLabel x",
+            "Get-Disk | Set-Volume -NewFileSystemLabel x",
+            "get-disk | out-file c:\\x",
+            "Get-Disk | OUT-FILE x",
+            "get-disk | mount-diskimage",
+        ] {
+            assert!(!query_is_read_only(bad), "guard must reject: {bad}");
+        }
+        assert!(query_is_read_only("get-disk | convertto-json"));
+        assert!(query_is_read_only(AUNLOCK_CIM_QUERY));
     }
 }
