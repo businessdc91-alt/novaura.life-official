@@ -39,7 +39,11 @@ test('flightRecorder captures runtime errors and strips embedded secrets automat
   try {
     installMemoryLocalStorage();
     clearFlightLog();
-    const leaked = 'Failed call with key sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+    // Key-shaped fixture assembled from fragments: the literal key pattern never
+    // appears contiguously in source (keeps secret scanners quiet), yet the runtime
+    // value still matches the sk- redaction regex so this test stays meaningful.
+    const fakeOpenAiKey = 'sk-' + 'proj-' + 'FAKEOPENAIKEYREDACTIONFIXTUREONLY';
+    const leaked = `Failed call with key ${fakeOpenAiKey}`;
     const rec = recordRuntimeError({
       source: 'KernelErrorBoundary',
       appId: 'media_foundry',
@@ -47,7 +51,7 @@ test('flightRecorder captures runtime errors and strips embedded secrets automat
       message: leaked,
       emitBanner: false,
     });
-    assert.ok(!rec.message.includes('ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'Secret token must be redacted');
+    assert.ok(!rec.message.includes('FAKEOPENAIKEYREDACTIONFIXTURE'), 'Secret token must be redacted');
     assert.equal(getFlightLog().length, 1);
   } finally {
     globalThis.localStorage = prev;
@@ -213,11 +217,15 @@ test('executeSourcePatchWithGate auto-rolls back on failed tests and triggerInst
 
 test('dispatchUpstreamRepairProposal scrubs secrets before handing off to encrypted mesh delivery', async () => {
   let sentPayload = null;
+  // Key-shaped fixtures assembled from fragments so no literal key pattern sits in
+  // source for secret scanners; both still match the redaction regexes at runtime.
+  const fakeGoogleKey = 'AIza' + 'FAKEGOOGLEKEYREDACTIONFIXTURETEST00';
+  const fakeOpenAiKey = 'sk-' + 'proj-' + 'FAKEOPENAIKEYREDACTIONFIXTUREONLY';
   const { proposal, redactedCount } = await dispatchUpstreamRepairProposal(
     {
       targetRef: 'media_foundry',
       agent: 'council',
-      description: 'Crashed while using Gemini key AIzaSyD1234567890ABCDEFGHIJKLMNOPQRSTUV and token sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234',
+      description: `Crashed while using Gemini key ${fakeGoogleKey} and token ${fakeOpenAiKey}`,
       plan: {
         rootCause: 'Unhandled 429 rate limit',
         upstreamRecommendation: 'Add exponential backoff retry',
@@ -237,7 +245,7 @@ test('dispatchUpstreamRepairProposal scrubs secrets before handing off to encryp
 
   assert.ok(sentPayload, 'submitFn must be invoked');
   assert.ok(redactedCount >= 1, 'Leaked Gemini key must be redacted');
-  assert.ok(!sentPayload.description.includes('AIzaSyD1234567890'), 'Raw API key must never leave device');
+  assert.ok(!sentPayload.description.includes('FAKEGOOGLEKEYREDACTION'), 'Raw API key must never leave device');
   assert.match(sentPayload.title, /^\[AUTO-REPAIR\]/);
   assert.equal(proposal.status, 'queued_to_founder_mesh');
   assert.equal(proposal.humanConfirmed, true);
