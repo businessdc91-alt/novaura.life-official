@@ -160,14 +160,17 @@ pub fn normalize_health(json: &str) -> HealthReport {
 /// CONSTANT: the target serial/size is NEVER interpolated here; `resolve_volumes` filters in Rust.
 ///
 /// `Encrypted` comes from REAL BitLocker status (`Get-BitLockerVolume`, keyed by drive letter):
-/// `ProtectionStatus -eq 'On'` => `true` (locked or unlocked alike). It is never inferred from the
-/// filesystem. A volume with no BitLocker record (cmdlet missing/blocked, no drive letter) gets
-/// `null`, which `resolve_volumes` treats as NOT recoverable (deny-by-default).
+/// a record whose `VolumeStatus` is not `FullyDecrypted`, or whose `LockStatus` is `Locked`, =>
+/// `true` (covers suspended-protection volumes, which still hold encrypted data, and locked ones);
+/// only a `FullyDecrypted` volume is `false`. `ProtectionStatus` is deliberately NOT used. It is
+/// never inferred from the filesystem. A volume with no BitLocker record (cmdlet missing/blocked,
+/// no drive letter) gets `null`, which `resolve_volumes` treats as NOT recoverable
+/// (deny-by-default).
 pub const AUNLOCK_VOLUMES_QUERY: &str = r#"$ErrorActionPreference='SilentlyContinue';
 $enc=@{};
 foreach($b in (Get-BitLockerVolume)){
   $m=([string]$b.MountPoint).TrimEnd(':').ToUpper();
-  if($m){ $enc[$m]=($b.ProtectionStatus -eq 'On') }
+  if($m){ $enc[$m]=(([string]$b.VolumeStatus -ne 'FullyDecrypted') -or ([string]$b.LockStatus -eq 'Locked')) }
 }
 $out=foreach($d in (Get-Disk)){
   foreach($p in (Get-Partition -DiskNumber $d.Number)){
@@ -238,9 +241,23 @@ pub fn resolve_volumes(json: &str, serial: Option<&str>, size_bytes: Option<u64>
             None => false,
         }
     };
-    items
+    let matched: Vec<&Value> = items.into_iter().filter(|o| matches(o)).collect();
+    // Size-only matching must identify exactly one disk; several same-size disks (or rows we
+    // cannot tell apart for lack of a serial) are ambiguous, so deny rather than guess.
+    if serial.is_none() {
+        let mut keys: Vec<String> = matched
+            .iter()
+            .map(|o| non_empty_str(o, "Serial").unwrap_or_default().to_ascii_lowercase())
+            .collect();
+        keys.sort();
+        keys.dedup();
+        let unserialed_multi = keys.iter().any(String::is_empty) && matched.len() > 1;
+        if keys.len() > 1 || unserialed_multi {
+            return Vec::new();
+        }
+    }
+    matched
         .into_iter()
-        .filter(|o| matches(o))
         .map(|o| {
             let fs_type = non_empty_str(o, "FileSystem");
             let enc_flag = o.get("Encrypted").and_then(Value::as_bool);
@@ -382,7 +399,6 @@ mod tests {
     fn volumes_query_uses_real_bitlocker_status_not_fs_inference() {
         assert!(recover_query_is_read_only("Get-BitLockerVolume | ConvertTo-Json"));
         assert!(AUNLOCK_VOLUMES_QUERY.contains("Get-BitLockerVolume"));
-        assert!(AUNLOCK_VOLUMES_QUERY.contains("ProtectionStatus"));
         assert!(!AUNLOCK_VOLUMES_QUERY.contains("'RAW'"));
     }
     #[test]
@@ -393,12 +409,47 @@ mod tests {
         assert!(!volume_is_recoverable(&v[0]));
     }
     #[test]
+    fn volumes_query_derives_encrypted_from_volume_and_lock_status() {
+        for needle in ["VolumeStatus", "LockStatus", "FullyDecrypted", "Locked"] {
+            assert!(AUNLOCK_VOLUMES_QUERY.contains(needle), "missing {needle}");
+        }
+        assert!(!AUNLOCK_VOLUMES_QUERY.contains("ProtectionStatus -eq"));
+        assert!(recover_query_is_read_only(AUNLOCK_VOLUMES_QUERY));
+    }
+    #[test]
+    fn suspended_and_locked_volumes_are_refused() {
+        // Suspended (ProtectionStatus Off, VolumeStatus FullyEncrypted) and Locked both emit
+        // Encrypted=true from the query.
+        let j = r#"[{"Serial":"S","DriveLetter":"E","FileSystem":"NTFS","Encrypted":true},
+                    {"Serial":"S","DriveLetter":"F","FileSystem":"","Encrypted":true}]"#;
+        let v = resolve_volumes(j, Some("S"), None);
+        assert_eq!(v.len(), 2);
+        assert!(v.iter().all(|x| !volume_is_recoverable(x)));
+    }
+    #[test]
+    fn fully_decrypted_volume_is_recoverable() {
+        let j = r#"[{"Serial":"S","DriveLetter":"E","FileSystem":"NTFS","Encrypted":false}]"#;
+        let v = resolve_volumes(j, Some("S"), None);
+        assert!(!v[0].encrypted);
+        assert!(volume_is_recoverable(&v[0]));
+    }
+    #[test]
+    fn size_match_ambiguous_returns_empty() {
+        let j = r#"[{"Serial":"A","DiskSize":1000,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},
+                    {"Serial":"B","DiskSize":1000,"DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        assert!(resolve_volumes(j, None, Some(1000)).is_empty());
+        assert_eq!(resolve_volumes(j, Some("B"), Some(1000)).len(), 1);
+        let k = r#"[{"Serial":"A","DiskSize":1000,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},
+                    {"Serial":"A","DiskSize":1000,"DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        assert_eq!(resolve_volumes(k, None, Some(1000)).len(), 2);
+    }
+    #[test]
     fn resolve_matches_by_serial() {
         let j = r#"[{"Serial":"WD-ABC123","DriveLetter":"E","FileSystem":"NTFS","VolumeSize":500000,"Encrypted":false}]"#;
         let v = resolve_volumes(j, Some("WD-ABC123"), None);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].drive_letter.as_deref(), Some("E"));
-        assert_eq!(v[0].readable, true);
+        assert!(v[0].readable);
     }
     #[test]
     fn resolve_falls_back_to_size_and_filters_others() {
