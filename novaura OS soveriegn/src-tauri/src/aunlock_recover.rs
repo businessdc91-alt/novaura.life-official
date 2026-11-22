@@ -16,7 +16,7 @@
 //! where `sealed_key = seal_vault_payload(base64(fresh 32-byte CSPRNG key))` (DPAPI on Windows)
 //! and `ct = encrypt_chunks(key, block)`. Every block uses its own fresh key.
 
-pub use crate::aunlock_recover_rules::{HealthReport, VolumeSpec};
+pub use crate::aunlock_recover_rules::{HealthReport, RecoverOutcome, RecoveredEntry, SkippedEntry, VolumeSpec};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -36,16 +36,6 @@ pub struct RecoverSelection {
     pub paths: Vec<String>,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RecoveredEntry {
-    pub path: String,
-    pub size: u64,
-    pub staged_ref: String,
-    pub source_type: String,
-    pub checksum: String,
-}
-
 #[cfg(not(windows))]
 fn off_platform<T>() -> Result<T, String> {
     Err("Aunlock drive recovery is only available on Windows".to_string())
@@ -53,12 +43,12 @@ fn off_platform<T>() -> Result<T, String> {
 
 #[cfg(windows)]
 mod imp {
-    use super::{DirEntryLite, RecoverSelection, RecoveredEntry};
+    use super::{DirEntryLite, RecoverOutcome, RecoverSelection, RecoveredEntry, SkippedEntry};
     use crate::aunlock_recover_rules::{
-        can_stage_next, decrypt_chunks, encode_record, encrypt_chunks, normalize_health,
+        build_outcome, can_stage_next, decrypt_chunks, encode_record, encrypt_chunks, normalize_health_for,
         path_is_contained, recover_query_is_read_only, resolve_volumes, sanitize_staged_rel,
-        select_preset_profiles, should_skip_reparse, split_record, staged_rel_path, staging_dir,
-        volume_by_letter, volume_is_recoverable, HealthReport, StageDecision, VolumeSpec,
+        select_preset_profiles, stop_reason, should_skip_reparse, split_record, staged_rel_path, staging_dir,
+        volume_by_letter, volume_is_recoverable, HealthReport, VolumeSpec,
         AUNLOCK_HEALTH_QUERY, AUNLOCK_VOLUMES_QUERY, PRESET_FOLDERS,
     };
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -116,9 +106,9 @@ mod imp {
     }
 
     pub fn read_health(serial: Option<String>, size_bytes: Option<u64>) -> Result<HealthReport, String> {
-        let _ = (&serial, size_bytes); // the health query is whole-machine; the pure fn takes JSON only
+        let _ = size_bytes; // matching is by serial; no serial/match falls back to the worst disk
         let out = run_guarded(AUNLOCK_HEALTH_QUERY)?;
-        Ok(normalize_health(&out))
+        Ok(normalize_health_for(&out, serial.as_deref()))
     }
 
     pub fn resolve_vols(serial: Option<String>, size_bytes: Option<u64>) -> Result<Vec<VolumeSpec>, String> {
@@ -266,38 +256,57 @@ mod imp {
         staged_bytes: u64,
         used_refs: HashSet<String>,
         entries: Vec<RecoveredEntry>,
-        skipped: u64,
+        skipped: Vec<SkippedEntry>,
+        stop: Option<String>,
     }
 
     impl Job {
-        /// Stage one source file, honoring backpressure. `Err` is a clean fatal stop.
-        fn add_file(&mut self, src: &Path, size_hint: u64) -> Result<(), String> {
+        fn skip(&mut self, path: &Path, reason: &str) {
+            self.skipped.push(SkippedEntry { path: path.to_string_lossy().into_owned(), reason: reason.to_string() });
+        }
+
+        /// Stage one source file, honoring backpressure. Once the job has been stopped
+        /// (disk/budget) every later file is only recorded as skipped with the stop reason.
+        /// Per-file read failures are skipped with a reason and the job goes on.
+        fn add_file(&mut self, src: &Path, size_hint: u64) {
+            if self.stop.is_some() {
+                let reason = self.stop.clone().unwrap_or_default();
+                self.skip(src, &reason);
+                return;
+            }
             if !path_is_contained(&self.root, src) {
-                return Err(format!("refusing path outside the volume: {}", src.display()));
+                self.skip(src, "outside volume");
+                return;
             }
-            fs::create_dir_all(&self.staging).map_err(|e| format!("create staging dir: {e}"))?;
-            let free = free_bytes(&self.staging)?.saturating_sub(DISK_RESERVE);
-            match can_stage_next(free, self.staged_bytes, JOB_BUDGET, size_hint) {
-                StageDecision::Proceed => {}
-                StageDecision::StopDisk => {
-                    return Err(format!(
-                        "stopped: staging disk is nearly full ({} files staged so far); free space or purge and retry",
-                        self.entries.len()
-                    ));
-                }
-                StageDecision::StopBudget => {
-                    return Err(format!("stopped: job byte budget reached ({} files staged)", self.entries.len()));
-                }
+            if let Err(e) = fs::create_dir_all(&self.staging) {
+                self.stop = Some("disk full".to_string());
+                self.skip(src, &format!("staging unavailable: {e}"));
+                return;
             }
-            let mut rel = sanitize_staged_rel(&staged_rel_path(&self.drive.to_string(), src));
+            let free = match free_bytes(&self.staging) {
+                Ok(f) => f.saturating_sub(DISK_RESERVE),
+                Err(e) => {
+                    self.stop = Some("disk full".to_string());
+                    self.skip(src, &format!("free space unknown: {e}"));
+                    return;
+                }
+            };
+            if let Some(reason) = stop_reason(can_stage_next(free, self.staged_bytes, JOB_BUDGET, size_hint)) {
+                self.stop = Some(reason.to_string());
+                self.skip(src, reason);
+                return;
+            }
+            let base = sanitize_staged_rel(&staged_rel_path(&self.drive.to_string(), src));
+            let mut rel = base.clone();
             let mut n = 1u32;
             while !self.used_refs.insert(rel.to_lowercase()) {
                 n += 1;
-                rel = format!("{}~{n}", sanitize_staged_rel(&staged_rel_path(&self.drive.to_string(), src)));
+                rel = format!("{base}~{n}");
             }
             let dst = rel.split('/').fold(self.staging.clone(), |p, c| p.join(c));
             if !path_is_contained(&self.staging, &dst) {
-                return Err("internal: staged path escaped the job directory".to_string());
+                self.skip(src, "internal: staged path escaped the job directory");
+                return;
             }
             match stage_file(src, &dst) {
                 Ok((size, checksum)) => {
@@ -311,17 +320,16 @@ mod imp {
                     });
                 }
                 // An unreadable source file (bad sector, locked, denied) must not abort the job.
-                Err(_) => self.skipped += 1,
+                Err(e) => self.skip(src, &format!("unreadable: {e}")),
             }
-            Ok(())
         }
 
         /// Walk `dir` read-only (iteratively), never following reparse points.
-        fn walk(&mut self, dir: &Path) -> Result<(), String> {
+        fn walk(&mut self, dir: &Path) {
             let mut stack = vec![dir.to_path_buf()];
             while let Some(d) = stack.pop() {
                 let Ok(rd) = fs::read_dir(&d) else {
-                    self.skipped += 1;
+                    self.skip(&d, "unreadable folder");
                     continue;
                 };
                 for entry in rd {
@@ -334,15 +342,14 @@ mod imp {
                     if md.is_dir() {
                         stack.push(path);
                     } else if md.is_file() {
-                        self.add_file(&path, md.len())?;
+                        self.add_file(&path, md.len());
                     }
                 }
             }
-            Ok(())
         }
     }
 
-    pub fn recover_files(job_id: String, drive_letter: String, selection: RecoverSelection) -> Result<Vec<RecoveredEntry>, String> {
+    pub fn recover_files(job_id: String, drive_letter: String, selection: RecoverSelection) -> Result<RecoverOutcome, String> {
         let (drive, root) = drive_root(&drive_letter)?;
         if !selection.preset && selection.paths.is_empty() {
             return Err("nothing selected to recover".to_string());
@@ -357,6 +364,25 @@ mod imp {
                 ));
             }
         }
+        // Validate EVERY selected path up front: bad input is a hard Err before anything is staged.
+        let mut selected: Vec<(PathBuf, bool, u64)> = Vec::new();
+        for raw in &selection.paths {
+            let s = raw.trim();
+            let prefix = format!("{drive}:");
+            if s.len() < 2 || !s.is_char_boundary(2) || !s[..2].eq_ignore_ascii_case(&prefix) {
+                return Err(format!("selected path is not on volume {drive}: {raw}"));
+            }
+            let candidate = PathBuf::from(format!("{prefix}{}", &s[2..]));
+            if !path_is_contained(&root, &candidate) || !chain_has_no_reparse(&root, &candidate) {
+                return Err(format!("selected path is outside the volume or crosses a link: {raw}"));
+            }
+            let md = fs::symlink_metadata(&candidate).map_err(|e| format!("cannot read {raw}: {e}"))?;
+            if md.is_dir() {
+                selected.push((candidate, true, 0));
+            } else if md.is_file() {
+                selected.push((candidate, false, md.len()));
+            }
+        }
         let mut job = Job {
             staging: staging_dir(&crate::get_app_data_dir(), &job_id),
             drive,
@@ -364,7 +390,8 @@ mod imp {
             staged_bytes: 0,
             used_refs: HashSet::new(),
             entries: Vec::new(),
-            skipped: 0,
+            skipped: Vec::new(),
+            stop: None,
         };
 
         if selection.preset {
@@ -382,35 +409,23 @@ mod imp {
                     for folder in PRESET_FOLDERS {
                         let p = users.join(&profile).join(folder);
                         if p.exists() && chain_has_no_reparse(&root, &p) {
-                            job.walk(&p)?;
+                            job.walk(&p);
                         }
                     }
                 }
             }
         }
 
-        for raw in &selection.paths {
-            let s = raw.trim();
-            let prefix = format!("{drive}:");
-            if s.len() < 2 || !s.is_char_boundary(2) || !s[..2].eq_ignore_ascii_case(&prefix) {
-                return Err(format!("selected path is not on volume {drive}: {raw}"));
-            }
-            let candidate = PathBuf::from(format!("{prefix}{}", &s[2..]));
-            if !path_is_contained(&root, &candidate) || !chain_has_no_reparse(&root, &candidate) {
-                return Err(format!("selected path is outside the volume or crosses a link: {raw}"));
-            }
-            let md = fs::symlink_metadata(&candidate).map_err(|e| format!("cannot read {raw}: {e}"))?;
-            if md.is_dir() {
-                job.walk(&candidate)?;
-            } else if md.is_file() {
-                job.add_file(&candidate, md.len())?;
+        for (candidate, is_dir, size) in &selected {
+            if *is_dir {
+                job.walk(candidate);
+            } else {
+                job.add_file(candidate, *size);
             }
         }
 
-        if job.entries.is_empty() && job.skipped > 0 {
-            return Err(format!("no files could be read ({} unreadable); the drive may be failing", job.skipped));
-        }
-        Ok(job.entries)
+        let stop = job.stop.take();
+        Ok(build_outcome(job.entries, job.skipped, stop))
     }
 
     pub fn purge(job_id: String) -> Result<bool, String> {
@@ -469,7 +484,7 @@ pub async fn aunlock_list_dir(drive_letter: String, subpath: String) -> Result<V
 }
 
 #[tauri::command]
-pub async fn aunlock_recover_files(job_id: String, drive_letter: String, selection: RecoverSelection) -> Result<Vec<RecoveredEntry>, String> {
+pub async fn aunlock_recover_files(job_id: String, drive_letter: String, selection: RecoverSelection) -> Result<RecoverOutcome, String> {
     #[cfg(windows)]
     {
         tauri::async_runtime::spawn_blocking(move || imp::recover_files(job_id, drive_letter, selection))

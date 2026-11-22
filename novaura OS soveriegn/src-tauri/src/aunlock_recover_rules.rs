@@ -17,6 +17,7 @@ $out=foreach($p in (Get-PhysicalDisk)){
   $h=[string]$p.HealthStatus;
   if(-not $h){ $h=[string]((Get-Disk -Number $p.DeviceId).HealthStatus) }
   [pscustomobject]@{
+    Serial=[string]$p.SerialNumber;
     HealthStatus=$h;
     Temperature=$r.Temperature;
     Wear=$r.Wear;
@@ -120,6 +121,12 @@ fn opt_u64(o: &Value, key: &str) -> Option<u64> {
 /// Parse the health payload. Tolerates an array (reports the worst disk), a bare object, or
 /// garbage (-> status "unknown"). Never panics.
 pub fn normalize_health(json: &str) -> HealthReport {
+    normalize_health_for(json, None)
+}
+
+/// Like `normalize_health`, but when `serial` (trimmed, case-insensitive) matches a disk's
+/// `Serial`, report THAT disk. With no serial or no match, fall back to the machine-worst disk.
+pub fn normalize_health_for(json: &str, serial: Option<&str>) -> HealthReport {
     let val: Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return unknown_report(),
@@ -129,6 +136,15 @@ pub fn normalize_health(json: &str) -> HealthReport {
         Value::Object(_) => vec![&val],
         _ => Vec::new(),
     };
+    let want = serial.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(w) = want {
+        if let Some(o) = items
+            .iter()
+            .find(|o| non_empty_str(o, "Serial").is_some_and(|s| s.eq_ignore_ascii_case(w)))
+        {
+            return report_from(o, norm_health_status(o));
+        }
+    }
     let mut worst: Option<(&Value, &'static str)> = None;
     for o in items {
         let s = norm_health_status(o);
@@ -139,6 +155,10 @@ pub fn normalize_health(json: &str) -> HealthReport {
     let Some((o, status)) = worst else {
         return unknown_report();
     };
+    report_from(o, status)
+}
+
+fn report_from(o: &Value, status: &str) -> HealthReport {
     HealthReport {
         status: status.to_string(),
         temperature_c: o.get("Temperature").and_then(|t| {
@@ -388,6 +408,49 @@ pub fn can_stage_next(free_bytes: u64, staged_bytes: u64, budget_bytes: u64, nex
     match staged_bytes.checked_add(next_size) {
         Some(total) if total <= budget_bytes => StageDecision::Proceed,
         _ => StageDecision::StopBudget, // over budget, or the sum overflowed
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveredEntry {
+    pub path: String,
+    pub size: u64,
+    pub staged_ref: String,
+    pub source_type: String,
+    pub checksum: String,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedEntry {
+    pub path: String,
+    pub reason: String,
+}
+
+/// Result of a recovery run: everything staged, everything omitted (with why), and whether the
+/// run covered the whole selection.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverOutcome {
+    pub entries: Vec<RecoveredEntry>,
+    pub skipped: Vec<SkippedEntry>,
+    pub complete: bool,
+    pub stop_reason: Option<String>,
+}
+
+/// `complete` only when nothing was skipped and the run was not stopped.
+pub fn build_outcome(entries: Vec<RecoveredEntry>, skipped: Vec<SkippedEntry>, stop_reason: Option<String>) -> RecoverOutcome {
+    let complete = skipped.is_empty() && stop_reason.is_none();
+    RecoverOutcome { entries, skipped, complete, stop_reason }
+}
+
+/// The human-readable stop reason for a backpressure decision (`None` for `Proceed`).
+pub fn stop_reason(d: StageDecision) -> Option<&'static str> {
+    match d {
+        StageDecision::Proceed => None,
+        StageDecision::StopDisk => Some("disk full"),
+        StageDecision::StopBudget => Some("budget"),
     }
 }
 
@@ -968,6 +1031,52 @@ mod tests {
         assert!(split_record(&buf[..3], 0).is_err());
         assert!(split_record(&[255, 255, 255, 255, 0], 0).is_err());
         assert!(split_record(&buf[..buf.len() - 1], next).is_err());
+    }
+
+    #[test]
+    fn health_for_serial_selects_matching_disk_not_worst() {
+        let j = r#"[{"Serial":"SYS1","HealthStatus":"Unhealthy","PowerOnHours":9},
+                    {"Serial":" usb-77 ","HealthStatus":"Healthy","PowerOnHours":42}]"#;
+        let r = normalize_health_for(j, Some("USB-77"));
+        assert_eq!(r.status, "ok");
+        assert_eq!(r.power_on_hours, Some(42));
+        // No serial, or no match: machine-worst fallback.
+        assert_eq!(normalize_health_for(j, None).status, "fail");
+        assert_eq!(normalize_health_for(j, Some("nope")).status, "fail");
+        assert_eq!(normalize_health_for(j, Some("  ")).status, "fail");
+        assert_eq!(normalize_health(j).status, "fail");
+    }
+    #[test]
+    fn health_query_projects_serial_and_stays_read_only() {
+        assert!(AUNLOCK_HEALTH_QUERY.contains("SerialNumber"));
+        assert!(recover_query_is_read_only(AUNLOCK_HEALTH_QUERY));
+    }
+    fn entry(p: &str) -> RecoveredEntry {
+        RecoveredEntry { path: p.into(), size: 1, staged_ref: "C/x".into(), source_type: "live".into(), checksum: "00".into() }
+    }
+    #[test]
+    fn outcome_complete_only_when_nothing_skipped_or_stopped() {
+        let o = build_outcome(vec![entry("a")], vec![], None);
+        assert!(o.complete && o.stop_reason.is_none() && o.skipped.is_empty());
+        let skip = SkippedEntry { path: "b".into(), reason: "unreadable".into() };
+        let o = build_outcome(vec![entry("a")], vec![skip], None);
+        assert!(!o.complete && o.stop_reason.is_none() && o.entries.len() == 1);
+        let o = build_outcome(vec![entry("a")], vec![], Some("disk full".into()));
+        assert!(!o.complete && o.stop_reason.as_deref() == Some("disk full"));
+    }
+    #[test]
+    fn stop_decisions_map_to_reasons() {
+        assert_eq!(stop_reason(StageDecision::Proceed), None);
+        assert_eq!(stop_reason(StageDecision::StopDisk), Some("disk full"));
+        assert_eq!(stop_reason(StageDecision::StopBudget), Some("budget"));
+    }
+    #[test]
+    fn outcome_serializes_camel_case() {
+        let o = build_outcome(vec![], vec![], Some("budget".into()));
+        let v = serde_json::to_value(&o).unwrap();
+        assert_eq!(v["stopReason"], "budget");
+        assert_eq!(v["complete"], false);
+        assert!(v["skipped"].is_array() && v["entries"].is_array());
     }
 
     #[test]

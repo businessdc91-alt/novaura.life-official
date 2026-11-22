@@ -41,7 +41,19 @@ DevTools port + CDP script (see project_sovereign_live_testing). Never use real 
 13. [ ] Source unchanged: re-run the inventory on Drive A and diff against `before.csv` —
         identical files, sizes and last-write times; no new files (e.g. no `System Volume
         Information` writes caused by the app, no temp files). Mount was read-only throughout.
-14. [ ] Pull Drive A mid-copy: command returns an error/skips, app stays responsive, purge still works.
+14. [ ] Outcome shape: a normal run returns `complete:true, skipped:[], stopReason:null`. In the
+        low-disk run (check 12) the result is an Ok `RecoverOutcome` with the files staged so far
+        in `entries`, every omitted file in `skipped` (reason "disk full"), `complete:false`,
+        `stopReason:"disk full"`. A volume refusal (check 11) stays an Err, never an empty Ok.
+15. [ ] Per-device health: with Drive A attached, `aunlock_read_health(serial of A)` reports A's
+        health, not the bench PC's system disk; with no/unknown serial it falls back to the
+        worst disk.
+16. [ ] Last-access time: compare `LastAccessTimeUtc` of Drive A files before/after a recover.
+        Windows often disables last-access updates (`fsutil behavior query disablelastaccess`),
+        so unchanged is expected; note the setting in the result. Opening a file read-only can
+        still touch metadata on some setups. True forensic read-only needs a read-only mount or
+        a hardware write-blocker, which is out of Plan 1 scope.
+17. [ ] Pull Drive A mid-copy: command returns an error/skips, app stays responsive, purge still works.
 
 ## Result
 Date / build / tester / outcome: _(fill in at Task 10)_
