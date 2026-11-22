@@ -13,8 +13,21 @@ import { sanitizationMethodFor, buildCert } from './sanitizationCert.js';
 import { getCatalog } from './catalog.js';
 import { placeholderNative } from './native.js';
 import { createNativeDevices } from './nativeDevices.js';
+import { createNativeRecover } from './nativeRecover.js';
+import { isRecoverableVolume } from './volumeRules.js';
+import { scanAndRedactOutboundSecrets } from '../security/complianceService.js';
 
 const rand = () => Math.random().toString(36).slice(2, 8);
+
+const NO_DEVICE = 'No device on this job to work on.';
+const ENCRYPTED_REASON =
+  'This device is encrypted. Aunlock never recovers from encrypted storage — reclaim it (sanitize and reuse) instead.';
+const NO_RECOVERABLE =
+  'No recoverable volume was found. Encrypted or unreadable volumes cannot be recovered — reclaim the device instead.';
+
+// Native error text can echo paths or secrets; it is redacted before it reaches a reason.
+const safeReason = (e) =>
+  scanAndRedactOutboundSecrets([{ content: String(e?.message ?? e ?? 'Native call failed.') }]).messages[0].content;
 
 export function createController({ catalog, native, now = Date.now, operator = 'operator' }) {
   const primaryDevice = async (jobId) => (await catalog.listDevices(jobId))[0] ?? null;
@@ -77,15 +90,98 @@ export function createController({ catalog, native, now = Date.now, operator = '
       return p;
     },
 
-    async recover(jobId) {
+    /** Drive health. Hardware metadata like identification — no authorization needed. */
+    async readHealth(jobId) {
+      const device = await primaryDevice(jobId);
+      if (!device) return { ok: false, reason: NO_DEVICE };
+      try {
+        return { ok: true, health: await native.readHealth(device) };
+      } catch (e) {
+        return { ok: false, reason: safeReason(e) };
+      }
+    },
+
+    /** Volume layout (including non-recoverable ones, so the UI can show a reclaim note). No
+     * authorization needed — layout metadata — but an encrypted device is refused. */
+    async listVolumes(jobId) {
+      const device = await primaryDevice(jobId);
+      if (!device) return { ok: false, reason: NO_DEVICE };
+      if (device.lockState === 'encrypted') return { ok: false, reason: ENCRYPTED_REASON };
+      try {
+        return { ok: true, volumes: await native.resolveVolumes(device) };
+      } catch (e) {
+        return { ok: false, reason: safeReason(e) };
+      }
+    },
+
+    /** List a directory on a volume. File names are the owner's data, so authorization is required. */
+    async browse(jobId, { driveLetter, subpath = '' } = {}) {
       const g = await gate(jobId);
       if (!g.ok) return { ok: false, reason: g.reason };
       const device = await primaryDevice(jobId);
-      if (!device) return { ok: false, reason: 'No device on this job to recover from.' };
-      const manifest = await native.recover(device);
-      for (const entry of manifest || []) await catalog.putRecovered({ jobId, path: entry.path, size: entry.size });
-      await setStatus(jobId, 'recovered');
-      return { ok: true, manifest };
+      if (!device) return { ok: false, reason: NO_DEVICE };
+      if (device.lockState === 'encrypted') return { ok: false, reason: ENCRYPTED_REASON };
+      try {
+        return { ok: true, entries: await native.listDir(driveLetter, subpath) };
+      } catch (e) {
+        return { ok: false, reason: safeReason(e) };
+      }
+    },
+
+    /** Recover files into staging. Only metadata rows (path, size, stagedRef, sourceType,
+     * checksum) reach the catalog — never contents. */
+    async recover(jobId, { driveLetter = null, selection = { preset: true } } = {}) {
+      const g = await gate(jobId);
+      if (!g.ok) return { ok: false, reason: g.reason };
+      const device = await primaryDevice(jobId);
+      if (!device) return { ok: false, reason: NO_DEVICE };
+      if (device.lockState === 'encrypted') return { ok: false, reason: ENCRYPTED_REASON };
+
+      let letters;
+      if (driveLetter) {
+        letters = [driveLetter];
+      } else {
+        try {
+          letters = (await native.resolveVolumes(device)).filter(isRecoverableVolume).map((v) => v.driveLetter);
+        } catch (e) {
+          return { ok: false, reason: safeReason(e) };
+        }
+      }
+      if (!letters.length) return { ok: false, reason: NO_RECOVERABLE };
+
+      const manifest = [];
+      const skipped = [];
+      let complete = true;
+      let stopReason = null;
+      let failures = 0;
+      for (const letter of letters) {
+        let outcome;
+        try {
+          outcome = await native.recoverFiles(jobId, letter, selection);
+        } catch (e) {
+          failures += 1;
+          complete = false;
+          skipped.push({ path: `${letter}:\\`, reason: safeReason(e) });
+          continue;
+        }
+        for (const entry of outcome?.entries ?? []) {
+          const { path, size, stagedRef, sourceType, checksum } = entry;
+          await catalog.putRecovered({ jobId, path, size, stagedRef, sourceType, checksum });
+          manifest.push(entry);
+        }
+        skipped.push(...(outcome?.skipped ?? []));
+        if (!outcome?.complete) complete = false;
+        stopReason = stopReason ?? outcome?.stopReason ?? null;
+      }
+      if (failures === letters.length && !manifest.length) {
+        return { ok: false, reason: skipped[0]?.reason ?? 'Recovery failed.' };
+      }
+      await setStatus(jobId, 'recovered', {
+        recoverComplete: complete,
+        recoverSkippedCount: skipped.length,
+        recoverStopReason: stopReason,
+      });
+      return { ok: true, manifest, skipped, complete, stopReason };
     },
 
     async sanitize(jobId) {
@@ -134,9 +230,14 @@ const tauriInvoke = async (cmd, args) => {
 export function getController() {
   if (!shared) {
     const devices = createNativeDevices({ invoke: tauriInvoke, isTauri });
+    const recovery = createNativeRecover({ invoke: tauriInvoke, isTauri });
     const native = {
       enumerate: () => devices.enumerate(),
-      recover: placeholderNative.recover,
+      readHealth: recovery.readHealth,
+      resolveVolumes: recovery.resolveVolumes,
+      listDir: recovery.listDir,
+      recoverFiles: recovery.recoverFiles,
+      purgeRecovered: recovery.purgeRecovered,
       wipe: placeholderNative.wipe,
     };
     shared = createController({ catalog: getCatalog(), native });

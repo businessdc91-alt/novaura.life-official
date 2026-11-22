@@ -46,3 +46,8 @@ test('systemDisk, bus, removable and nativeId pass through (systemDisk not defau
   const u = deviceRecord({ jobId: 'j', id: 'dev_7', raw: { kind: 'drive' } });
   assert.notEqual(u.systemDisk, false);
 });
+
+test('sizeBytes is carried from the bridge for serial-less volume matching', () => {
+  assert.equal(deviceRecord({ jobId: 'j', id: 'd', raw: { sizeBytes: 500107862016 } }).sizeBytes, 500107862016);
+  assert.equal(deviceRecord({ jobId: 'j', id: 'd', raw: {} }).sizeBytes, null);
+});

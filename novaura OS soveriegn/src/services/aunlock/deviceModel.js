@@ -32,6 +32,7 @@ export function deviceRecord({ jobId, id, raw = {} } = {}) {
     removable: raw.removable ?? false,
     systemDisk: raw.systemDisk ?? null,
     nativeId: raw.nativeId ?? null,
+    sizeBytes: raw.sizeBytes ?? null, // lets the native layer match volumes for serial-less drives
     updatedAt: Date.now(),
   };
 }

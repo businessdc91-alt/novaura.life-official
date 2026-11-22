@@ -6,7 +6,16 @@ import { createController } from '../../src/services/aunlock/controller.js';
 
 const baseNative = {
   async enumerate() { return [{ kind: 'laptop', serial: 'S1', lock: 'user', storage: '500GB HDD', systemDisk: false }]; },
-  async recover() { return [{ path: 'photos/a.jpg', size: 100 }, { path: 'docs/b.pdf', size: 50 }]; },
+  async resolveVolumes() { return [{ driveLetter: 'E', fsType: 'NTFS', label: '', sizeBytes: 1, encrypted: false, readable: true }]; },
+  async recoverFiles() {
+    return {
+      entries: [
+        { path: 'photos/a.jpg', size: 100, stagedRef: 's1', sourceType: 'live', checksum: 'c1' },
+        { path: 'docs/b.pdf', size: 50, stagedRef: 's2', sourceType: 'live', checksum: 'c2' },
+      ],
+      skipped: [], complete: true, stopReason: null,
+    };
+  },
   async wipe() { return { ok: true, startedAt: 10, finishedAt: 20 }; },
 };
 
