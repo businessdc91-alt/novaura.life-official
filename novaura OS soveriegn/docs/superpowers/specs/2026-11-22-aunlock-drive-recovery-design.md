@@ -97,15 +97,18 @@ if the code "works." Every plan task is checked against this line.
 
 ## Approaches considered
 
-- **Native Rust engines, license-clean (CHOSEN).** Implement imaging, FS parsers, carving,
-  partition and RAID reconstruction natively in Rust (leaning on permissively-licensed crates:
-  `ntfs`, `fatfs`, ext4 readers, etc.). *Why:* keeps the product self-contained and free of
-  copyleft distribution obligations — consistent with the owner's demonstrated stance (the
-  Aetherium GPL rewrite, [[project_template_library]]) and Sovereign's "owns its stack" value.
-  *Cost:* the most engineering; some filesystems (APFS/HFS+) and RAID are serious work. This is
-  the big scope driver — flagged for the owner at the gate; wrapping GPL engines
-  (PhotoRec/TestDisk/ddrescue as bundled binaries) would be faster but encumbers distribution,
-  so it is the fallback only if the owner accepts that tradeoff.
+- **Native Rust by default; a GPL/third-party engine only where native would lose capability
+  (DECIDED 2026-11-22).** Build imaging, FS parsers, carving, partition and RAID reconstruction
+  natively in Rust (permissively-licensed crates — `ntfs`, `fatfs`, ext4 readers, etc.). Native
+  is the strong default: it keeps Sovereign self-owned and free of copyleft distribution strings
+  (the owner's Aetherium GPL-rewrite stance), and the owner finds wrappers "cheap." Wrapping a
+  mature GPL tool (PhotoRec/TestDisk/ddrescue) is permitted for a specific component **only**
+  when going native would be a real capability downgrade versus that tool — capability is never
+  cut to stay native, and a wrapper is never chosen merely to save time when native can match it.
+  Decided **per engine, at that plan's design time**, native assumed, with real evidence required
+  to pick a wrapper. Expected native: imaging, NTFS/FAT/exFAT, carving, partition scan, RAID
+  math. Only candidates even worth evaluating for a wrapper: APFS/HFS+ parsing and
+  damaged-filesystem deep repair.
 - **Sequenced plans, not a monolith (CHOSEN).** Build the full forensic depth as an ordered
   series of deep plans (below), each a shippable increment with its own tests and gated live
   check — so nothing is cut, and the module stays plannable. *Chosen over* one giant plan
