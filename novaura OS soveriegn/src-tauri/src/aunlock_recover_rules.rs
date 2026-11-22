@@ -411,6 +411,12 @@ pub fn staged_rel_path(drive_letter: &str, source: &Path) -> String {
 // the stream therefore leaves no `last`-tagged frame and decryption reports `Truncated`; frames
 // cannot be reordered or spliced because the counter is part of the nonce. An empty plaintext
 // still emits exactly one (empty) `last` frame.
+//
+// SECURITY INVARIANT: the 32-byte key MUST be freshly generated from a CSPRNG and UNIQUE to
+// this one stream/file. It MUST NEVER be reused across `encrypt_chunks` calls or files. The frame
+// counter restarts at 0 on every call, so cross-call nonce uniqueness rests only on the 4-byte
+// (32-bit) random prefix; with a reused key a birthday collision (~2^16 files) reuses a nonce,
+// which for ChaCha20-Poly1305 destroys both confidentiality and integrity.
 
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload, AeadCore};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
@@ -439,6 +445,12 @@ fn frame_nonce(prefix: &[u8; 4], counter: u64) -> Nonce {
 }
 
 /// Seal `plaintext` into the framed stream described above, under a fresh random nonce prefix.
+///
+/// # Safety (security invariant)
+/// `key` MUST be a freshly generated, CSPRNG-derived 32-byte key UNIQUE to this stream/file, and
+/// MUST NOT be reused across calls or files. Only the 4-byte random nonce prefix separates nonces
+/// between calls, so reusing a key risks a nonce collision and total loss of confidentiality and
+/// integrity.
 pub fn encrypt_chunks(key: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     // A random 12-byte nonce from the AEAD's own generator; only its first 4 bytes are kept.
