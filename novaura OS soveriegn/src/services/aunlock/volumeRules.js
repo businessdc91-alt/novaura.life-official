@@ -7,8 +7,8 @@ const RECOVERABLE_FS = ['NTFS', 'EXFAT', 'FAT32', 'FAT'];
 export function isRecoverableVolume(v) {
   return Boolean(
     v &&
-      !v.encrypted &&
-      v.readable &&
+      v.encrypted === false &&
+      v.readable === true &&
       RECOVERABLE_FS.includes(String(v.fsType ?? '').trim().toUpperCase()),
   );
 }
