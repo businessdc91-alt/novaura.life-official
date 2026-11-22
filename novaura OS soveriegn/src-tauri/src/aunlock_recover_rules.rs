@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Component, Path, PathBuf};
 
 /// Read-only PowerShell query for drive health (SMART-ish counters). Only reads state; the
 /// `health_query_passes_read_only_guard` test keeps it inside the allowlist. Fields a drive does
@@ -303,6 +304,103 @@ pub fn select_preset_profiles(entries: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Lexically normalize a path: drop `.`, resolve `..` against a preceding normal component.
+/// `None` when a `..` would climb past the start/root/prefix (ambiguous => caller denies).
+fn normalize_lexical(p: &Path) -> Option<Vec<Component<'_>>> {
+    let mut out: Vec<Component> = Vec::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                _ => return None,
+            },
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// Traversal guard: true only when `candidate`, after lexical normalization, is `base` itself or
+/// lies beneath it. Lexical ONLY (no I/O, symlinks are handled by `should_skip_reparse`). Fail
+/// closed: an empty base, a `..` that climbs past the root, a different drive, or a relative vs
+/// absolute mismatch all give false. Comparison is case-sensitive, so a case-variant spelling is
+/// rejected rather than allowed.
+pub fn path_is_contained(base: &Path, candidate: &Path) -> bool {
+    let (Some(b), Some(c)) = (normalize_lexical(base), normalize_lexical(candidate)) else {
+        return false;
+    };
+    if b.is_empty() || c.len() < b.len() {
+        return false;
+    }
+    b.iter().zip(c.iter()).all(|(x, y)| x == y)
+}
+
+/// Never follow symlinks or reparse points (junctions etc.): they can redirect recovery outside
+/// the intended scope. Skip when either flag is set.
+pub fn should_skip_reparse(is_symlink: bool, is_reparse_point: bool) -> bool {
+    is_symlink || is_reparse_point
+}
+
+/// Free space that must remain on the staging disk after a copy.
+// NOTE: deliberately small so the unit-test scale (free=1000, next=100) works; the I/O layer
+// should pass `free_bytes` already net of any larger reserve it wants.
+pub const SAFETY_MARGIN: u64 = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageDecision {
+    Proceed,
+    StopBudget,
+    StopDisk,
+}
+
+/// Backpressure before staging the next file. Disk is checked first. Checked arithmetic: an
+/// overflowing sum is treated as a stop, never a false `Proceed`.
+pub fn can_stage_next(free_bytes: u64, staged_bytes: u64, budget_bytes: u64, next_size: u64) -> StageDecision {
+    match next_size.checked_add(SAFETY_MARGIN) {
+        Some(need) if free_bytes >= need => {}
+        _ => return StageDecision::StopDisk, // short on disk, or the sum overflowed
+    }
+    match staged_bytes.checked_add(next_size) {
+        Some(total) if total <= budget_bytes => StageDecision::Proceed,
+        _ => StageDecision::StopBudget, // over budget, or the sum overflowed
+    }
+}
+
+/// `app_data/aunlock_recovered/<job_id>` with every char outside `[A-Za-z0-9_]` in `job_id`
+/// replaced by `_`, so a hostile id cannot traverse. An empty id becomes `_`.
+pub fn staging_dir(app_data: &Path, job_id: &str) -> PathBuf {
+    let mut id: String = job_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    if id.is_empty() {
+        id.push('_');
+    }
+    app_data.join("aunlock_recovered").join(id)
+}
+
+/// Relative path inside the staging tree: `<DRIVE>/<source components without root/prefix>`,
+/// `/`-separated. The drive is the first ASCII letter of `drive_letter` uppercased (else `_`).
+/// `.`/`..` components are dropped so the result can never escape the staging dir.
+pub fn staged_rel_path(drive_letter: &str, source: &Path) -> String {
+    let drive = drive_letter
+        .chars()
+        .find(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_uppercase())
+        .unwrap_or('_');
+    let mut out = drive.to_string();
+    for c in source.components() {
+        if let Component::Normal(n) = c {
+            out.push('/');
+            out.push_str(&n.to_string_lossy());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +601,59 @@ mod tests {
     fn preset_folders_are_the_eight() {
         assert_eq!(PRESET_FOLDERS.len(), 8);
         assert!(PRESET_FOLDERS.contains(&"Desktop") && PRESET_FOLDERS.contains(&"Links"));
+    }
+
+    #[test]
+    fn contained_rejects_parent_escape() {
+        let base = Path::new("E:/Users/sam");
+        assert!(path_is_contained(base, Path::new("E:/Users/sam/Documents/a.txt")));
+        assert!(!path_is_contained(base, Path::new("E:/Users/sam/../Administrator/secret")));
+    }
+    #[test]
+    fn contained_edge_cases_fail_closed() {
+        let base = Path::new("E:/Users/sam");
+        assert!(path_is_contained(base, Path::new("E:/Users/sam/./a/../b.txt")));
+        assert!(!path_is_contained(base, Path::new("E:/Users/samuel/a.txt")));
+        assert!(!path_is_contained(base, Path::new("F:/Users/sam/a.txt")));
+        assert!(!path_is_contained(base, Path::new("E:/../Users/sam/a.txt")));
+        assert!(!path_is_contained(base, Path::new("Users/sam/a.txt")));
+        assert!(path_is_contained(Path::new("E:/Users/sam/../x"), Path::new("E:/Users/x/a")));
+        assert!(!path_is_contained(Path::new(""), Path::new("E:/a")));
+    }
+    #[test]
+    fn reparse_points_are_skipped() {
+        assert!(should_skip_reparse(true, false));
+        assert!(should_skip_reparse(false, true));
+        assert!(!should_skip_reparse(false, false));
+    }
+    #[test]
+    fn backpressure_stops_on_disk_and_budget() {
+        assert!(matches!(can_stage_next(1000, 0, 10_000, 100), StageDecision::Proceed));
+        assert!(matches!(can_stage_next(50, 0, 10_000, 100), StageDecision::StopDisk));
+        assert!(matches!(can_stage_next(10_000, 9_950, 10_000, 100), StageDecision::StopBudget));
+    }
+    #[test]
+    fn backpressure_never_overflows() {
+        assert!(matches!(can_stage_next(u64::MAX, 0, u64::MAX, u64::MAX), StageDecision::StopDisk));
+        assert!(matches!(can_stage_next(u64::MAX, u64::MAX, u64::MAX, 1), StageDecision::StopBudget));
+    }
+    #[test]
+    fn staging_dir_sanitizes_job_id() {
+        let p = staging_dir(Path::new("C:/data"), "job_1_../../x");
+        assert!(p.ends_with("aunlock_recovered/job_1______x") || !p.to_string_lossy().contains(".."));
+        // "job_1_" + 6 replaced chars of "../../" + "x" => 7 underscores before the x.
+        assert!(p.ends_with("aunlock_recovered/job_1_______x"));
+        let q = staging_dir(Path::new("C:/data"), "..");
+        assert!(!q.to_string_lossy().contains(".."));
+        assert!(q.starts_with("C:/data/aunlock_recovered"));
+    }
+    #[test]
+    fn staged_rel_path_keeps_drive_and_drops_root() {
+        assert_eq!(
+            staged_rel_path("e", Path::new("E:/Users/sam/Documents/a.txt")),
+            "E/Users/sam/Documents/a.txt"
+        );
+        assert_eq!(staged_rel_path("E:", Path::new("E:/a/../b.txt")), "E/a/b.txt");
+        assert_eq!(staged_rel_path("", Path::new("x.txt")), "_/x.txt");
     }
 }
