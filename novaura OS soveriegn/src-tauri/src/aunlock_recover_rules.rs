@@ -155,6 +155,130 @@ pub fn normalize_health(json: &str) -> HealthReport {
     }
 }
 
+/// Read-only PowerShell query listing every volume with its parent disk's serial/size. It is a
+/// CONSTANT: the target serial/size is NEVER interpolated here; `resolve_volumes` filters in Rust.
+///
+/// `Encrypted` is derived only from allowlisted read-only cmdlets: a recognised filesystem means
+/// readable plaintext (`false`); an empty/RAW filesystem (how a locked BitLocker volume appears)
+/// is `true`. If the state cannot be determined it is `null`, which `resolve_volumes` treats as
+/// NOT recoverable (deny-by-default).
+pub const AUNLOCK_VOLUMES_QUERY: &str = r#"$ErrorActionPreference='SilentlyContinue';
+$out=foreach($d in (Get-Disk)){
+  foreach($p in (Get-Partition -DiskNumber $d.Number)){
+    $v=$p | Get-Volume;
+    $fs=[string]$v.FileSystem;
+    $enc=$null;
+    if($v){ if($fs -and $fs -ne 'RAW'){ $enc=$false } else { $enc=$true } }
+    [pscustomobject]@{
+      Serial=[string]$d.SerialNumber;
+      DiskSize=$d.Size;
+      DriveLetter=[string]$p.DriveLetter;
+      FileSystem=$fs;
+      FileSystemLabel=[string]$v.FileSystemLabel;
+      VolumeSize=$v.Size;
+      Encrypted=$enc
+    }
+  }
+}
+@($out) | ConvertTo-Json -Depth 3 -Compress"#;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeSpec {
+    pub drive_letter: Option<String>,
+    pub fs_type: Option<String>,
+    pub label: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub encrypted: bool,
+    pub readable: bool,
+}
+
+const MOUNTABLE_FS: [&str; 4] = ["NTFS", "exFAT", "FAT32", "FAT"];
+
+fn is_mountable_fs(fs: &str) -> bool {
+    MOUNTABLE_FS.iter().any(|m| m.eq_ignore_ascii_case(fs.trim()))
+}
+
+fn non_empty_str(o: &Value, key: &str) -> Option<String> {
+    o.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Pick the volumes of the disk identified by `serial` (preferred) or else `size_bytes`.
+/// Tolerant (array / bare object / garbage -> empty), never panics. With neither selector, or no
+/// match, returns empty (deny-by-default). A volume whose `Encrypted` flag is missing/null is
+/// marked `readable=false`, so `volume_is_recoverable` refuses it.
+pub fn resolve_volumes(json: &str, serial: Option<&str>, size_bytes: Option<u64>) -> Vec<VolumeSpec> {
+    let val: Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let items: Vec<&Value> = match &val {
+        Value::Array(arr) => arr.iter().filter(|v| v.is_object()).collect(),
+        Value::Object(_) => vec![&val],
+        _ => Vec::new(),
+    };
+    let serial = serial.map(str::trim).filter(|s| !s.is_empty());
+    let matches = |o: &Value| -> bool {
+        if let Some(want) = serial {
+            return non_empty_str(o, "Serial").is_some_and(|s| s.eq_ignore_ascii_case(want));
+        }
+        match size_bytes {
+            Some(sz) => opt_u64(o, "DiskSize") == Some(sz),
+            None => false,
+        }
+    };
+    items
+        .into_iter()
+        .filter(|o| matches(o))
+        .map(|o| {
+            let fs_type = non_empty_str(o, "FileSystem");
+            let enc_flag = o.get("Encrypted").and_then(Value::as_bool);
+            let known_fs = fs_type.as_deref().is_some_and(is_mountable_fs);
+            VolumeSpec {
+                drive_letter: non_empty_str(o, "DriveLetter"),
+                fs_type,
+                label: non_empty_str(o, "FileSystemLabel"),
+                size_bytes: opt_u64(o, "VolumeSize"),
+                encrypted: enc_flag.unwrap_or(false),
+                readable: known_fs && enc_flag.is_some(),
+            }
+        })
+        .collect()
+}
+
+/// Recoverable only when plaintext, readable, and a known mountable filesystem.
+pub fn volume_is_recoverable(v: &VolumeSpec) -> bool {
+    !v.encrypted && v.readable && v.fs_type.as_deref().is_some_and(is_mountable_fs)
+}
+
+/// Per-user folders copied by the "preset" recovery profile.
+pub const PRESET_FOLDERS: [&str; 8] = [
+    "Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music", "Favorites", "Links",
+];
+
+/// Keep real user profile directory names; drop system/template profiles. `Public` is kept.
+pub fn select_preset_profiles(entries: &[String]) -> Vec<String> {
+    const EXCLUDED: [&str; 5] = [
+        "Default",
+        "Default User",
+        "All Users",
+        "systemprofile",
+        "defaultuser0",
+    ];
+    entries
+        .iter()
+        .filter(|e| {
+            let t = e.trim();
+            !t.is_empty() && !EXCLUDED.iter().any(|x| x.eq_ignore_ascii_case(t))
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +354,82 @@ mod tests {
         }
         assert!(recover_query_is_read_only("get-disk | convertto-json"));
         assert!(recover_query_is_read_only(AUNLOCK_HEALTH_QUERY));
+    }
+
+    fn vs(fs: &str, enc: bool, readable: bool) -> VolumeSpec {
+        VolumeSpec {
+            drive_letter: Some("E".into()),
+            fs_type: Some(fs.into()),
+            label: None,
+            size_bytes: None,
+            encrypted: enc,
+            readable,
+        }
+    }
+
+    #[test]
+    fn volumes_query_is_read_only() {
+        assert!(recover_query_is_read_only(AUNLOCK_VOLUMES_QUERY));
+    }
+    #[test]
+    fn resolve_matches_by_serial() {
+        let j = r#"[{"Serial":"WD-ABC123","DriveLetter":"E","FileSystem":"NTFS","VolumeSize":500000,"Encrypted":false}]"#;
+        let v = resolve_volumes(j, Some("WD-ABC123"), None);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].drive_letter.as_deref(), Some("E"));
+        assert_eq!(v[0].readable, true);
+    }
+    #[test]
+    fn resolve_falls_back_to_size_and_filters_others() {
+        let j = r#"[{"Serial":"A","DiskSize":1000,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},
+                    {"Serial":"B","DiskSize":2000,"DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        let v = resolve_volumes(j, None, Some(2000));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].drive_letter.as_deref(), Some("F"));
+        assert!(resolve_volumes(j, Some("ZZZ"), None).is_empty());
+        assert!(resolve_volumes(j, None, None).is_empty());
+    }
+    #[test]
+    fn resolve_unknown_encryption_is_not_recoverable() {
+        let j = r#"{"Serial":"S","DriveLetter":"E","FileSystem":"NTFS"}"#;
+        let v = resolve_volumes(j, Some("S"), None);
+        assert_eq!(v.len(), 1);
+        assert!(!v[0].readable);
+        assert!(!volume_is_recoverable(&v[0]));
+        let j2 = r#"[{"Serial":"S","DriveLetter":"E","FileSystem":"NTFS","Encrypted":null}]"#;
+        assert!(!volume_is_recoverable(&resolve_volumes(j2, Some("S"), None)[0]));
+    }
+    #[test]
+    fn resolve_garbage_is_empty_no_panic() {
+        assert!(resolve_volumes("not json", Some("x"), None).is_empty());
+        assert!(resolve_volumes("", Some("x"), None).is_empty());
+        assert!(resolve_volumes("[1,\"a\",null]", Some("x"), None).is_empty());
+    }
+    #[test]
+    fn recoverable_rejects_encrypted_and_raw() {
+        assert!(!volume_is_recoverable(&vs("NTFS", true, true)));
+        assert!(!volume_is_recoverable(&vs("RAW", false, true)));
+        assert!(!volume_is_recoverable(&vs("NTFS", false, false)));
+        assert!(volume_is_recoverable(&vs("exFAT", false, true)));
+        assert!(volume_is_recoverable(&vs("ntfs", false, true)));
+    }
+    #[test]
+    fn preset_profiles_exclude_system_and_default() {
+        let got = select_preset_profiles(&[
+            "sam".into(),
+            "Default".into(),
+            "Default User".into(),
+            "All Users".into(),
+            "Public".into(),
+            "systemprofile".into(),
+        ]);
+        assert_eq!(got, vec!["sam".to_string(), "Public".to_string()]);
+        let got2 = select_preset_profiles(&["DEFAULTUSER0".into(), "bob".into()]);
+        assert_eq!(got2, vec!["bob".to_string()]);
+    }
+    #[test]
+    fn preset_folders_are_the_eight() {
+        assert_eq!(PRESET_FOLDERS.len(), 8);
+        assert!(PRESET_FOLDERS.contains(&"Desktop") && PRESET_FOLDERS.contains(&"Links"));
     }
 }
