@@ -33,8 +33,9 @@ $out=foreach($p in (Get-PhysicalDisk)){
 /// code-review tripwire, NOT a sanitizer for untrusted input. Never pass user-supplied text to
 /// the PowerShell `-Command`. Cmdlet matching is case-insensitive because PowerShell is.
 pub fn recover_query_is_read_only(query: &str) -> bool {
-    const ALLOWED: [&str; 6] = [
+    const ALLOWED: [&str; 7] = [
         "Get-PhysicalDisk",
+        "Get-BitLockerVolume",
         "Get-StorageReliabilityCounter",
         "Get-Disk",
         "Get-Partition",
@@ -158,17 +159,23 @@ pub fn normalize_health(json: &str) -> HealthReport {
 /// Read-only PowerShell query listing every volume with its parent disk's serial/size. It is a
 /// CONSTANT: the target serial/size is NEVER interpolated here; `resolve_volumes` filters in Rust.
 ///
-/// `Encrypted` is derived only from allowlisted read-only cmdlets: a recognised filesystem means
-/// readable plaintext (`false`); an empty/RAW filesystem (how a locked BitLocker volume appears)
-/// is `true`. If the state cannot be determined it is `null`, which `resolve_volumes` treats as
-/// NOT recoverable (deny-by-default).
+/// `Encrypted` comes from REAL BitLocker status (`Get-BitLockerVolume`, keyed by drive letter):
+/// `ProtectionStatus -eq 'On'` => `true` (locked or unlocked alike). It is never inferred from the
+/// filesystem. A volume with no BitLocker record (cmdlet missing/blocked, no drive letter) gets
+/// `null`, which `resolve_volumes` treats as NOT recoverable (deny-by-default).
 pub const AUNLOCK_VOLUMES_QUERY: &str = r#"$ErrorActionPreference='SilentlyContinue';
+$enc=@{};
+foreach($b in (Get-BitLockerVolume)){
+  $m=([string]$b.MountPoint).TrimEnd(':').ToUpper();
+  if($m){ $enc[$m]=($b.ProtectionStatus -eq 'On') }
+}
 $out=foreach($d in (Get-Disk)){
   foreach($p in (Get-Partition -DiskNumber $d.Number)){
     $v=$p | Get-Volume;
     $fs=[string]$v.FileSystem;
-    $enc=$null;
-    if($v){ if($fs -and $fs -ne 'RAW'){ $enc=$false } else { $enc=$true } }
+    $k=([string]$p.DriveLetter).ToUpper();
+    $e=$null;
+    if($k -and $enc.ContainsKey($k)){ $e=$enc[$k] }
     [pscustomobject]@{
       Serial=[string]$d.SerialNumber;
       DiskSize=$d.Size;
@@ -176,7 +183,7 @@ $out=foreach($d in (Get-Disk)){
       FileSystem=$fs;
       FileSystemLabel=[string]$v.FileSystemLabel;
       VolumeSize=$v.Size;
-      Encrypted=$enc
+      Encrypted=$e
     }
   }
 }
@@ -370,6 +377,20 @@ mod tests {
     #[test]
     fn volumes_query_is_read_only() {
         assert!(recover_query_is_read_only(AUNLOCK_VOLUMES_QUERY));
+    }
+    #[test]
+    fn volumes_query_uses_real_bitlocker_status_not_fs_inference() {
+        assert!(recover_query_is_read_only("Get-BitLockerVolume | ConvertTo-Json"));
+        assert!(AUNLOCK_VOLUMES_QUERY.contains("Get-BitLockerVolume"));
+        assert!(AUNLOCK_VOLUMES_QUERY.contains("ProtectionStatus"));
+        assert!(!AUNLOCK_VOLUMES_QUERY.contains("'RAW'"));
+    }
+    #[test]
+    fn bitlocker_on_volume_is_refused_even_with_plain_fs() {
+        let j = r#"[{"Serial":"S","DriveLetter":"E","FileSystem":"NTFS","Encrypted":true}]"#;
+        let v = resolve_volumes(j, Some("S"), None);
+        assert!(v[0].encrypted);
+        assert!(!volume_is_recoverable(&v[0]));
     }
     #[test]
     fn resolve_matches_by_serial() {
