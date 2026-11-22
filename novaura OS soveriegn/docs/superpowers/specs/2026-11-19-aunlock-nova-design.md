@@ -130,26 +130,31 @@ One subapp, built in order so value ships early and the plan stays plannable:
 3. **Standalone-window delivery** — native desktop window + shortcut + auto-update + tab
    tear-off, built reusably.
 
-### Recovery module — slice tracking (file/drive recovery, module 1)
+### Recovery — slice tracking (module 1)
 
-File/drive recovery (module 1) is being built in sub-slices. Status as of 2026-11-22:
+Recovery splits into the **drive** path (forensic tier — one module, built as an ordered series
+of plans; see `2026-11-22-aunlock-drive-recovery-design.md`) and three **device-class** paths
+(different hardware, their own slices). Owner set the drive ceiling to **forensic tier** on
+2026-11-22 — match/beat the top standalone recovery suites and push past them (never lean).
+Status:
 
 - [x] Device intake / ID over USB — Phase 1b-A read-only device bridge (shipped).
-- [ ] **Direct-attached unencrypted drive recovery (current slice):** mount an attached or
-  pulled internal **unencrypted** drive, pull the owner's standard user data (one-click),
-  stage it in the encrypted vault. A BitLocker-locked volume with no key is refused and
-  routed to reclaim — never force-opened (HARD BOUNDARY).
-- [ ] **Browse + select** recovery — navigate the mounted drive and pick files, layered on
-  top of the one-click pull.
-- [ ] **LAN recovery stick** — live-Linux image that boots a login-locked laptop and streams
-  the internal drive over the LAN (proven by its own live check, not CI).
-- [ ] **Android** file access — MTP / `adb`, only when the device is unlocked and the
-  computer is owner-authorized.
+- **Drive recovery module (forensic tier)** — beats R-Studio, UFS Explorer, PhotoRec, TestDisk,
+  ddrescue, CrystalDiskInfo, into X-Ways/EnCase territory. Plans:
+  - [ ] P1 — read-only access + live-file recovery (browse+select + presets) + encrypted
+    staging + SMART health.
+  - [ ] P2 — bad-sector-tolerant imaging + recover-from-image.
+  - [ ] P3 — non-Windows filesystems (ext4, HFS+, APFS), read-only.
+  - [ ] P4 — deleted-file recovery (signature carving + FS-aware undelete).
+  - [ ] P5 — lost/deleted-partition recovery.
+  - [ ] P6 — forensic tier: RAID/spanned reconstruction + damaged-FS deep repair.
+- [ ] **LAN recovery stick** — boots a login-locked laptop, streams the drive over the LAN
+  (own live check, not CI).
+- [ ] **Android** file access — MTP / `adb`, only when unlocked and owner-authorized.
 - [ ] **iPhone** file access — AFC via libimobiledevice, only when unlocked and trusted.
 
-**Do not close out the device-pipeline module (module 1) until every unchecked recovery path
-above is built, or explicitly dropped by the owner.** Each remaining path is its own slice
-with its own design doc and plan.
+**Do not close out module 1 until every unchecked path above is built, or explicitly dropped by
+the owner.** The HARD BOUNDARY (no lock circumvention, read-only source) applies to all.
 
 ## What's left to the builder
 
