@@ -20,3 +20,6 @@ pub mod repair_rules;
 
 #[path = "../../src/aunlock_devices_rules.rs"]
 pub mod aunlock_devices_rules;
+
+#[path = "../../src/aunlock_recover_rules.rs"]
+pub mod aunlock_recover_rules;

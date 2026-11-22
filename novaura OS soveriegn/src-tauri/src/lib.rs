@@ -8,6 +8,7 @@ pub mod local_ai_stream;
 pub mod preview;
 pub mod sentinel_runner;
 pub mod aunlock_devices;
+pub mod aunlock_recover_rules;
 pub mod games;
 pub mod templates;
 pub mod repair;
