@@ -130,6 +130,27 @@ One subapp, built in order so value ships early and the plan stays plannable:
 3. **Standalone-window delivery** — native desktop window + shortcut + auto-update + tab
    tear-off, built reusably.
 
+### Recovery module — slice tracking (file/drive recovery, module 1)
+
+File/drive recovery (module 1) is being built in sub-slices. Status as of 2026-11-22:
+
+- [x] Device intake / ID over USB — Phase 1b-A read-only device bridge (shipped).
+- [ ] **Direct-attached unencrypted drive recovery (current slice):** mount an attached or
+  pulled internal **unencrypted** drive, pull the owner's standard user data (one-click),
+  stage it in the encrypted vault. A BitLocker-locked volume with no key is refused and
+  routed to reclaim — never force-opened (HARD BOUNDARY).
+- [ ] **Browse + select** recovery — navigate the mounted drive and pick files, layered on
+  top of the one-click pull.
+- [ ] **LAN recovery stick** — live-Linux image that boots a login-locked laptop and streams
+  the internal drive over the LAN (proven by its own live check, not CI).
+- [ ] **Android** file access — MTP / `adb`, only when the device is unlocked and the
+  computer is owner-authorized.
+- [ ] **iPhone** file access — AFC via libimobiledevice, only when unlocked and trusted.
+
+**Do not close out the device-pipeline module (module 1) until every unchecked recovery path
+above is built, or explicitly dropped by the owner.** Each remaining path is its own slice
+with its own design doc and plan.
+
 ## What's left to the builder
 
 - Exact Rust crates for USB enumeration and Windows drive mounting; the live-Linux base and
