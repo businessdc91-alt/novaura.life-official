@@ -401,6 +401,108 @@ pub fn staged_rel_path(drive_letter: &str, source: &Path) -> String {
     out
 }
 
+// ---- Streaming AEAD frame format (staged-file encryption) ----------------------------------
+//
+// Sealed stream layout:
+//   nonce_prefix (4 random bytes)
+//   then, per frame:  len (u32 LE, = ciphertext+tag length) || ciphertext || 16-byte tag
+// Frame i (0-based) is sealed with ChaCha20-Poly1305, nonce = nonce_prefix(4) || i as u64 LE (8),
+// and AAD b"more" for every frame except the final one, which uses b"last". Dropping the tail of
+// the stream therefore leaves no `last`-tagged frame and decryption reports `Truncated`; frames
+// cannot be reordered or spliced because the counter is part of the nonce. An empty plaintext
+// still emits exactly one (empty) `last` frame.
+
+use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload, AeadCore};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+
+/// Plaintext bytes per frame.
+pub const FRAME_SIZE: usize = 65536;
+const TAG_LEN: usize = 16;
+const AAD_MORE: &[u8] = b"more";
+const AAD_LAST: &[u8] = b"last";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CryptoError {
+    /// AEAD authentication failed (wrong key or tampered data).
+    Tag,
+    /// The stream ended without a frame tagged as the last one.
+    Truncated,
+    /// Malformed header, length prefix, or trailing data.
+    Format,
+}
+
+fn frame_nonce(prefix: &[u8; 4], counter: u64) -> Nonce {
+    let mut n = [0u8; 12];
+    n[..4].copy_from_slice(prefix);
+    n[4..].copy_from_slice(&counter.to_le_bytes());
+    *Nonce::from_slice(&n)
+}
+
+/// Seal `plaintext` into the framed stream described above, under a fresh random nonce prefix.
+pub fn encrypt_chunks(key: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    // A random 12-byte nonce from the AEAD's own generator; only its first 4 bytes are kept.
+    let rand = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let mut prefix = [0u8; 4];
+    prefix.copy_from_slice(&rand[..4]);
+
+    let mut out = Vec::with_capacity(4 + plaintext.len() + (plaintext.len() / FRAME_SIZE + 1) * (4 + TAG_LEN));
+    out.extend_from_slice(&prefix);
+    let empty: [&[u8]; 1] = [&[]];
+    let chunks: Vec<&[u8]> = if plaintext.is_empty() { empty.to_vec() } else { plaintext.chunks(FRAME_SIZE).collect() };
+    let last_idx = chunks.len() - 1;
+    for (i, chunk) in chunks.iter().enumerate() {
+        let aad = if i == last_idx { AAD_LAST } else { AAD_MORE };
+        let ct = cipher
+            .encrypt(&frame_nonce(&prefix, i as u64), Payload { msg: chunk, aad })
+            .expect("sealing a frame of at most FRAME_SIZE bytes cannot fail");
+        out.extend_from_slice(&(ct.len() as u32).to_le_bytes());
+        out.extend_from_slice(&ct);
+    }
+    out
+}
+
+/// Open a stream produced by `encrypt_chunks`. Never panics on malformed input.
+pub fn decrypt_chunks(key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let prefix: [u8; 4] = sealed.get(..4).ok_or(CryptoError::Format)?.try_into().map_err(|_| CryptoError::Format)?;
+    let mut pos = 4usize;
+    let mut out = Vec::new();
+    let mut counter: u64 = 0;
+    loop {
+        if pos == sealed.len() {
+            return Err(CryptoError::Truncated);
+        }
+        let len_bytes: [u8; 4] = sealed
+            .get(pos..pos.checked_add(4).ok_or(CryptoError::Format)?)
+            .ok_or(CryptoError::Format)?
+            .try_into()
+            .map_err(|_| CryptoError::Format)?;
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        if len < TAG_LEN || len > FRAME_SIZE + TAG_LEN {
+            return Err(CryptoError::Format);
+        }
+        let start = pos + 4;
+        let end = start.checked_add(len).ok_or(CryptoError::Format)?;
+        let frame = sealed.get(start..end).ok_or(CryptoError::Format)?;
+        let nonce = frame_nonce(&prefix, counter);
+        if let Ok(pt) = cipher.decrypt(&nonce, Payload { msg: frame, aad: AAD_MORE }) {
+            out.extend_from_slice(&pt);
+        } else if let Ok(pt) = cipher.decrypt(&nonce, Payload { msg: frame, aad: AAD_LAST }) {
+            if end != sealed.len() {
+                return Err(CryptoError::Format); // bytes after the final frame
+            }
+            out.extend_from_slice(&pt);
+            return Ok(out);
+        } else {
+            return Err(CryptoError::Tag);
+        }
+        pos = end;
+        counter = counter.checked_add(1).ok_or(CryptoError::Format)?;
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,5 +757,69 @@ mod tests {
         );
         assert_eq!(staged_rel_path("E:", Path::new("E:/a/../b.txt")), "E/a/b.txt");
         assert_eq!(staged_rel_path("", Path::new("x.txt")), "_/x.txt");
+    }
+    #[test]
+    fn encrypt_then_decrypt_round_trips() {
+        let key = [7u8; 32];
+        let data = vec![9u8; FRAME_SIZE * 2 + 123];
+        assert_eq!(decrypt_chunks(&key, &encrypt_chunks(&key, &data)).unwrap(), data);
+    }
+    #[test]
+    fn empty_plaintext_round_trips() {
+        let key = [1u8; 32];
+        assert_eq!(decrypt_chunks(&key, &encrypt_chunks(&key, &[])).unwrap(), Vec::<u8>::new());
+    }
+    #[test]
+    fn dropping_the_last_frame_is_detected() {
+        let key = [3u8; 32];
+        let data = vec![5u8; FRAME_SIZE * 3];
+        let sealed = encrypt_chunks(&key, &data);
+        let truncated = &sealed[..sealed.len() - FRAME_SIZE / 2]; // chop the tail
+        assert!(matches!(
+            decrypt_chunks(&key, truncated),
+            Err(CryptoError::Truncated) | Err(CryptoError::Format) | Err(CryptoError::Tag)
+        ));
+    }
+    #[test]
+    fn dropping_whole_final_frame_is_truncated() {
+        let key = [3u8; 32];
+        let sealed = encrypt_chunks(&key, &vec![5u8; FRAME_SIZE * 3]);
+        // Header 4 + 3 full frames of (4 + FRAME_SIZE + 16) + final empty-or-not frame; here the
+        // data is an exact multiple, so the 3rd frame is the last. Cut it off at a boundary.
+        let frame = 4 + FRAME_SIZE + 16;
+        assert_eq!(sealed.len(), 4 + 3 * frame);
+        assert!(matches!(decrypt_chunks(&key, &sealed[..4 + 2 * frame]), Err(CryptoError::Truncated)));
+    }
+    #[test]
+    fn wrong_key_fails_tag() {
+        let data = vec![2u8; 100];
+        let sealed = encrypt_chunks(&[4u8; 32], &data);
+        assert!(matches!(
+            decrypt_chunks(&[5u8; 32], &sealed),
+            Err(CryptoError::Tag) | Err(CryptoError::Format)
+        ));
+    }
+    #[test]
+    fn malformed_streams_error_without_panic() {
+        let key = [8u8; 32];
+        assert!(matches!(decrypt_chunks(&key, &[]), Err(CryptoError::Format)));
+        assert!(matches!(decrypt_chunks(&key, &[1, 2, 3]), Err(CryptoError::Format)));
+        assert!(matches!(decrypt_chunks(&key, &[0, 0, 0, 0]), Err(CryptoError::Truncated)));
+        // Length prefix claims more than is present.
+        assert!(matches!(decrypt_chunks(&key, &[0, 0, 0, 0, 255, 255, 255, 255, 1]), Err(CryptoError::Format)));
+        // Frame shorter than a tag.
+        assert!(matches!(decrypt_chunks(&key, &[0, 0, 0, 0, 2, 0, 0, 0, 1, 2]), Err(CryptoError::Format)));
+        // Bit flip in a valid stream.
+        let mut sealed = encrypt_chunks(&key, b"hello");
+        let n = sealed.len();
+        sealed[n - 1] ^= 1;
+        assert!(matches!(decrypt_chunks(&key, &sealed), Err(CryptoError::Tag)));
+    }
+    #[test]
+    fn data_after_the_last_frame_is_rejected() {
+        let key = [6u8; 32];
+        let mut sealed = encrypt_chunks(&key, b"abc");
+        sealed.extend_from_slice(&[0, 0, 0, 0]);
+        assert!(matches!(decrypt_chunks(&key, &sealed), Err(CryptoError::Format)));
     }
 }
