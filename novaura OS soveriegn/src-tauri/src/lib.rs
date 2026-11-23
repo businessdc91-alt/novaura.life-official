@@ -1968,6 +1968,8 @@ pub fn run() {
             aunlock_recover::aunlock_list_dir,
             aunlock_recover::aunlock_recover_files,
             aunlock_recover::aunlock_purge_recovered,
+            aunlock_recover::aunlock_verify_recovered,
+            aunlock_recover::aunlock_list_staged_jobs,
             native_build::cybeni_native_toolchains,
             native_build::cybeni_native_compile,
             llm::llm_catalog,

@@ -24,19 +24,35 @@ const ENCRYPTED_REASON =
   'This device is encrypted. Aunlock never recovers from encrypted storage — reclaim it (sanitize and reuse) instead.';
 const NO_RECOVERABLE =
   'No recoverable volume was found. Encrypted or unreadable volumes cannot be recovered — reclaim the device instead.';
+const UNVERIFIED =
+  "No recoverable volume was found: this drive's encryption status could not be verified, so it is refused. Run Sovereign as administrator so BitLocker status can be read — this alone is no reason to reclaim the drive.";
 const PURGE_PENDING =
   'Recovered files could not be deleted yet — the job is kept and the delete will be retried.';
+const BEING_DELETED =
+  'This job is being deleted (its recovered files are queued for deletion) — start a new job to recover again.';
+const DISCARDED_DURING =
+  'This job was discarded while the recovery ran — nothing from the run was kept, and its staged files are being deleted.';
 
 // Native error text can echo paths or secrets; it is redacted before it reaches a reason.
 const safeReason = (e) =>
   scanAndRedactOutboundSecrets([{ content: String(e?.message ?? e ?? 'Native call failed.') }]).messages[0].content;
+// Redact many native strings in one pass (skip/link reasons, the stop reason).
+const redactAll = (strings) =>
+  scanAndRedactOutboundSecrets(strings.map((s) => ({ content: String(s ?? '') }))).messages.map((m) => m.content);
+// The staging-folder name for a job id (mirrors the native job_key).
+const stagingKey = (id) => String(id ?? '').replace(/[^A-Za-z0-9_]/g, '_') || '_';
 
 export function createController({ catalog, native, now = Date.now, operator = 'operator' }) {
   const primaryDevice = async (jobId) => (await catalog.listDevices(jobId))[0] ?? null;
+  // 'purge-pending' is sticky: once a job is queued for deletion nothing moves it back to a working
+  // state (that would quietly undo a client's delete request and stop the retries).
   const setStatus = async (jobId, status, extra = {}) => {
     const job = await catalog.getJob(jobId);
-    if (job) await catalog.putJob({ ...job, status, ...extra });
+    if (!job) return;
+    if (job.status === 'purge-pending' && status !== 'purge-pending') return;
+    await catalog.putJob({ ...job, status, ...extra });
   };
+  const isBeingDeleted = async (jobId) => (await catalog.getJob(jobId))?.status === 'purge-pending';
   const gate = async (jobId) => canProceed(await catalog.getProvenance(jobId));
   // An explicitly named volume is checked against the resolved layout before anything reads it:
   // the device-level lock state cannot see one suspended/unlocked BitLocker volume on a disk that
@@ -73,11 +89,31 @@ export function createController({ catalog, native, now = Date.now, operator = '
     return { ok: false, reason: `${PURGE_PENDING} ${failure}` };
   };
   // Retention: everything past the 10-day / 3-job window, plus any job still waiting on a purge.
+  // Then reconcile the disk with the catalog: any staged job folder the catalog no longer knows
+  // (a crash, a lost database, a delete that raced a run) is purged — client data never lingers
+  // just because nothing records it. Best effort; a failure is retried on the next sweep.
   const sweep = async () => {
     const jobs = await catalog.listJobs();
     const ids = new Set(jobsToPurge(jobs, { now }));
     for (const j of jobs) if (j.status === 'purge-pending') ids.add(j.id);
     for (const id of ids) await purgeJob(id);
+
+    let staged = [];
+    try {
+      staged = await native.listStagedJobs();
+    } catch {
+      staged = [];
+    }
+    if (!Array.isArray(staged) || staged.length === 0) return;
+    const known = new Set((await catalog.listJobs()).map((j) => stagingKey(j.id)));
+    for (const id of staged) {
+      if (typeof id !== 'string' || id === '' || known.has(id)) continue;
+      try {
+        await native.purgeRecovered(id);
+      } catch {
+        /* retried next sweep */
+      }
+    }
   };
 
   return {
@@ -155,27 +191,30 @@ export function createController({ catalog, native, now = Date.now, operator = '
       }
     },
 
-    /** List a directory on a volume. File names are the owner's data, so authorization is required. */
+    /** List a directory on a volume. File names are the owner's data, so authorization is required.
+     * The native side binds the letter to THIS device and refuses any volume that is not a
+     * recoverable, non-system volume of it (one PowerShell call per listing). */
     async browse(jobId, { driveLetter, subpath = '' } = {}) {
       const g = await gate(jobId);
       if (!g.ok) return { ok: false, reason: g.reason };
+      if (await isBeingDeleted(jobId)) return { ok: false, reason: BEING_DELETED };
       const device = await primaryDevice(jobId);
       if (!device) return { ok: false, reason: NO_DEVICE };
       if (device.lockState === 'encrypted') return { ok: false, reason: ENCRYPTED_REASON };
-      const checked = await recoverableLetter(device, driveLetter);
-      if (!checked.ok) return { ok: false, reason: checked.reason };
       try {
-        return { ok: true, entries: await native.listDir(checked.letter, subpath) };
+        return { ok: true, entries: await native.listDir(device, driveLetter, subpath) };
       } catch (e) {
         return { ok: false, reason: safeReason(e) };
       }
     },
 
     /** Recover files into staging. Only metadata rows (path, size, stagedRef, sourceType,
-     * checksum) reach the catalog — never contents. */
+     * checksum) reach the catalog — never contents. The native side binds each letter to THIS
+     * device and refuses a second concurrent run on the job. */
     async recover(jobId, { driveLetter = null, selection = { preset: true } } = {}) {
       const g = await gate(jobId);
       if (!g.ok) return { ok: false, reason: g.reason };
+      if (await isBeingDeleted(jobId)) return { ok: false, reason: BEING_DELETED };
       const device = await primaryDevice(jobId);
       if (!device) return { ok: false, reason: NO_DEVICE };
       if (device.lockState === 'encrypted') return { ok: false, reason: ENCRYPTED_REASON };
@@ -186,29 +225,50 @@ export function createController({ catalog, native, now = Date.now, operator = '
         if (!checked.ok) return { ok: false, reason: checked.reason };
         letters = [checked.letter];
       } else {
+        let volumes;
         try {
-          letters = (await native.resolveVolumes(device)).filter(isRecoverableVolume).map((v) => v.driveLetter);
+          volumes = await native.resolveVolumes(device);
         } catch (e) {
           return { ok: false, reason: safeReason(e) };
         }
+        const list = Array.isArray(volumes) ? volumes : [];
+        letters = list.filter(isRecoverableVolume).map((v) => v.driveLetter);
+        if (!letters.length) {
+          // Unverifiable encryption is not evidence of encryption: say so, don't send it to reclaim.
+          const unverified = list.some((v) => v?.encrypted !== true && v?.encryptionKnown === false);
+          return { ok: false, reason: unverified ? UNVERIFIED : NO_RECOVERABLE };
+        }
       }
-      if (!letters.length) return { ok: false, reason: NO_RECOVERABLE };
 
       const manifest = [];
       const skipped = [];
+      const links = [];
       let complete = true;
       let stopReason = null;
       let failures = 0;
       for (const letter of letters) {
         let outcome;
         try {
-          outcome = await native.recoverFiles(jobId, letter, selection);
+          outcome = await native.recoverFiles(jobId, device, letter, selection);
         } catch (e) {
           failures += 1;
           complete = false;
           skipped.push({ path: `${letter}:\\`, reason: safeReason(e) });
           continue;
         }
+        // The job may have been discarded (or swept) while this run was going. Its rows are not
+        // written, and its staged bytes are deleted again — never left behind unrecorded.
+        const live = await catalog.getJob(jobId);
+        if (!live) {
+          try {
+            await native.purgeRecovered(jobId);
+          } catch {
+            /* the sweep's orphan reconciliation retries */
+          }
+          return { ok: false, reason: DISCARDED_DURING };
+        }
+        if (live.status === 'purge-pending') return { ok: false, reason: DISCARDED_DURING };
+
         for (const entry of outcome?.entries ?? []) {
           // Only metadata leaves this loop — the same five fields go to the catalog and the caller.
           const { path, size, stagedRef, sourceType, checksum } = entry;
@@ -216,9 +276,18 @@ export function createController({ catalog, native, now = Date.now, operator = '
           await catalog.putRecovered({ jobId, ...row });
           manifest.push(row);
         }
-        skipped.push(...(outcome?.skipped ?? []));
+        const outSkipped = Array.isArray(outcome?.skipped) ? outcome.skipped : [];
+        const outLinks = Array.isArray(outcome?.links) ? outcome.links : [];
+        const reasons = redactAll([
+          ...outSkipped.map((s) => s?.reason),
+          ...outLinks.map((s) => s?.reason),
+          outcome?.stopReason ?? '',
+        ]);
+        outSkipped.forEach((s, i) => skipped.push({ path: String(s?.path ?? ''), reason: reasons[i] }));
+        outLinks.forEach((s, i) => links.push({ path: String(s?.path ?? ''), reason: reasons[outSkipped.length + i] }));
         if (!outcome?.complete) complete = false;
-        stopReason = stopReason ?? outcome?.stopReason ?? null;
+        const stop = outcome?.stopReason ? reasons[reasons.length - 1] : null;
+        stopReason = stopReason ?? stop;
       }
       if (failures === letters.length && !manifest.length) {
         return { ok: false, reason: skipped[0]?.reason ?? 'Recovery failed.' };
@@ -228,7 +297,23 @@ export function createController({ catalog, native, now = Date.now, operator = '
         recoverSkippedCount: skipped.length,
         recoverStopReason: stopReason,
       });
-      return { ok: true, manifest, skipped, complete, stopReason };
+      return { ok: true, manifest, skipped, links, complete, stopReason };
+    },
+
+    /** Check a staged copy decrypts to exactly the recorded size and checksum. Uses the catalog's
+     * own row (not caller-supplied values); the owner's data, so authorization is required. */
+    async verifyRecovered(jobId, stagedRef) {
+      const g = await gate(jobId);
+      if (!g.ok) return { ok: false, reason: g.reason };
+      if (await isBeingDeleted(jobId)) return { ok: false, reason: BEING_DELETED };
+      const row = (await catalog.listRecovered(jobId)).find((r) => r.stagedRef === stagedRef);
+      if (!row) return { ok: false, reason: 'No staged file with that reference on this job.' };
+      try {
+        const verified = await native.verifyRecovered(jobId, row);
+        return { ok: true, verified: verified === true };
+      } catch (e) {
+        return { ok: false, reason: safeReason(e) };
+      }
     },
 
     async sanitize(jobId) {
@@ -297,6 +382,8 @@ export function getController() {
       resolveVolumes: recovery.resolveVolumes,
       listDir: recovery.listDir,
       recoverFiles: recovery.recoverFiles,
+      verifyRecovered: recovery.verifyRecovered,
+      listStagedJobs: recovery.listStagedJobs,
       purgeRecovered: stagedBytesPurger({ purgeRecovered: recovery.purgeRecovered, isTauri }),
       wipe: placeholderNative.wipe,
     };

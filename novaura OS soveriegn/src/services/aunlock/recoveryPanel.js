@@ -66,13 +66,17 @@ export function describeHealth(health) {
   return { label: parts.join(' · '), tone };
 }
 
-/** Why a volume was refused — encrypted, unknown encryption state, or an unreadable filesystem. */
+/**
+ * Why a volume was refused — encrypted, unverifiable encryption state, or an unreadable
+ * filesystem. An unverifiable status is NOT evidence of encryption (BitLocker status usually
+ * needs Sovereign to run as administrator), so it never tells the operator to reclaim the drive.
+ */
 function refusalReason(v) {
   if (v.encrypted === true) {
     return 'Encrypted (BitLocker) — Aunlock never recovers encrypted volumes. Reclaim the device instead.';
   }
-  if (v.encrypted !== false) {
-    return 'Encryption status unknown — refused until it can be verified. Reclaim the device instead.';
+  if (v.encryptionKnown === false || v.encrypted !== false) {
+    return 'Encryption status could not be verified, so this volume is refused. Run Sovereign as administrator so BitLocker status can be read.';
   }
   return 'Unreadable or unsupported filesystem — reclaim the device instead.';
 }
@@ -101,7 +105,9 @@ export function describeVolumes(volumes) {
 /**
  * describeDirEntries(entries) -> { rows }
  * Folders first, then files, each sorted by name (case-insensitive).
- * row: { name, isDir, size, humanSize } — folders carry no size.
+ * row: { name, isDir, size, humanSize, note, selectable } — folders carry no size. An entry the
+ * native side won't read (a link, an online-only cloud file, an EFS file) carries its `note` and
+ * is not selectable.
  */
 export function describeDirEntries(entries) {
   const list = (Array.isArray(entries) ? entries : []).filter((e) => e && typeof e.name === 'string');
@@ -109,12 +115,17 @@ export function describeDirEntries(entries) {
   const dirs = list.filter((e) => e.isDir).sort(byName);
   const files = list.filter((e) => !e.isDir).sort(byName);
   return {
-    rows: [...dirs, ...files].map((e) => ({
-      name: e.name,
-      isDir: Boolean(e.isDir),
-      size: e.isDir ? null : (e.size ?? null),
-      humanSize: e.isDir ? null : humanSize(e.size),
-    })),
+    rows: [...dirs, ...files].map((e) => {
+      const note = typeof e.note === 'string' && e.note ? e.note : null;
+      return {
+        name: e.name,
+        isDir: Boolean(e.isDir) && !note,
+        size: e.isDir ? null : (e.size ?? null),
+        humanSize: e.isDir ? null : humanSize(e.size),
+        note,
+        selectable: !note,
+      };
+    }),
   };
 }
 
@@ -139,25 +150,35 @@ export function describeStaged(recovered) {
 }
 
 /**
- * describeOutcome(result) -> { tone, label, skipped }
+ * describeOutcome(result) -> { tone, label, skipped, links }
  * result: the controller's recover() return. ok+complete ⇒ 'ok'; ok but partial ⇒ 'warn' with the
- * skip list and why it stopped; refused/failed ⇒ 'fail' with the reason.
+ * skip list and why it stopped; ok but nothing recovered ⇒ 'warn'; refused/failed ⇒ 'fail' with
+ * the reason. Links (junctions/symlinks that were not followed) are listed but are not a loss.
  */
 export function describeOutcome(result) {
   if (!result || result.ok !== true) {
-    return { tone: 'fail', label: result?.reason || 'Recovery did not run.', skipped: [] };
+    return { tone: 'fail', label: result?.reason || 'Recovery did not run.', skipped: [], links: [] };
   }
+  const pairs = (list) =>
+    (Array.isArray(list) ? list : []).map((s) => ({ path: String(s?.path ?? ''), reason: String(s?.reason ?? '') }));
   const files = Array.isArray(result.manifest) ? result.manifest : [];
-  const skipped = (Array.isArray(result.skipped) ? result.skipped : []).map((s) => ({
-    path: String(s?.path ?? ''),
-    reason: String(s?.reason ?? ''),
-  }));
+  const skipped = pairs(result.skipped);
+  const links = pairs(result.links);
   const bytes = files.reduce((n, f) => n + sizeOf(f?.size), 0);
   const count = `${files.length} file${files.length === 1 ? '' : 's'}`;
+  const linksNote = links.length ? `${links.length} link${links.length === 1 ? '' : 's'} not followed` : null;
   if (result.complete === true && skipped.length === 0) {
-    return { tone: 'ok', label: `Recovered ${count} (${humanSize(bytes)})`, skipped };
+    if (files.length === 0) {
+      const parts = ['Nothing was recovered — the selection held no readable files'];
+      if (linksNote) parts.push(linksNote);
+      return { tone: 'warn', label: parts.join(' · '), skipped, links };
+    }
+    const parts = [`Recovered ${count} (${humanSize(bytes)})`];
+    if (linksNote) parts.push(linksNote);
+    return { tone: 'ok', label: parts.join(' · '), skipped, links };
   }
   const parts = [`Partial recovery: ${count} (${humanSize(bytes)})`, `${skipped.length} skipped`];
   if (result.stopReason) parts.push(`stopped — ${result.stopReason}`);
-  return { tone: 'warn', label: parts.join(' · '), skipped };
+  if (linksNote) parts.push(linksNote);
+  return { tone: 'warn', label: parts.join(' · '), skipped, links };
 }

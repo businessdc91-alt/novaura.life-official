@@ -202,7 +202,10 @@ $out=foreach($d in (Get-Disk)){
     if($k -and $enc.ContainsKey($k)){ $e=$enc[$k] }
     [pscustomobject]@{
       Serial=[string]$d.SerialNumber;
+      DiskNumber=$d.Number;
       DiskSize=$d.Size;
+      IsSystem=[bool]$d.IsSystem;
+      IsBoot=[bool]$d.IsBoot;
       DriveLetter=[string]$p.DriveLetter;
       FileSystem=$fs;
       FileSystemLabel=[string]$v.FileSystemLabel;
@@ -222,6 +225,17 @@ pub struct VolumeSpec {
     pub size_bytes: Option<u64>,
     pub encrypted: bool,
     pub readable: bool,
+    /// False when BitLocker status could not be read for this volume (cmdlet missing, not elevated,
+    /// no drive letter). Such a volume is refused — but it is NOT known to be encrypted, so the
+    /// operator is told to verify it, not to reclaim it.
+    #[serde(default)]
+    pub encryption_known: bool,
+    /// Windows disk number, to tell apart two disks that report the same serial.
+    #[serde(default)]
+    pub disk_number: Option<u64>,
+    /// On a system or boot disk (or the flags were missing — deny-by-default): never a source.
+    #[serde(default)]
+    pub system_disk: bool,
 }
 
 const MOUNTABLE_FS: [&str; 4] = ["NTFS", "exFAT", "FAT32", "FAT"];
@@ -262,7 +276,19 @@ pub fn resolve_volumes(json: &str, serial: Option<&str>, size_bytes: Option<u64>
             None => false,
         }
     };
-    let matched: Vec<&Value> = items.into_iter().filter(|o| matches(o)).collect();
+    let mut matched: Vec<&Value> = items.into_iter().filter(|o| matches(o)).collect();
+    // One serial can span several disks: USB-SATA bridges and dual-bay docks often report the
+    // same (or all-zero) serial. Two different clients' disks must never merge under one job, so
+    // the matches must come from ONE disk number — narrowed by size if that settles it, else deny.
+    if distinct_disks(&matched) > 1 {
+        match size_bytes {
+            Some(sz) => matched.retain(|o| opt_u64(o, "DiskSize") == Some(sz)),
+            None => return Vec::new(),
+        }
+        if matched.is_empty() || distinct_disks(&matched) > 1 {
+            return Vec::new();
+        }
+    }
     // Size-only matching must identify exactly one disk; several same-size disks (or rows we
     // cannot tell apart for lack of a serial) are ambiguous, so deny rather than guess.
     if serial.is_none() {
@@ -280,10 +306,21 @@ pub fn resolve_volumes(json: &str, serial: Option<&str>, size_bytes: Option<u64>
     matched.into_iter().map(volume_spec_from).collect()
 }
 
+/// How many different disk numbers the rows span (rows without one count as a single "unknown").
+fn distinct_disks(rows: &[&Value]) -> usize {
+    let mut keys: Vec<Option<u64>> = rows.iter().map(|o| opt_u64(o, "DiskNumber")).collect();
+    keys.sort();
+    keys.dedup();
+    keys.len()
+}
+
 fn volume_spec_from(o: &Value) -> VolumeSpec {
     let fs_type = non_empty_str(o, "FileSystem");
     let enc_flag = o.get("Encrypted").and_then(Value::as_bool);
     let known_fs = fs_type.as_deref().is_some_and(is_mountable_fs);
+    // Deny-by-default: a row that doesn't say it is off the system/boot disk is treated as on it.
+    let flag = |k: &str| o.get(k).and_then(Value::as_bool);
+    let system_disk = !matches!((flag("IsSystem"), flag("IsBoot")), (Some(false), Some(false)));
     VolumeSpec {
         drive_letter: non_empty_str(o, "DriveLetter"),
         fs_type,
@@ -291,7 +328,50 @@ fn volume_spec_from(o: &Value) -> VolumeSpec {
         size_bytes: opt_u64(o, "VolumeSize"),
         encrypted: enc_flag.unwrap_or(false),
         readable: known_fs && enc_flag.is_some(),
+        encryption_known: enc_flag.is_some(),
+        disk_number: opt_u64(o, "DiskNumber"),
+        system_disk,
     }
+}
+
+/// Why a volume cannot be read live. Encrypted routes to reclaim; an unverifiable status does
+/// NOT (the drive may well be plaintext — the status just couldn't be read).
+pub fn refusal_reason(v: &VolumeSpec) -> &'static str {
+    if v.encrypted {
+        "is encrypted (BitLocker) — Aunlock never recovers encrypted volumes; use the reclaim path"
+    } else if !v.encryption_known {
+        "has an encryption status that could not be verified, so it is refused. Run Sovereign as administrator so BitLocker status can be read"
+    } else {
+        "has an unreadable or unsupported filesystem and cannot be recovered live"
+    }
+}
+
+/// The trust-boundary check every native command that READS a volume runs first: the letter must
+/// be one of THIS device's volumes (identified by `serial`/`size_bytes`), not on a system or boot
+/// disk, and recoverable (plaintext, verified, mountable). Anything else is an `Err` — never a
+/// silent empty result.
+pub fn bind_volume(json: &str, serial: Option<&str>, size_bytes: Option<u64>, drive_letter: &str) -> Result<VolumeSpec, String> {
+    let want = drive_letter.trim().trim_end_matches(['\\', '/']).trim_end_matches(':').to_ascii_uppercase();
+    if want.len() != 1 || !want.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err("invalid drive letter".to_string());
+    }
+    let vols = resolve_volumes(json, serial, size_bytes);
+    if vols.is_empty() {
+        return Err("the intaken device's volumes could not be identified".to_string());
+    }
+    let mut hits = vols
+        .into_iter()
+        .filter(|v| v.drive_letter.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&want)));
+    let (Some(v), None) = (hits.next(), hits.next()) else {
+        return Err(format!("volume {want}: does not belong to the intaken device"));
+    };
+    if v.system_disk {
+        return Err(format!("volume {want}: is on this computer's system disk — not a recovery source"));
+    }
+    if !volume_is_recoverable(&v) {
+        return Err(format!("volume {want}: {}", refusal_reason(&v)));
+    }
+    Ok(v)
 }
 
 /// Find the volume mounted at `drive_letter` across ALL disks in the volumes-query JSON. `None`
@@ -346,6 +426,19 @@ pub fn select_preset_profiles(entries: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// OneDrive folders inside a user profile (`OneDrive`, `OneDrive - <Org>`). With OneDrive
+/// "known folder" backup, Desktop/Documents/Pictures live in here, not at the profile root.
+pub fn onedrive_roots(entries: &[String]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| {
+            let t = e.trim().to_ascii_lowercase();
+            t == "onedrive" || t.starts_with("onedrive - ")
+        })
+        .cloned()
+        .collect()
+}
+
 /// Lexically normalize a path: drop `.`, resolve `..` against a preceding normal component.
 /// `None` when a `..` would climb past the start/root/prefix (ambiguous => caller denies).
 fn normalize_lexical(p: &Path) -> Option<Vec<Component<'_>>> {
@@ -366,7 +459,7 @@ fn normalize_lexical(p: &Path) -> Option<Vec<Component<'_>>> {
 }
 
 /// Traversal guard: true only when `candidate`, after lexical normalization, is `base` itself or
-/// lies beneath it. Lexical ONLY (no I/O, symlinks are handled by `should_skip_reparse`). Fail
+/// lies beneath it. Lexical ONLY (no I/O; links are handled by `classify_entry`). Fail
 /// closed: an empty base, a `..` that climbs past the root, a different drive, or a relative vs
 /// absolute mismatch all give false. Comparison is case-sensitive, so a case-variant spelling is
 /// rejected rather than allowed.
@@ -380,10 +473,56 @@ pub fn path_is_contained(base: &Path, candidate: &Path) -> bool {
     b.iter().zip(c.iter()).all(|(x, y)| x == y)
 }
 
-/// Never follow symlinks or reparse points (junctions etc.): they can redirect recovery outside
-/// the intended scope. Skip when either flag is set.
-pub fn should_skip_reparse(is_symlink: bool, is_reparse_point: bool) -> bool {
-    is_symlink || is_reparse_point
+pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+pub const FILE_ATTRIBUTE_OFFLINE: u32 = 0x0000_1000;
+pub const FILE_ATTRIBUTE_ENCRYPTED: u32 = 0x0000_4000;
+pub const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
+pub const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+
+/// How the recovery walk treats one directory entry, judged from its OWN metadata (never by
+/// following it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Read it (files) / walk it (folders). Includes data-bearing reparse points: compressed (WOF),
+    /// dedup, and an already-downloaded cloud file.
+    Normal,
+    /// A junction or symlink (a name-surrogate reparse point — what `is_symlink` reports). Never
+    /// followed: it can point outside the selection or the volume. Listed, not counted as a loss.
+    Link,
+    /// An online-only cloud file (recall/offline attributes). Not read: opening it would download
+    /// it, which writes to the source drive.
+    CloudOnline,
+    /// A file encrypted with Windows file-level encryption (EFS). Not recovered — HARD BOUNDARY.
+    Efs,
+}
+
+/// Classify an entry. Folders are walked even when cloud- or EFS-flagged: their files are judged
+/// one by one, so locally present data inside them is still recovered.
+pub fn classify_entry(is_symlink: bool, is_dir: bool, attributes: u32) -> EntryKind {
+    if is_symlink {
+        return EntryKind::Link;
+    }
+    if is_dir {
+        return EntryKind::Normal;
+    }
+    let recall = FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_OFFLINE;
+    if attributes & recall != 0 {
+        return EntryKind::CloudOnline;
+    }
+    if attributes & FILE_ATTRIBUTE_ENCRYPTED != 0 {
+        return EntryKind::Efs;
+    }
+    EntryKind::Normal
+}
+
+/// The reason recorded (or shown in a folder listing) for an entry that is not read.
+pub fn entry_skip_reason(kind: EntryKind) -> Option<&'static str> {
+    match kind {
+        EntryKind::Normal => None,
+        EntryKind::Link => Some("link (junction/symlink) — not followed"),
+        EntryKind::CloudOnline => Some("online-only cloud file — not downloaded"),
+        EntryKind::Efs => Some("file-based encryption (EFS) — not recovered"),
+    }
 }
 
 /// Free space that must remain on the staging disk after a copy.
@@ -428,21 +567,28 @@ pub struct SkippedEntry {
     pub reason: String,
 }
 
-/// Result of a recovery run: everything staged, everything omitted (with why), and whether the
-/// run covered the whole selection.
+/// Result of a recovery run: everything staged, everything omitted (with why), the links that
+/// were not followed (informational), and whether the run covered the whole selection.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverOutcome {
     pub entries: Vec<RecoveredEntry>,
     pub skipped: Vec<SkippedEntry>,
+    pub links: Vec<SkippedEntry>,
     pub complete: bool,
     pub stop_reason: Option<String>,
 }
 
-/// `complete` only when nothing was skipped and the run was not stopped.
-pub fn build_outcome(entries: Vec<RecoveredEntry>, skipped: Vec<SkippedEntry>, stop_reason: Option<String>) -> RecoverOutcome {
+/// `complete` only when nothing was skipped and the run was not stopped. Links (junctions and
+/// symlinks, e.g. a profile's legacy "My Documents") are listed but don't make a run partial.
+pub fn build_outcome(
+    entries: Vec<RecoveredEntry>,
+    skipped: Vec<SkippedEntry>,
+    links: Vec<SkippedEntry>,
+    stop_reason: Option<String>,
+) -> RecoverOutcome {
     let complete = skipped.is_empty() && stop_reason.is_none();
-    RecoverOutcome { entries, skipped, complete, stop_reason }
+    RecoverOutcome { entries, skipped, links, complete, stop_reason }
 }
 
 /// The human-readable stop reason for a backpressure decision (`None` for `Proceed`).
@@ -457,14 +603,123 @@ pub fn stop_reason(d: StageDecision) -> Option<&'static str> {
 /// `app_data/aunlock_recovered/<job_id>` with every char outside `[A-Za-z0-9_]` in `job_id`
 /// replaced by `_`, so a hostile id cannot traverse. An empty id becomes `_`.
 pub fn staging_dir(app_data: &Path, job_id: &str) -> PathBuf {
-    let mut id: String = job_id
+    app_data.join("aunlock_recovered").join(job_key(job_id))
+}
+
+/// The sanitized job id used as the staging folder name and the in-flight registry key.
+pub fn job_key(job_id: &str) -> String {
+    let id: String = job_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
         .collect();
-    if id.is_empty() {
-        id.push('_');
+    if id.is_empty() { "_".to_string() } else { id }
+}
+
+/// Staging folder names that `staging_dir` could have produced (anything else is left alone by
+/// the orphan sweep).
+pub fn staged_job_ids(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .cloned()
+        .collect()
+}
+
+/// True when `staging` is on drive `drive` — the source volume — or when its drive can't be told
+/// (fail closed). A network path (`\\server\share`, `\\?\UNC\…`) is never the local source.
+pub fn staging_on_source(staging: &Path, drive: char) -> bool {
+    let s = staging.to_string_lossy();
+    if s.starts_with(r"\\?\UNC\") || (s.starts_with(r"\\") && !s.starts_with(r"\\?\")) {
+        return false;
     }
-    app_data.join("aunlock_recovered").join(id)
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    let mut it = s.chars();
+    match (it.next(), it.next()) {
+        (Some(c), Some(':')) if c.is_ascii_alphabetic() => c.eq_ignore_ascii_case(&drive),
+        _ => true,
+    }
+}
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// Which jobs have a recovery running, each with a cancel flag. A second run on the same job is
+/// refused (two runs would overwrite each other's staged files), and a purge of a running job
+/// cancels it instead of deleting under it — the purge is retried once the run has stopped.
+#[derive(Default)]
+pub struct InFlight {
+    jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+/// Held for the length of one recovery run; dropping it marks the job as no longer running.
+pub struct RunGuard<'a> {
+    reg: &'a InFlight,
+    job: String,
+    cancel: Arc<AtomicBool>,
+}
+
+impl InFlight {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+        self.jobs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    /// Start a run for `job`; `None` when one is already running.
+    pub fn begin(&self, job: &str) -> Option<RunGuard<'_>> {
+        let mut m = self.lock();
+        if m.contains_key(job) {
+            return None;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        m.insert(job.to_string(), Arc::clone(&cancel));
+        Some(RunGuard { reg: self, job: job.to_string(), cancel })
+    }
+    /// Ask a running job to stop. `true` when a run was active — the caller must not purge yet.
+    pub fn cancel(&self, job: &str) -> bool {
+        match self.lock().get(job) {
+            Some(flag) => {
+                flag.store(true, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        }
+    }
+    pub fn is_running(&self, job: &str) -> bool {
+        self.lock().contains_key(job)
+    }
+}
+
+impl RunGuard<'_> {
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancel)
+    }
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        self.reg.lock().remove(&self.job);
+    }
+}
+
+/// Largest sealed key a staged record may claim (a DPAPI blob of a base64 32-byte key is far
+/// smaller). Guards the verifier against a corrupted or hostile length field.
+pub const SEALED_KEY_MAX: usize = 4096;
+
+/// Upper bound of `encrypt_chunks` output for `plain_len` plaintext bytes: the 4-byte nonce
+/// prefix plus, per frame, a 4-byte length, up to `FRAME_SIZE` ciphertext and the tag.
+pub fn record_ct_max(plain_len: usize) -> usize {
+    let frames = plain_len.div_ceil(FRAME_SIZE).max(1);
+    4usize.saturating_add(frames.saturating_mul(4 + FRAME_SIZE + TAG_LEN))
+}
+
+/// Whether one staged record's length fields are plausible for a ≤16 MiB block.
+pub fn record_lengths_ok(sealed_key_len: usize, ct_len: usize) -> bool {
+    (1..=SEALED_KEY_MAX).contains(&sealed_key_len) && ct_len <= record_ct_max(16 * 1024 * 1024)
 }
 
 /// Relative path inside the staging tree: `<DRIVE>/<source components without root/prefix>`,
@@ -756,6 +1011,9 @@ mod tests {
             size_bytes: None,
             encrypted: enc,
             readable,
+            encryption_known: true,
+            disk_number: None,
+            system_disk: false,
         }
     }
 
@@ -889,12 +1147,6 @@ mod tests {
         assert!(!path_is_contained(base, Path::new("Users/sam/a.txt")));
         assert!(path_is_contained(Path::new("E:/Users/sam/../x"), Path::new("E:/Users/x/a")));
         assert!(!path_is_contained(Path::new(""), Path::new("E:/a")));
-    }
-    #[test]
-    fn reparse_points_are_skipped() {
-        assert!(should_skip_reparse(true, false));
-        assert!(should_skip_reparse(false, true));
-        assert!(!should_skip_reparse(false, false));
     }
     #[test]
     fn backpressure_stops_on_disk_and_budget() {
@@ -1056,12 +1308,12 @@ mod tests {
     }
     #[test]
     fn outcome_complete_only_when_nothing_skipped_or_stopped() {
-        let o = build_outcome(vec![entry("a")], vec![], None);
+        let o = build_outcome(vec![entry("a")], vec![], vec![], None);
         assert!(o.complete && o.stop_reason.is_none() && o.skipped.is_empty());
         let skip = SkippedEntry { path: "b".into(), reason: "unreadable".into() };
-        let o = build_outcome(vec![entry("a")], vec![skip], None);
+        let o = build_outcome(vec![entry("a")], vec![skip], vec![], None);
         assert!(!o.complete && o.stop_reason.is_none() && o.entries.len() == 1);
-        let o = build_outcome(vec![entry("a")], vec![], Some("disk full".into()));
+        let o = build_outcome(vec![entry("a")], vec![], vec![], Some("disk full".into()));
         assert!(!o.complete && o.stop_reason.as_deref() == Some("disk full"));
     }
     #[test]
@@ -1072,7 +1324,7 @@ mod tests {
     }
     #[test]
     fn outcome_serializes_camel_case() {
-        let o = build_outcome(vec![], vec![], Some("budget".into()));
+        let o = build_outcome(vec![], vec![], vec![], Some("budget".into()));
         let v = serde_json::to_value(&o).unwrap();
         assert_eq!(v["stopReason"], "budget");
         assert_eq!(v["complete"], false);
@@ -1091,5 +1343,200 @@ mod tests {
         assert!(volume_by_letter("garbage", "E").is_none());
         let dup = r#"[{"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},{"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false}]"#;
         assert!(volume_by_letter(dup, "E").is_none());
+    }
+
+    // ---- final-review fix wave ----
+
+    #[test]
+    fn volumes_query_projects_disk_identity_and_stays_read_only() {
+        for needle in ["DiskNumber", "IsSystem", "IsBoot"] {
+            assert!(AUNLOCK_VOLUMES_QUERY.contains(needle), "missing {needle}");
+        }
+        assert!(recover_query_is_read_only(AUNLOCK_VOLUMES_QUERY));
+    }
+    #[test]
+    fn one_serial_on_two_disks_is_denied_unless_size_narrows_it() {
+        let j = r#"[{"Serial":"0000","DiskNumber":1,"DiskSize":1000,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},
+                    {"Serial":"0000","DiskNumber":2,"DiskSize":2000,"DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        assert!(resolve_volumes(j, Some("0000"), None).is_empty());
+        let v = resolve_volumes(j, Some("0000"), Some(2000));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].drive_letter.as_deref(), Some("F"));
+        let same = j.replace("2000", "1000");
+        assert!(resolve_volumes(&same, Some("0000"), Some(1000)).is_empty());
+        let one = r#"[{"Serial":"S","DiskNumber":3,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},
+                      {"Serial":"S","DiskNumber":3,"DriveLetter":"G","FileSystem":"exFAT","Encrypted":false}]"#;
+        assert_eq!(resolve_volumes(one, Some("S"), None).len(), 2);
+    }
+    #[test]
+    fn size_only_match_across_two_disk_numbers_is_denied() {
+        let j = r#"[{"DiskNumber":1,"DiskSize":1000,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false},
+                    {"DiskNumber":2,"DiskSize":1000,"DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        assert!(resolve_volumes(j, None, Some(1000)).is_empty());
+    }
+    #[test]
+    fn system_or_boot_flags_carry_into_the_spec_and_missing_means_system() {
+        let j = r#"[{"Serial":"S","DriveLetter":"C","FileSystem":"NTFS","Encrypted":false,"IsSystem":true,"IsBoot":false},
+                    {"Serial":"S","DriveLetter":"D","FileSystem":"NTFS","Encrypted":false,"IsSystem":false,"IsBoot":true},
+                    {"Serial":"S","DriveLetter":"E","FileSystem":"NTFS","Encrypted":false,"IsSystem":false,"IsBoot":false},
+                    {"Serial":"S","DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        let v = resolve_volumes(j, Some("S"), None);
+        let sys = |l: &str| v.iter().find(|x| x.drive_letter.as_deref() == Some(l)).unwrap().system_disk;
+        assert!(sys("C") && sys("D") && !sys("E") && sys("F"));
+    }
+    #[test]
+    fn unverifiable_encryption_is_marked_unknown_not_plaintext() {
+        let j = r#"[{"Serial":"S","DriveLetter":"E","FileSystem":"NTFS"},
+                    {"Serial":"S","DriveLetter":"F","FileSystem":"NTFS","Encrypted":false}]"#;
+        let v = resolve_volumes(j, Some("S"), None);
+        assert!(!v[0].encryption_known && !volume_is_recoverable(&v[0]));
+        assert!(v[1].encryption_known && volume_is_recoverable(&v[1]));
+        let s = serde_json::to_value(&v[0]).unwrap();
+        assert_eq!(s["encryptionKnown"], false);
+        assert!(s.get("systemDisk").is_some() && s.get("diskNumber").is_some());
+    }
+
+    const BIND_JSON: &str = r#"[
+      {"Serial":"CLIENT","DiskNumber":1,"DriveLetter":"E","FileSystem":"NTFS","Encrypted":false,"IsSystem":false,"IsBoot":false},
+      {"Serial":"CLIENT","DiskNumber":1,"DriveLetter":"F","FileSystem":"NTFS","Encrypted":true,"IsSystem":false,"IsBoot":false},
+      {"Serial":"CLIENT","DiskNumber":1,"DriveLetter":"G","FileSystem":"NTFS","IsSystem":false,"IsBoot":false},
+      {"Serial":"BENCH","DiskNumber":0,"DriveLetter":"C","FileSystem":"NTFS","Encrypted":false,"IsSystem":true,"IsBoot":true},
+      {"Serial":"OTHER","DiskNumber":2,"DriveLetter":"H","FileSystem":"NTFS","Encrypted":false,"IsSystem":false,"IsBoot":false}
+    ]"#;
+    #[test]
+    fn bind_volume_accepts_only_a_recoverable_volume_of_the_intaken_device() {
+        let v = bind_volume(BIND_JSON, Some("CLIENT"), None, "e:").unwrap();
+        assert_eq!(v.drive_letter.as_deref(), Some("E"));
+        assert!(bind_volume(BIND_JSON, Some("CLIENT"), None, "H").is_err()); // another device
+        assert!(bind_volume(BIND_JSON, Some("CLIENT"), None, "C").is_err()); // the bench's own disk
+        assert!(bind_volume(BIND_JSON, Some("CLIENT"), None, "Z").is_err());
+        assert!(bind_volume(BIND_JSON, Some("CLIENT"), None, "EF").is_err());
+    }
+    #[test]
+    fn bind_volume_refuses_encrypted_and_unverifiable_with_distinct_reasons() {
+        let enc = bind_volume(BIND_JSON, Some("CLIENT"), None, "F").unwrap_err();
+        assert!(enc.contains("encrypted") && enc.contains("reclaim"), "{enc}");
+        let unk = bind_volume(BIND_JSON, Some("CLIENT"), None, "G").unwrap_err();
+        assert!(unk.contains("administrator"), "{unk}");
+        assert!(!unk.contains("reclaim"), "{unk}");
+    }
+    #[test]
+    fn bind_volume_refuses_a_system_disk_even_when_it_is_the_named_device() {
+        let e = bind_volume(BIND_JSON, Some("BENCH"), None, "C").unwrap_err();
+        assert!(e.contains("system disk"), "{e}");
+    }
+    #[test]
+    fn bind_volume_with_no_identifiable_device_is_refused() {
+        assert!(bind_volume(BIND_JSON, None, None, "E").is_err());
+        assert!(bind_volume("garbage", Some("CLIENT"), None, "E").is_err());
+    }
+
+    #[test]
+    fn links_are_never_followed() {
+        assert_eq!(classify_entry(true, false, FILE_ATTRIBUTE_REPARSE_POINT), EntryKind::Link);
+        assert_eq!(classify_entry(true, true, 0), EntryKind::Link);
+    }
+    #[test]
+    fn online_only_cloud_files_are_not_read() {
+        for a in [FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_OFFLINE] {
+            assert_eq!(classify_entry(false, false, a | FILE_ATTRIBUTE_REPARSE_POINT), EntryKind::CloudOnline);
+        }
+    }
+    #[test]
+    fn efs_files_are_refused_but_efs_folders_are_walked() {
+        assert_eq!(classify_entry(false, false, FILE_ATTRIBUTE_ENCRYPTED), EntryKind::Efs);
+        assert_eq!(classify_entry(false, true, FILE_ATTRIBUTE_ENCRYPTED), EntryKind::Normal);
+    }
+    #[test]
+    fn data_bearing_reparse_points_and_plain_entries_are_read() {
+        // compressed (WOF), dedup, or an already-downloaded cloud file: reparse attribute, no recall flags
+        assert_eq!(classify_entry(false, false, FILE_ATTRIBUTE_REPARSE_POINT), EntryKind::Normal);
+        // a cloud FOLDER is walked; its online-only files are then skipped one by one
+        assert_eq!(classify_entry(false, true, FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_RECALL_ON_OPEN), EntryKind::Normal);
+        assert_eq!(classify_entry(false, false, 0), EntryKind::Normal);
+    }
+    #[test]
+    fn every_non_normal_kind_has_a_reason() {
+        assert_eq!(entry_skip_reason(EntryKind::Normal), None);
+        assert!(entry_skip_reason(EntryKind::Link).unwrap().contains("not followed"));
+        assert!(entry_skip_reason(EntryKind::CloudOnline).unwrap().contains("not downloaded"));
+        assert!(entry_skip_reason(EntryKind::Efs).unwrap().contains("EFS"));
+    }
+    #[test]
+    fn onedrive_roots_are_found_in_a_profile() {
+        let got = onedrive_roots(&[
+            "Desktop".into(),
+            "OneDrive".into(),
+            "OneDrive - Contoso".into(),
+            "onedrive - x".into(),
+            "OneDriveTemp".into(),
+            "My OneDrive".into(),
+        ]);
+        assert_eq!(got, vec!["OneDrive".to_string(), "OneDrive - Contoso".to_string(), "onedrive - x".to_string()]);
+    }
+    #[test]
+    fn links_do_not_make_a_run_incomplete_and_serialize() {
+        let link = SkippedEntry { path: "E:\\Users\\sam\\My Documents".into(), reason: "link".into() };
+        let o = build_outcome(vec![entry("a")], vec![], vec![link], None);
+        assert!(o.complete);
+        assert_eq!(serde_json::to_value(&o).unwrap()["links"].as_array().unwrap().len(), 1);
+    }
+    #[test]
+    fn staging_on_the_source_drive_is_detected() {
+        assert!(staging_on_source(Path::new(r"E:\Users\op\AppData\Roaming\x\aunlock_recovered\j"), 'e'));
+        assert!(!staging_on_source(Path::new(r"C:\Users\op\AppData\Roaming\x"), 'E'));
+        assert!(staging_on_source(Path::new(r"\\?\E:\x"), 'E'));
+        assert!(!staging_on_source(Path::new(r"\\server\share\x"), 'E'));
+        assert!(!staging_on_source(Path::new(r"\\?\UNC\server\share\x"), 'E'));
+        assert!(staging_on_source(Path::new(r"relative\x"), 'E')); // can't tell which drive => refuse
+    }
+    #[test]
+    fn job_key_matches_the_staging_folder_name() {
+        assert_eq!(job_key("job_1_../../x"), "job_1_______x");
+        assert_eq!(job_key(""), "_");
+        assert!(staging_dir(Path::new("C:/data"), "job_9_ab").ends_with(job_key("job_9_ab")));
+    }
+    #[test]
+    fn staged_job_ids_keep_only_names_staging_dir_can_produce() {
+        let got = staged_job_ids(&[
+            "job_1_abc".into(),
+            "".into(),
+            "..".into(),
+            "bad name".into(),
+            "job-2".into(),
+            "JOB_3".into(),
+        ]);
+        assert_eq!(got, vec!["job_1_abc".to_string(), "JOB_3".to_string()]);
+    }
+    #[test]
+    fn a_second_run_on_the_same_job_is_refused_until_the_first_ends() {
+        let reg = InFlight::new();
+        let g = reg.begin("job_a").expect("first run starts");
+        assert!(reg.begin("job_a").is_none());
+        assert!(reg.begin("job_b").is_some()); // other jobs are independent
+        assert!(reg.is_running("job_a"));
+        drop(g);
+        assert!(!reg.is_running("job_a"));
+        assert!(reg.begin("job_a").is_some());
+    }
+    #[test]
+    fn cancelling_a_running_job_flags_it_and_reports_that_it_was_running() {
+        let reg = InFlight::new();
+        assert!(!reg.cancel("job_a")); // nothing running: a purge may proceed
+        let g = reg.begin("job_a").unwrap();
+        assert!(!g.cancelled());
+        assert!(reg.cancel("job_a"));
+        assert!(g.cancelled());
+        assert!(g.cancel_flag().load(std::sync::atomic::Ordering::SeqCst));
+    }
+    #[test]
+    fn verify_length_caps_reject_hostile_records() {
+        assert!(record_lengths_ok(200, 1000));
+        assert!(!record_lengths_ok(0, 1000));
+        assert!(!record_lengths_ok(SEALED_KEY_MAX + 1, 1000));
+        assert!(!record_lengths_ok(200, record_ct_max(16 * 1024 * 1024) + 1));
+        let plain = vec![7u8; FRAME_SIZE * 3 + 5];
+        assert!(encrypt_chunks(&[1u8; 32], &plain).len() <= record_ct_max(plain.len()));
+        assert!(encrypt_chunks(&[1u8; 32], &[]).len() <= record_ct_max(0));
     }
 }

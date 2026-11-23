@@ -1,20 +1,31 @@
 //! Aunlock drive recovery (Plan 1) — the thin Tauri I/O shell.
 //!
-//! All decisions (read-only query guard, JSON normalization, path containment, reparse policy,
-//! backpressure, staging paths, path sanitization, record framing, AEAD) live in the pure,
-//! unit-tested `crate::aunlock_recover_rules`. This module only performs I/O: it spawns the
-//! read-only PowerShell queries, walks the SOURCE volume strictly read-only, and writes encrypted
-//! copies into the app's staging tree. It is proven by the gated live check
-//! (`docs/superpowers/live-checks/aunlock-drive-recovery.md`), not by CI.
+//! All decisions (read-only query guard, JSON normalization, device binding, path containment,
+//! entry classification, backpressure, staging paths, path sanitization, record framing, AEAD, the
+//! in-flight registry) live in the pure, unit-tested `crate::aunlock_recover_rules`. This module
+//! only performs I/O: it spawns the read-only PowerShell queries, walks the SOURCE volume strictly
+//! read-only, and writes encrypted copies into the app's staging tree. It is proven by the gated
+//! live check (`docs/superpowers/live-checks/aunlock-drive-recovery.md`), not by CI.
+//!
+//! TRUST BOUNDARY: every command that reads a volume first binds the drive letter to the intaken
+//! device (`bind_volume`): the letter must be one of THAT device's volumes, not on a system/boot
+//! disk, and recoverable (plaintext, verified, mountable). A recovery also refuses to stage onto
+//! the drive it is reading.
 //!
 //! READ-ONLY SOURCE: source files are only ever opened with `File::open` (read-only) and the
 //! source volume is only listed/stat'ed. Nothing is created, written, truncated, mounted for
-//! write, or repartitioned on it. Reparse points / symlinks are never followed.
+//! write, or repartitioned on it. Links (junctions/symlinks) are never followed; online-only cloud
+//! files are not opened (that would download them onto the source); EFS files are not recovered.
+//! Every entry the walk does not read is recorded — in `skipped`, or in `links` for links.
 //!
 //! STAGED FILE LAYOUT: a concatenation of per-block records, one per <=16 MiB plaintext block:
 //!   `u32 LE sealed_key_len || sealed_key || u32 LE ct_len || ct`
 //! where `sealed_key = seal_vault_payload(base64(fresh 32-byte CSPRNG key))` (DPAPI on Windows)
 //! and `ct = encrypt_chunks(key, block)`. Every block uses its own fresh key.
+//!
+//! ONE RUN PER JOB: a recovery registers in the in-flight table. A second run on the same job is
+//! refused, and a purge of a running job cancels it (the walk stops at the next entry and never
+//! recreates staging) and reports an error so the caller retries the delete once it has stopped.
 
 pub use crate::aunlock_recover_rules::{HealthReport, RecoverOutcome, RecoveredEntry, SkippedEntry, VolumeSpec};
 use serde::{Deserialize, Serialize};
@@ -25,6 +36,8 @@ pub struct DirEntryLite {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    /// Why this entry can't be recovered (a link, an online-only cloud file, EFS), or `None`.
+    pub note: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -45,11 +58,11 @@ fn off_platform<T>() -> Result<T, String> {
 mod imp {
     use super::{DirEntryLite, RecoverOutcome, RecoverSelection, RecoveredEntry, SkippedEntry};
     use crate::aunlock_recover_rules::{
-        build_outcome, can_stage_next, decrypt_chunks, encode_record, encrypt_chunks, normalize_health_for,
-        path_is_contained, recover_query_is_read_only, resolve_volumes, sanitize_staged_rel,
-        select_preset_profiles, stop_reason, should_skip_reparse, split_record, staged_rel_path, staging_dir,
-        volume_by_letter, volume_is_recoverable, HealthReport, VolumeSpec,
-        AUNLOCK_HEALTH_QUERY, AUNLOCK_VOLUMES_QUERY, PRESET_FOLDERS,
+        bind_volume, build_outcome, can_stage_next, classify_entry, decrypt_chunks, encode_record, encrypt_chunks,
+        entry_skip_reason, job_key, normalize_health_for, onedrive_roots, path_is_contained, record_lengths_ok,
+        recover_query_is_read_only, resolve_volumes, sanitize_staged_rel, select_preset_profiles, stop_reason,
+        staged_job_ids, staged_rel_path, staging_dir, staging_on_source, EntryKind, HealthReport, InFlight,
+        VolumeSpec, AUNLOCK_HEALTH_QUERY, AUNLOCK_VOLUMES_QUERY, PRESET_FOLDERS, SEALED_KEY_MAX,
     };
     use base64::{Engine, engine::general_purpose::STANDARD};
     use chacha20poly1305::aead::{KeyInit, OsRng};
@@ -57,10 +70,12 @@ mod imp {
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
     use std::fs::{self, File};
-    use std::io::{Read, Write};
+    use std::io::{BufReader, Read, Write};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::fs::MetadataExt;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
 
     /// Plaintext block size; memory per file is bounded by this.
     const BLOCK: usize = 16 * 1024 * 1024;
@@ -68,7 +83,13 @@ mod imp {
     const DISK_RESERVE: u64 = 256 * 1024 * 1024;
     /// Generous per-job cap; the real limiter is free disk space.
     const JOB_BUDGET: u64 = u64::MAX / 2;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const CANCELLED: &str = "cancelled";
+
+    /// Recoveries running right now, one per job.
+    fn inflight() -> &'static InFlight {
+        static REG: OnceLock<InFlight> = OnceLock::new();
+        REG.get_or_init(InFlight::new)
+    }
 
     unsafe extern "system" {
         fn GetDiskFreeSpaceExW(
@@ -129,47 +150,71 @@ mod imp {
         }
     }
 
-    fn is_reparse(md: &fs::Metadata) -> bool {
-        should_skip_reparse(
-            md.file_type().is_symlink(),
-            md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0,
-        )
+    /// Bind `drive_letter` to the intaken device's volumes (one PowerShell call) and return its root.
+    fn bound_root(serial: Option<&str>, size_bytes: Option<u64>, drive_letter: &str) -> Result<(char, PathBuf), String> {
+        let (drive, root) = drive_root(drive_letter)?;
+        let vols = run_guarded(AUNLOCK_VOLUMES_QUERY)?;
+        bind_volume(&vols, serial, size_bytes, &drive.to_string())?;
+        Ok((drive, root))
     }
 
-    /// True when no component from `root` down to `path` (inclusive) is a reparse point/symlink.
-    fn chain_has_no_reparse(root: &Path, path: &Path) -> bool {
+    fn kind_of(md: &fs::Metadata) -> EntryKind {
+        classify_entry(md.file_type().is_symlink(), md.is_dir(), md.file_attributes())
+    }
+
+    /// True when no component from `root` down to `path` (inclusive) is a link (junction/symlink).
+    /// Data-bearing reparse folders (a OneDrive folder, say) are fine; links never are.
+    fn chain_has_no_link(root: &Path, path: &Path) -> bool {
         let Ok(rel) = path.strip_prefix(root) else { return false };
         let mut cur = root.to_path_buf();
         for comp in rel.components() {
             cur.push(comp);
             match fs::symlink_metadata(&cur) {
-                Ok(md) if !is_reparse(&md) => {}
+                Ok(md) if kind_of(&md) != EntryKind::Link => {}
                 _ => return false,
             }
         }
         true
     }
 
-    pub fn list_dir(drive_letter: String, subpath: String) -> Result<Vec<DirEntryLite>, String> {
-        let (_, root) = drive_root(&drive_letter)?;
+    /// Names of the real (non-link) sub-folders of `dir`.
+    fn dir_names(dir: &Path) -> Result<Vec<String>, String> {
+        let rd = fs::read_dir(dir).map_err(|e| format!("unreadable folder: {e}"))?;
+        Ok(rd
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                fs::symlink_metadata(e.path())
+                    .map(|m| m.is_dir() && kind_of(&m) == EntryKind::Normal)
+                    .unwrap_or(false)
+            })
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect())
+    }
+
+    pub fn list_dir(
+        serial: Option<String>,
+        size_bytes: Option<u64>,
+        drive_letter: String,
+        subpath: String,
+    ) -> Result<Vec<DirEntryLite>, String> {
+        let (_, root) = bound_root(serial.as_deref(), size_bytes, &drive_letter)?;
         let target = root.join(subpath.trim());
         if !path_is_contained(&root, &target) {
             return Err("path escapes the volume root".to_string());
         }
-        if !chain_has_no_reparse(&root, &target) {
-            return Err("refusing to follow a link/reparse point".to_string());
+        if !chain_has_no_link(&root, &target) {
+            return Err("refusing to follow a link (junction/symlink)".to_string());
         }
         let mut out = Vec::new();
         for entry in fs::read_dir(&target).map_err(|e| format!("could not list folder: {e}"))? {
             let Ok(entry) = entry else { continue };
             let Ok(md) = fs::symlink_metadata(entry.path()) else { continue };
-            if is_reparse(&md) {
-                continue;
-            }
+            let kind = kind_of(&md);
             out.push(DirEntryLite {
                 name: entry.file_name().to_string_lossy().into_owned(),
-                is_dir: md.is_dir(),
+                is_dir: md.is_dir() && kind == EntryKind::Normal,
                 size: if md.is_dir() { 0 } else { md.len() },
+                note: entry_skip_reason(kind).map(str::to_string),
             });
         }
         out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -227,26 +272,73 @@ mod imp {
         Ok((total, digest.iter().map(|b| format!("{b:02x}")).collect()))
     }
 
-    /// Re-open a staged file and verify it decrypts to `size` bytes with SHA-256 `checksum`.
-    /// Used by the live check and future recovery; reads record by record (bounded memory is not
-    /// needed here because each record is <= one block).
-    #[allow(dead_code)]
-    pub fn verify_staged(path: &Path, size: u64, checksum: &str) -> Result<bool, String> {
-        let buf = fs::read(path).map_err(|e| format!("read staged file: {e}"))?;
+    /// Read exactly `buf.len()` bytes; `Ok(false)` only for a clean end of file before any byte.
+    fn read_full_or_eof(r: &mut impl Read, buf: &mut [u8]) -> Result<bool, String> {
+        let mut got = 0;
+        while got < buf.len() {
+            let n = r.read(&mut buf[got..]).map_err(|e| format!("read staged file: {e}"))?;
+            if n == 0 {
+                return if got == 0 { Ok(false) } else { Err("staged file is truncated".to_string()) };
+            }
+            got += n;
+        }
+        Ok(true)
+    }
+
+    fn read_exact_staged(r: &mut impl Read, buf: &mut [u8]) -> Result<(), String> {
+        if read_full_or_eof(r, buf)? || buf.is_empty() {
+            Ok(())
+        } else {
+            Err("staged file is truncated".to_string())
+        }
+    }
+
+    /// Verify a staged copy: decrypt it record by record (bounded memory, length-capped, only
+    /// DPAPI-sealed keys accepted) and check it holds exactly `size` bytes with SHA-256 `checksum`.
+    pub fn verify(job_id: String, staged_ref: String, size: u64, checksum: String) -> Result<bool, String> {
+        let staging = staging_dir(&crate::get_app_data_dir(), &job_id);
+        let path = staged_ref.split('/').fold(staging.clone(), |p, c| p.join(c));
+        if staged_ref.trim().is_empty() || path == staging || !path_is_contained(&staging, &path) {
+            return Err("staged path escapes the job directory".to_string());
+        }
+        let mut f = BufReader::new(File::open(&path).map_err(|e| format!("open staged file: {e}"))?);
         let mut hasher = Sha256::new();
-        let (mut pos, mut total) = (0usize, 0u64);
-        while pos < buf.len() {
-            let (sk, ct, next) = split_record(&buf, pos).map_err(|_| "malformed staged record".to_string())?;
-            let key_b64 = crate::open_vault_payload(String::from_utf8_lossy(sk).into_owned())?;
-            let key_vec = STANDARD.decode(key_b64.trim()).map_err(|e| format!("key decode: {e}"))?;
-            let key: [u8; 32] = key_vec.try_into().map_err(|_| "bad key length".to_string())?;
-            let pt = decrypt_chunks(&key, ct).map_err(|e| format!("decrypt: {e:?}"))?;
+        let (mut total, mut records) = (0u64, 0u64);
+        let mut len4 = [0u8; 4];
+        while read_full_or_eof(&mut f, &mut len4)? {
+            let key_len = u32::from_le_bytes(len4) as usize;
+            if !(1..=SEALED_KEY_MAX).contains(&key_len) {
+                return Err("malformed staged record".to_string());
+            }
+            let mut sealed = vec![0u8; key_len];
+            read_exact_staged(&mut f, &mut sealed)?;
+            read_exact_staged(&mut f, &mut len4)?;
+            let ct_len = u32::from_le_bytes(len4) as usize;
+            if !record_lengths_ok(key_len, ct_len) {
+                return Err("malformed staged record".to_string());
+            }
+            let mut ct = vec![0u8; ct_len];
+            read_exact_staged(&mut f, &mut ct)?;
+            let sealed = String::from_utf8(sealed).map_err(|_| "malformed staged key".to_string())?;
+            if !sealed.starts_with(crate::VAULT_DPAPI_PREFIX) {
+                return Err("a staged key is not DPAPI-sealed".to_string());
+            }
+            let key_b64 = crate::open_vault_payload(sealed)?;
+            let key_vec = STANDARD.decode(key_b64.trim()).map_err(|_| "malformed staged key".to_string())?;
+            let mut key: [u8; 32] = key_vec.try_into().map_err(|_| "malformed staged key".to_string())?;
+            let pt = decrypt_chunks(&key, &ct);
+            key.fill(0);
+            std::hint::black_box(&key);
+            let pt = pt.map_err(|e| format!("a staged block failed to decrypt ({e:?})"))?;
             hasher.update(&pt);
             total += pt.len() as u64;
-            pos = next;
+            records += 1;
+        }
+        if records == 0 {
+            return Err("staged file has no records".to_string());
         }
         let hex: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-        Ok(total == size && hex == checksum)
+        Ok(total == size && hex.eq_ignore_ascii_case(checksum.trim()))
     }
 
     struct Job {
@@ -257,7 +349,9 @@ mod imp {
         used_refs: HashSet<String>,
         entries: Vec<RecoveredEntry>,
         skipped: Vec<SkippedEntry>,
+        links: Vec<SkippedEntry>,
         stop: Option<String>,
+        cancel: Arc<AtomicBool>,
     }
 
     impl Job {
@@ -265,12 +359,28 @@ mod imp {
             self.skipped.push(SkippedEntry { path: path.to_string_lossy().into_owned(), reason: reason.to_string() });
         }
 
+        fn link(&mut self, path: &Path) {
+            let reason = entry_skip_reason(EntryKind::Link).unwrap_or("link — not followed");
+            self.links.push(SkippedEntry { path: path.to_string_lossy().into_owned(), reason: reason.to_string() });
+        }
+
+        /// A cancel means the job is being discarded: stop, and never create staging again.
+        fn cancelled(&mut self) -> bool {
+            if self.cancel.load(Ordering::SeqCst) {
+                self.stop = Some(CANCELLED.to_string());
+                return true;
+            }
+            false
+        }
+
         /// Stage one source file, honoring backpressure. Once the job has been stopped
         /// (disk/budget) every later file is only recorded as skipped with the stop reason.
         /// Per-file read failures are skipped with a reason and the job goes on.
         fn add_file(&mut self, src: &Path, size_hint: u64) {
-            if self.stop.is_some() {
-                let reason = self.stop.clone().unwrap_or_default();
+            if self.cancelled() {
+                return;
+            }
+            if let Some(reason) = self.stop.clone() {
                 self.skip(src, &reason);
                 return;
             }
@@ -324,117 +434,182 @@ mod imp {
             }
         }
 
-        /// Walk `dir` read-only (iteratively), never following reparse points.
+        /// Judge one entry by its own metadata: walk it, read it, or record why not.
+        fn consider(&mut self, path: PathBuf, md: &fs::Metadata, stack: &mut Vec<PathBuf>) {
+            match kind_of(md) {
+                EntryKind::Link => self.link(&path),
+                k @ (EntryKind::CloudOnline | EntryKind::Efs) => {
+                    self.skip(&path, entry_skip_reason(k).unwrap_or("not recovered"));
+                }
+                EntryKind::Normal if md.is_dir() => stack.push(path),
+                EntryKind::Normal if md.is_file() => self.add_file(&path, md.len()),
+                EntryKind::Normal => self.skip(&path, "not a regular file"),
+            }
+        }
+
+        /// Walk `dir` read-only (iteratively). Nothing is dropped silently: every entry that is
+        /// not read is recorded with a reason.
         fn walk(&mut self, dir: &Path) {
             let mut stack = vec![dir.to_path_buf()];
             while let Some(d) = stack.pop() {
-                let Ok(rd) = fs::read_dir(&d) else {
-                    self.skip(&d, "unreadable folder");
-                    continue;
-                };
-                for entry in rd {
-                    let Ok(entry) = entry else { continue };
-                    let path = entry.path();
-                    let Ok(md) = fs::symlink_metadata(&path) else { continue };
-                    if is_reparse(&md) {
+                if self.cancelled() {
+                    return;
+                }
+                let rd = match fs::read_dir(&d) {
+                    Ok(rd) => rd,
+                    Err(e) => {
+                        self.skip(&d, &format!("unreadable folder: {e}"));
                         continue;
                     }
-                    if md.is_dir() {
-                        stack.push(path);
-                    } else if md.is_file() {
-                        self.add_file(&path, md.len());
+                };
+                for entry in rd {
+                    if self.cancelled() {
+                        return;
+                    }
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            self.skip(&d, &format!("unreadable folder entry: {e}"));
+                            continue;
+                        }
+                    };
+                    let path = entry.path();
+                    match fs::symlink_metadata(&path) {
+                        Ok(md) => self.consider(path, &md, &mut stack),
+                        Err(e) => self.skip(&path, &format!("unreadable: {e}")),
                     }
                 }
             }
         }
     }
 
-    pub fn recover_files(job_id: String, drive_letter: String, selection: RecoverSelection) -> Result<RecoverOutcome, String> {
-        let (drive, root) = drive_root(&drive_letter)?;
+    pub fn recover_files(
+        job_id: String,
+        serial: Option<String>,
+        size_bytes: Option<u64>,
+        drive_letter: String,
+        selection: RecoverSelection,
+    ) -> Result<RecoverOutcome, String> {
         if !selection.preset && selection.paths.is_empty() {
             return Err("nothing selected to recover".to_string());
         }
-        // Refuse anything that is not a plaintext, readable, mountable volume (route to reclaim).
-        let vols_json = run_guarded(AUNLOCK_VOLUMES_QUERY)?;
-        match volume_by_letter(&vols_json, &drive.to_string()) {
-            Some(v) if volume_is_recoverable(&v) => {}
-            _ => {
-                return Err(format!(
-                    "volume {drive}: is encrypted, locked, unreadable or unrecognized and cannot be recovered live; use the reclaim path"
-                ));
-            }
+        // Trust boundary: the letter must be a recoverable, non-system volume of THIS device.
+        let (drive, root) = bound_root(serial.as_deref(), size_bytes, &drive_letter)?;
+        let staging = staging_dir(&crate::get_app_data_dir(), &job_id);
+        if staging_on_source(&staging, drive) {
+            return Err(format!(
+                "the staging folder is on drive {drive}: — the drive being recovered; refusing to write to it"
+            ));
         }
-        // Validate EVERY selected path up front: bad input is a hard Err before anything is staged.
-        let mut selected: Vec<(PathBuf, bool, u64)> = Vec::new();
-        for raw in &selection.paths {
-            let s = raw.trim();
-            let prefix = format!("{drive}:");
-            if s.len() < 2 || !s.is_char_boundary(2) || !s[..2].eq_ignore_ascii_case(&prefix) {
-                return Err(format!("selected path is not on volume {drive}: {raw}"));
-            }
-            let candidate = PathBuf::from(format!("{prefix}{}", &s[2..]));
-            if !path_is_contained(&root, &candidate) || !chain_has_no_reparse(&root, &candidate) {
-                return Err(format!("selected path is outside the volume or crosses a link: {raw}"));
-            }
-            let md = fs::symlink_metadata(&candidate).map_err(|e| format!("cannot read {raw}: {e}"))?;
-            if md.is_dir() {
-                selected.push((candidate, true, 0));
-            } else if md.is_file() {
-                selected.push((candidate, false, md.len()));
-            }
-        }
+        let guard = inflight()
+            .begin(&job_key(&job_id))
+            .ok_or_else(|| "a recovery is already running for this job".to_string())?;
         let mut job = Job {
-            staging: staging_dir(&crate::get_app_data_dir(), &job_id),
+            staging,
             drive,
             root: root.clone(),
             staged_bytes: 0,
             used_refs: HashSet::new(),
             entries: Vec::new(),
             skipped: Vec::new(),
+            links: Vec::new(),
             stop: None,
+            cancel: guard.cancel_flag(),
         };
+
+        // Validate EVERY selected path up front. One that escapes the volume or crosses a link is
+        // bad input — a hard Err before anything is staged. One that can't be read is a skip.
+        let prefix = format!("{drive}:");
+        let mut selected: Vec<(PathBuf, fs::Metadata)> = Vec::new();
+        for raw in &selection.paths {
+            let s = raw.trim();
+            if s.len() < 2 || !s.is_char_boundary(2) || !s[..2].eq_ignore_ascii_case(&prefix) {
+                return Err(format!("selected path is not on volume {drive}: {raw}"));
+            }
+            let candidate = PathBuf::from(format!("{prefix}{}", &s[2..]));
+            if !path_is_contained(&root, &candidate) || !chain_has_no_link(&root, &candidate) {
+                return Err(format!("selected path is outside the volume or crosses a link: {raw}"));
+            }
+            match fs::symlink_metadata(&candidate) {
+                Ok(md) => selected.push((candidate, md)),
+                Err(e) => job.skip(&candidate, &format!("unreadable: {e}")),
+            }
+        }
 
         if selection.preset {
             let users = root.join("Users");
-            if chain_has_no_reparse(&root, &users) {
-                let names: Vec<String> = fs::read_dir(&users)
-                    .map(|rd| {
-                        rd.filter_map(|e| e.ok())
-                            .filter(|e| fs::symlink_metadata(e.path()).map(|m| m.is_dir() && !is_reparse(&m)).unwrap_or(false))
-                            .map(|e| e.file_name().to_string_lossy().into_owned())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for profile in select_preset_profiles(&names) {
-                    for folder in PRESET_FOLDERS {
-                        let p = users.join(&profile).join(folder);
-                        if p.exists() && chain_has_no_reparse(&root, &p) {
-                            job.walk(&p);
+            match (users.exists(), chain_has_no_link(&root, &users)) {
+                (false, _) => job.skip(&users, "no Windows user profiles on this volume"),
+                (true, false) => job.link(&users),
+                (true, true) => match dir_names(&users) {
+                    Err(e) => job.skip(&users, &e),
+                    Ok(profiles) => {
+                        for profile in select_preset_profiles(&profiles) {
+                            let home = users.join(&profile);
+                            let mut folders: Vec<String> = PRESET_FOLDERS.iter().map(|f| f.to_string()).collect();
+                            match dir_names(&home) {
+                                Ok(names) => folders.extend(onedrive_roots(&names)),
+                                Err(e) => job.skip(&home, &e),
+                            }
+                            for folder in folders {
+                                let p = home.join(&folder);
+                                if p.exists() && chain_has_no_link(&root, &p) {
+                                    job.walk(&p);
+                                }
+                            }
                         }
                     }
-                }
+                },
             }
         }
 
-        for (candidate, is_dir, size) in &selected {
-            if *is_dir {
-                job.walk(candidate);
+        for (candidate, md) in selected {
+            if md.is_dir() {
+                job.walk(&candidate);
             } else {
-                job.add_file(candidate, *size);
+                let mut unused = Vec::new();
+                job.consider(candidate, &md, &mut unused);
             }
         }
 
+        drop(guard); // the run is over: a purge may now delete
         let stop = job.stop.take();
-        Ok(build_outcome(job.entries, job.skipped, stop))
+        Ok(build_outcome(job.entries, job.skipped, job.links, stop))
     }
 
     pub fn purge(job_id: String) -> Result<bool, String> {
+        if inflight().cancel(&job_key(&job_id)) {
+            return Err(
+                "a recovery is still running for this job — it has been told to stop; the delete will be retried"
+                    .to_string(),
+            );
+        }
         let dir = staging_dir(&crate::get_app_data_dir(), &job_id);
         if !dir.exists() {
             return Ok(true);
         }
         fs::remove_dir_all(&dir).map_err(|e| format!("could not purge staging: {e}"))?;
         Ok(!dir.exists())
+    }
+
+    /// The job folders currently under staging (used to purge any the catalog no longer knows).
+    pub fn list_staged_jobs() -> Result<Vec<String>, String> {
+        let dir = crate::get_app_data_dir().join("aunlock_recovered");
+        let rd = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("could not list staging: {e}")),
+        };
+        let names: Vec<String> = rd
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                fs::symlink_metadata(e.path())
+                    .map(|m| m.is_dir() && !m.file_type().is_symlink())
+                    .unwrap_or(false)
+            })
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        Ok(staged_job_ids(&names))
     }
 }
 
@@ -469,31 +644,71 @@ pub async fn aunlock_resolve_volumes(serial: Option<String>, size_bytes: Option<
 }
 
 #[tauri::command]
-pub async fn aunlock_list_dir(drive_letter: String, subpath: String) -> Result<Vec<DirEntryLite>, String> {
+pub async fn aunlock_list_dir(
+    serial: Option<String>,
+    size_bytes: Option<u64>,
+    drive_letter: String,
+    subpath: String,
+) -> Result<Vec<DirEntryLite>, String> {
     #[cfg(windows)]
     {
-        tauri::async_runtime::spawn_blocking(move || imp::list_dir(drive_letter, subpath))
+        tauri::async_runtime::spawn_blocking(move || imp::list_dir(serial, size_bytes, drive_letter, subpath))
             .await
             .map_err(|e| format!("task failed: {e}"))?
     }
     #[cfg(not(windows))]
     {
-        let _ = (drive_letter, subpath);
+        let _ = (serial, size_bytes, drive_letter, subpath);
         off_platform()
     }
 }
 
 #[tauri::command]
-pub async fn aunlock_recover_files(job_id: String, drive_letter: String, selection: RecoverSelection) -> Result<RecoverOutcome, String> {
+pub async fn aunlock_recover_files(
+    job_id: String,
+    serial: Option<String>,
+    size_bytes: Option<u64>,
+    drive_letter: String,
+    selection: RecoverSelection,
+) -> Result<RecoverOutcome, String> {
     #[cfg(windows)]
     {
-        tauri::async_runtime::spawn_blocking(move || imp::recover_files(job_id, drive_letter, selection))
+        tauri::async_runtime::spawn_blocking(move || imp::recover_files(job_id, serial, size_bytes, drive_letter, selection))
             .await
             .map_err(|e| format!("task failed: {e}"))?
     }
     #[cfg(not(windows))]
     {
-        let _ = (job_id, drive_letter, selection);
+        let _ = (job_id, serial, size_bytes, drive_letter, selection);
+        off_platform()
+    }
+}
+
+#[tauri::command]
+pub async fn aunlock_verify_recovered(job_id: String, staged_ref: String, size: u64, checksum: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || imp::verify(job_id, staged_ref, size, checksum))
+            .await
+            .map_err(|e| format!("task failed: {e}"))?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (job_id, staged_ref, size, checksum);
+        off_platform()
+    }
+}
+
+#[tauri::command]
+pub async fn aunlock_list_staged_jobs() -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(imp::list_staged_jobs)
+            .await
+            .map_err(|e| format!("task failed: {e}"))?
+    }
+    #[cfg(not(windows))]
+    {
         off_platform()
     }
 }

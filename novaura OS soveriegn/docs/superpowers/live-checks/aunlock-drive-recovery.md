@@ -20,14 +20,16 @@ DevTools port + CDP script (see project_sovereign_live_testing). Never use real 
 ## Checks
 1. [ ] Attach Drive A. `aunlock_resolve_volumes(serial)` returns its volume with `encrypted:false`, `readable:true`.
 2. [ ] `aunlock_read_health` returns a status (and does not modify the drive).
-3. [ ] `aunlock_list_dir(letter, "")` and `("Users")` list entries; the junction is NOT listed.
+3. [ ] `aunlock_list_dir(serial, sizeBytes, letter, "")` and `("Users")` list entries; the junction
+       IS listed with the note "link (junction/symlink) — not followed" and cannot be descended into.
 4. [ ] `aunlock_list_dir(letter, "..\\..")` and an absolute subpath are rejected (escape).
 5. [ ] `aunlock_recover_files(job, letter, {preset:true, paths:[]})` returns entries with
        `sourceType:"live"`; preset folders only; the junction target is not copied.
-6. [ ] Every staged file under `%APPDATA%\novaura-sovereign\aunlock_recovered\<job>\` decrypts:
-       records are `u32 LE keylen || sealed key || u32 LE ctlen || ct`; open each sealed key
-       (DPAPI), `decrypt_chunks`, concatenate; length equals `size` and SHA-256 equals `checksum`.
-       Includes the >16 MiB file (multiple records) and the 0-byte file (one record).
+6. [ ] Every staged file under `%APPDATA%\novaura-sovereign\aunlock_recovered\<job>\` verifies:
+       `aunlock_verify_recovered(job, stagedRef, size, checksum)` (the Verify button) returns `true`
+       for every row, including the >16 MiB file (multiple records) and the 0-byte file (one
+       record). Flip one byte in a staged file → Verify reports a mismatch or a decrypt error,
+       never `true`.
 7. [ ] Each record has a DIFFERENT sealed key (no key reuse); the staged files contain no plaintext
        (grep a known string from a source file).
 8. [ ] Reserved/odd names were staged under sanitized names (no `:` / device names on disk).
@@ -76,11 +78,31 @@ DevTools port + CDP script (see project_sovereign_live_testing). Never use real 
 24. [ ] Low disk (check 12) from the UI: the banner warns "Partial recovery … stopped — disk full"
         and the Skipped list names every omitted file.
 
+## Final-review fix wave checks
+25. [ ] Non-elevated launch (normal double-click, NOT "Run as administrator"): if BitLocker status
+        can't be read, Drive A's volume shows "Encryption status could not be verified … run
+        Sovereign as administrator" — refused, and NOT told to reclaim. Relaunch elevated → the
+        same volume is recoverable. Record which launch mode the bench needs.
+26. [ ] OneDrive known-folder profile on Drive A (`Users\<name>\OneDrive\Desktop|Documents`): the
+        preset recovers the locally present OneDrive files; online-only placeholders appear in
+        Skipped as "online-only cloud file — not downloaded" (nothing is downloaded — confirm no
+        new files and no hydration on Drive A afterwards).
+27. [ ] An EFS-encrypted file on Drive A (`cipher /e`): listed with the EFS note, not selectable,
+        and in Skipped as "file-based encryption (EFS) — not recovered" — never staged.
+28. [ ] Discard during a run: start "Recover user files" on a large tree, click "Discard job +
+        data" mid-run → the job shows `purge-pending` ("will be retried"), the run stops at the next
+        file, and when the window refreshes the job and `aunlock_recovered\<job>` are both gone. No
+        rows remain for it. Start a second recovery on the same job while one runs → refused.
+29. [ ] Orphan reconciliation: with the app closed, create an empty folder
+        `aunlock_recovered\job_999_orphan`; open the Aunlock window → the folder is deleted.
+30. [ ] Device binding: two drives in a dual-bay dock that report the same serial → neither is
+        recoverable under one job unless their sizes differ (then only the matching one).
+        Calling `aunlock_list_dir` / `aunlock_recover_files` directly (DevTools) with the intaken
+        device's serial and the bench's own `C:` letter, or another device's letter → refused.
+
 ## Not in Plan 1 (follow-ups)
-- On-demand verify of a staged file from the UI — needs a native streaming verify command
-  (`verify_staged` is a live-check helper that reads a whole file into RAM).
 - Live progress during a long copy — needs a native progress channel (Tauri event); today the UI
-  shows a busy state until the run returns.
+  shows a busy state until the run returns. Cancel is available indirectly (Discard).
 
 ## Result
 Status: NOT YET RUN. Needs the owner's hardware — a known unencrypted USB drive and a BitLocker

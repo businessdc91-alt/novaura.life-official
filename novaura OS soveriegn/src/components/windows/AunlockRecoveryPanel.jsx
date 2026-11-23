@@ -44,6 +44,7 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState(null);
   const [staged, setStaged] = useState(() => describeStaged([]));
+  const [verified, setVerified] = useState({}); // stagedRef -> 'checking' | 'ok' | 'bad' | reason
 
   async function loadStaged() {
     try {
@@ -103,6 +104,19 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
       else next.add(path);
       return next;
     });
+  }
+
+  async function verifyRow(stagedRef) {
+    setVerified((cur) => ({ ...cur, [stagedRef]: 'checking' }));
+    try {
+      const r = await controller.verifyRecovered(jobId, stagedRef);
+      const state = r.ok ? (r.verified ? 'ok' : 'bad') : r.reason;
+      setVerified((cur) => ({ ...cur, [stagedRef]: state }));
+      if (!r.ok) setNotice(r.reason);
+    } catch (e) {
+      setVerified((cur) => ({ ...cur, [stagedRef]: e.message }));
+      setNotice(e.message);
+    }
   }
 
   async function runRecover(opts, label) {
@@ -218,7 +232,7 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
                     <input
                       type="checkbox"
                       checked={selected.has(path)}
-                      disabled={busy}
+                      disabled={busy || !e.selectable}
                       onChange={() => toggle(path)}
                       aria-label={`Select ${e.name}`}
                     />
@@ -230,8 +244,9 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
                         <Folder className="h-3 w-3" /> {e.name}
                       </button>
                     ) : (
-                      <span className="truncate">{e.name}</span>
+                      <span className={`truncate ${e.note ? 'opacity-50' : ''}`}>{e.name}</span>
                     )}
+                    {e.note && <span className="text-amber-300/80">{e.note}</span>}
                     {e.humanSize && <span className="ml-auto opacity-60">{e.humanSize}</span>}
                   </li>
                 );
@@ -258,6 +273,20 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
               </ul>
             </details>
           )}
+          {outcome.links.length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer">Links not followed ({outcome.links.length})</summary>
+              <p className="mt-1 opacity-70">
+                Junctions and symlinks are never followed (they can point outside the selection). Their
+                targets are recovered where they are reached directly.
+              </p>
+              <ul className="mt-1 max-h-40 overflow-auto">
+                {outcome.links.map((s, i) => (
+                  <li key={`${s.path}-${i}`} className="font-mono">{s.path}</li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
@@ -268,15 +297,29 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
         </p>
         {staged.rows.length > 0 && (
           <ul className="max-h-48 overflow-auto font-mono text-xs">
-            {staged.rows.map((r, i) => (
-              <li key={r.stagedRef ?? `${r.path}-${i}`} className="flex gap-2">
-                <span className="truncate">{r.path}</span>
-                <span className="ml-auto opacity-60">{r.humanSize}</span>
-                <span className="opacity-40" title={r.checksum ?? ''}>
-                  {r.checksum ? r.checksum.slice(0, 8) : ''}
-                </span>
-              </li>
-            ))}
+            {staged.rows.map((r, i) => {
+              const v = r.stagedRef ? verified[r.stagedRef] : undefined;
+              return (
+                <li key={r.stagedRef ?? `${r.path}-${i}`} className="flex items-center gap-2">
+                  <span className="truncate">{r.path}</span>
+                  <span className="ml-auto opacity-60">{r.humanSize}</span>
+                  <span className="opacity-40" title={r.checksum ?? ''}>
+                    {r.checksum ? r.checksum.slice(0, 8) : ''}
+                  </span>
+                  {v === 'ok' && <span className="text-emerald-300" title="Decrypts to the recorded size and checksum">verified</span>}
+                  {v === 'bad' && <span className="text-red-300" title="Size or checksum does not match">MISMATCH</span>}
+                  {v && v !== 'ok' && v !== 'bad' && v !== 'checking' && (
+                    <span className="text-amber-300" title={v}>error</span>
+                  )}
+                  <button
+                    disabled={busy || v === 'checking' || !r.stagedRef}
+                    className={btn(!busy && v !== 'checking' && Boolean(r.stagedRef))}
+                    onClick={() => verifyRow(r.stagedRef)}>
+                    {v === 'checking' ? 'Checking…' : 'Verify'}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

@@ -51,10 +51,15 @@ test('describeVolumes: an encrypted volume is not recoverable and carries a recl
   assert.match(row.reason, /reclaim/i);
 });
 
-test('describeVolumes: unknown encryption status gets its own reason (refused until verified)', () => {
-  const [row] = describeVolumes([vol({ encrypted: null })]).rows;
-  assert.equal(row.recoverable, false);
-  assert.match(row.reason, /unknown/i);
+test('describeVolumes: unverifiable encryption is refused but NOT sent to reclaim (says run as administrator)', () => {
+  // what the native side sends when BitLocker status can't be read: encrypted false, encryptionKnown false
+  for (const v of [vol({ encrypted: false, readable: false, encryptionKnown: false }), vol({ encrypted: null })]) {
+    const [row] = describeVolumes([v]).rows;
+    assert.equal(row.recoverable, false);
+    assert.match(row.reason, /could not be verified/i);
+    assert.match(row.reason, /administrator/i);
+    assert.doesNotMatch(row.reason, /reclaim/i);
+  }
 });
 
 test('describeVolumes: RAW / unreadable volumes are refused with an unreadable reason', () => {
@@ -78,6 +83,22 @@ test('describeDirEntries puts folders first, then files, each sorted by name', (
   assert.deepEqual(rows.map((r) => r.name), ['alpha', 'Zeta', 'a.txt', 'b.txt']);
   assert.equal(rows[0].humanSize, null);
   assert.equal(rows[3].humanSize, '2.0 KB');
+});
+
+test('describeDirEntries: links, online-only cloud files and EFS files carry their reason and cannot be selected', () => {
+  const { rows } = describeDirEntries([
+    { name: 'My Documents', isDir: false, size: 0, note: 'link (junction/symlink) — not followed' },
+    { name: 'cloud.docx', isDir: false, size: 10, note: 'online-only cloud file — not downloaded' },
+    { name: 'secret.txt', isDir: false, size: 5, note: 'file-based encryption (EFS) — not recovered' },
+    { name: 'plain.txt', isDir: false, size: 5, note: null },
+  ]);
+  const by = (n) => rows.find((r) => r.name === n);
+  assert.equal(by('plain.txt').selectable, true);
+  assert.equal(by('plain.txt').note, null);
+  for (const n of ['My Documents', 'cloud.docx', 'secret.txt']) {
+    assert.equal(by(n).selectable, false);
+    assert.ok(by(n).note);
+  }
 });
 
 test('describeStaged lists rows and sums their sizes', () => {
@@ -112,6 +133,26 @@ test('describeOutcome: a partial recovery warns and lists what was skipped and w
   assert.match(o.label, /1 skipped/);
   assert.match(o.label, /disk full/);
   assert.deepEqual(o.skipped, [{ path: 'Users/sam/big.iso', reason: 'disk full' }]);
+});
+
+test('describeOutcome: links are listed as informational and do not make a complete run partial', () => {
+  const o = describeOutcome({
+    ok: true,
+    manifest: [{ size: 1024 }],
+    skipped: [],
+    links: [{ path: 'E:\\Users\\sam\\My Documents', reason: 'link (junction/symlink) — not followed' }],
+    complete: true,
+    stopReason: null,
+  });
+  assert.equal(o.tone, 'ok');
+  assert.match(o.label, /1 link not followed/);
+  assert.equal(o.links.length, 1);
+});
+
+test('describeOutcome: a run that recovered nothing is not shown as a success', () => {
+  const o = describeOutcome({ ok: true, manifest: [], skipped: [], links: [], complete: true, stopReason: null });
+  assert.equal(o.tone, 'warn');
+  assert.match(o.label, /Nothing was recovered/);
 });
 
 test('describeOutcome: a refused or failed recovery is fail-toned with its reason', () => {

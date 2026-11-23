@@ -54,7 +54,9 @@ export default function AunlockWindow() {
         ))}
       </div>
 
-      {active && <JobPanel controller={controller} jobId={active} onChange={refresh} setNotice={setNotice} />}
+      {/* keyed by job: switching tabs remounts the panel, so nothing in flight for one job can land
+          in another job's view (health, browse results, staged list, the authorization text) */}
+      {active && <JobPanel key={active} controller={controller} jobId={active} onChange={refresh} setNotice={setNotice} />}
       {notice && <p className="mt-3 text-amber-300">{notice}</p>}
 
       <p className="mt-6 text-xs opacity-50">
