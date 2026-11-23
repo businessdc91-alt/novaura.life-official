@@ -24,6 +24,8 @@ const ENCRYPTED_REASON =
   'This device is encrypted. Aunlock never recovers from encrypted storage — reclaim it (sanitize and reuse) instead.';
 const NO_RECOVERABLE =
   'No recoverable volume was found. Encrypted or unreadable volumes cannot be recovered — reclaim the device instead.';
+const PURGE_PENDING =
+  'Recovered files could not be deleted yet — the job is kept and the delete will be retried.';
 
 // Native error text can echo paths or secrets; it is redacted before it reaches a reason.
 const safeReason = (e) =>
@@ -53,8 +55,29 @@ export function createController({ catalog, native, now = Date.now, operator = '
     if (!v || !isRecoverableVolume(v)) return { ok: false, reason: NO_RECOVERABLE };
     return { ok: true, letter: v.driveLetter };
   };
+  // Staged files are deleted BEFORE the rows that point at them. If the files cannot be confirmed
+  // deleted, the job is kept (status 'purge-pending', rows intact) so the next sweep retries —
+  // dropping the rows first would leave encrypted client data on disk that nothing records.
+  const purgeJob = async (jobId) => {
+    let failure = null;
+    try {
+      if ((await native.purgeRecovered(jobId)) !== true) failure = 'The staged files were not confirmed deleted.';
+    } catch (e) {
+      failure = safeReason(e);
+    }
+    if (failure === null) {
+      await catalog.deleteJobCascade(jobId);
+      return { ok: true };
+    }
+    await setStatus(jobId, 'purge-pending', { purgeError: failure });
+    return { ok: false, reason: `${PURGE_PENDING} ${failure}` };
+  };
+  // Retention: everything past the 10-day / 3-job window, plus any job still waiting on a purge.
   const sweep = async () => {
-    for (const id of jobsToPurge(await catalog.listJobs(), { now })) await catalog.deleteJobCascade(id);
+    const jobs = await catalog.listJobs();
+    const ids = new Set(jobsToPurge(jobs, { now }));
+    for (const j of jobs) if (j.status === 'purge-pending') ids.add(j.id);
+    for (const id of ids) await purgeJob(id);
   };
 
   return {
@@ -71,9 +94,10 @@ export function createController({ catalog, native, now = Date.now, operator = '
     },
 
     /** Manual purge: delete a job and all its recovered data on demand (a client asks, a device
-     * is returned). */
+     * is returned). The staged files go first; if they can't be deleted yet the job is kept as
+     * 'purge-pending' and the delete is retried on the next sweep. */
     async discardJob(jobId) {
-      await catalog.deleteJobCascade(jobId);
+      return purgeJob(jobId);
     },
 
     /** The connected devices the native bridge sees right now — a read-only list, nothing stored.
@@ -248,6 +272,14 @@ const tauriInvoke = async (cmd, args) => {
   return invoke(cmd, args);
 };
 
+/** Off the desktop app nothing can have been staged to disk (recovery only runs natively), so a
+ * purge there is trivially complete; in the app it is the native delete. Keeps browser/dev runs
+ * from stranding jobs as 'purge-pending'. */
+export function stagedBytesPurger({ purgeRecovered, isTauri } = {}) {
+  return (jobId) =>
+    typeof isTauri === 'function' && isTauri() ? purgeRecovered(jobId) : Promise.resolve(true);
+}
+
 /** The one controller over the OS catalog. `enumerate` is the read-only device bridge and the
  * recovery methods are the drive-recovery bridge; `wipe` stays a placeholder until its own slice. */
 export function getController() {
@@ -260,7 +292,7 @@ export function getController() {
       resolveVolumes: recovery.resolveVolumes,
       listDir: recovery.listDir,
       recoverFiles: recovery.recoverFiles,
-      purgeRecovered: recovery.purgeRecovered,
+      purgeRecovered: stagedBytesPurger({ purgeRecovered: recovery.purgeRecovered, isTauri }),
       wipe: placeholderNative.wipe,
     };
     shared = createController({ catalog: getCatalog(), native });

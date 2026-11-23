@@ -17,6 +17,7 @@ const baseNative = {
     };
   },
   async wipe() { return { ok: true, startedAt: 10, finishedAt: 20 }; },
+  async purgeRecovered() { return true; }, // staged bytes deleted (Task 8: purge precedes the row cascade)
 };
 
 function make({ now = Date.now, native = baseNative } = {}) {
