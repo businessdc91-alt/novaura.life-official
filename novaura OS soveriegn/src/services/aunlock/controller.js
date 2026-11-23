@@ -3,8 +3,8 @@
 //   - the AUTHORIZATION GATE: recover and sanitize refuse any job with no recorded authorization
 //     (never a lock bypass — a device you can't account for cannot be worked on);
 //   - RETENTION: creating a job purges jobs past the 10-day / 3-job window and all their rows.
-// The hardware layer is injected as `native` ({ enumerate, recover, wipe }) — the fake in tests,
-// the real Tauri/USB layer in Phase 1b.
+// The hardware layer is injected as `native` ({ enumerate, readHealth, resolveVolumes, listDir,
+// recoverFiles, purgeRecovered, wipe }) — the fake in tests, the real Tauri bridge in the app.
 
 import { jobsToPurge } from './retention.js';
 import { deviceRecord } from './deviceModel.js';
@@ -36,6 +36,23 @@ export function createController({ catalog, native, now = Date.now, operator = '
     if (job) await catalog.putJob({ ...job, status, ...extra });
   };
   const gate = async (jobId) => canProceed(await catalog.getProvenance(jobId));
+  // An explicitly named volume is checked against the resolved layout before anything reads it:
+  // the device-level lock state cannot see one suspended/unlocked BitLocker volume on a disk that
+  // is otherwise clear. Fails closed — an unknown letter or a layout read error is a refusal.
+  const recoverableLetter = async (device, driveLetter) => {
+    let volumes;
+    try {
+      volumes = await native.resolveVolumes(device);
+    } catch (e) {
+      return { ok: false, reason: safeReason(e) };
+    }
+    const want = String(driveLetter ?? '').trim().toUpperCase();
+    const v = want
+      ? (Array.isArray(volumes) ? volumes : []).find((x) => String(x?.driveLetter ?? '').trim().toUpperCase() === want)
+      : null;
+    if (!v || !isRecoverableVolume(v)) return { ok: false, reason: NO_RECOVERABLE };
+    return { ok: true, letter: v.driveLetter };
+  };
   const sweep = async () => {
     for (const id of jobsToPurge(await catalog.listJobs(), { now })) await catalog.deleteJobCascade(id);
   };
@@ -121,8 +138,10 @@ export function createController({ catalog, native, now = Date.now, operator = '
       const device = await primaryDevice(jobId);
       if (!device) return { ok: false, reason: NO_DEVICE };
       if (device.lockState === 'encrypted') return { ok: false, reason: ENCRYPTED_REASON };
+      const checked = await recoverableLetter(device, driveLetter);
+      if (!checked.ok) return { ok: false, reason: checked.reason };
       try {
-        return { ok: true, entries: await native.listDir(driveLetter, subpath) };
+        return { ok: true, entries: await native.listDir(checked.letter, subpath) };
       } catch (e) {
         return { ok: false, reason: safeReason(e) };
       }
@@ -139,7 +158,9 @@ export function createController({ catalog, native, now = Date.now, operator = '
 
       let letters;
       if (driveLetter) {
-        letters = [driveLetter];
+        const checked = await recoverableLetter(device, driveLetter);
+        if (!checked.ok) return { ok: false, reason: checked.reason };
+        letters = [checked.letter];
       } else {
         try {
           letters = (await native.resolveVolumes(device)).filter(isRecoverableVolume).map((v) => v.driveLetter);
@@ -165,9 +186,11 @@ export function createController({ catalog, native, now = Date.now, operator = '
           continue;
         }
         for (const entry of outcome?.entries ?? []) {
+          // Only metadata leaves this loop — the same five fields go to the catalog and the caller.
           const { path, size, stagedRef, sourceType, checksum } = entry;
-          await catalog.putRecovered({ jobId, path, size, stagedRef, sourceType, checksum });
-          manifest.push(entry);
+          const row = { path, size, stagedRef, sourceType, checksum };
+          await catalog.putRecovered({ jobId, ...row });
+          manifest.push(row);
         }
         skipped.push(...(outcome?.skipped ?? []));
         if (!outcome?.complete) complete = false;
@@ -225,8 +248,8 @@ const tauriInvoke = async (cmd, args) => {
   return invoke(cmd, args);
 };
 
-/** The one controller over the OS catalog. `enumerate` is the real read-only device bridge
- * (Phase 1b-A); recover and wipe remain Phase 1a placeholders until their own slices land. */
+/** The one controller over the OS catalog. `enumerate` is the read-only device bridge and the
+ * recovery methods are the drive-recovery bridge; `wipe` stays a placeholder until its own slice. */
 export function getController() {
   if (!shared) {
     const devices = createNativeDevices({ invoke: tauriInvoke, isTauri });

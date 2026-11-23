@@ -8,7 +8,7 @@ const FAKE_KEY = 'sk-' + 'proj-' + 'FAKEKEYFIXTUREONLY0123456789';
 const vol = (driveLetter, over = {}) => ({ driveLetter, fsType: 'NTFS', label: '', sizeBytes: 1, encrypted: false, readable: true, ...over });
 const entry = (path) => ({ path, size: 10, stagedRef: `ref_${path}`, sourceType: 'live', checksum: 'abc' });
 
-function make({ lock = 'none', volumes = [vol('E')], recoverFiles, authorize = true, failListing = false } = {}) {
+function make({ lock = 'none', volumes = [vol('E')], recoverFiles, authorize = true, failListing = false, failResolve = false } = {}) {
   const calls = { recoverFiles: [], listDir: [] };
   const native = {
     async enumerate() { return [{ kind: 'drive', serial: 'S1', lock, systemDisk: false, sizeBytes: 99 }]; },
@@ -16,7 +16,10 @@ function make({ lock = 'none', volumes = [vol('E')], recoverFiles, authorize = t
       if (failListing) throw new Error(`health ${FAKE_KEY}`);
       return { status: 'ok' };
     },
-    async resolveVolumes() { return volumes; },
+    async resolveVolumes() {
+      if (failResolve) throw new Error(`resolve ${FAKE_KEY}`);
+      return volumes;
+    },
     async listDir(l, s) {
       if (failListing) throw new Error(`list ${FAKE_KEY}`);
       calls.listDir.push([l, s]);
@@ -183,4 +186,53 @@ test('no recoverable volume -> ok:false and recoverFiles not called', async () =
   assert.equal(r.ok, false);
   assert.match(r.reason, /reclaim/i);
   assert.equal(calls.recoverFiles.length, 0);
+});
+
+test('explicit driveLetter of an encrypted volume on a lockState none device: recover and browse refuse', async () => {
+  const { ctl, calls, setup } = make({ volumes: [vol('E'), vol('F', { encrypted: true })] });
+  const j = await setup();
+  for (const r of [await ctl.recover(j.id, { driveLetter: 'F' }), await ctl.browse(j.id, { driveLetter: 'f' })]) {
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /reclaim/i);
+  }
+  assert.equal(calls.recoverFiles.length, 0);
+  assert.equal(calls.listDir.length, 0);
+});
+
+test('explicit driveLetter that matches no resolved volume refuses', async () => {
+  const { ctl, calls, setup } = make({ volumes: [vol('E')] });
+  const j = await setup();
+  assert.equal((await ctl.recover(j.id, { driveLetter: 'Z' })).ok, false);
+  assert.equal((await ctl.browse(j.id, { driveLetter: 'Z' })).ok, false);
+  assert.equal(calls.recoverFiles.length, 0);
+  assert.equal(calls.listDir.length, 0);
+});
+
+test('explicit driveLetter of a recoverable volume still works (case-insensitive)', async () => {
+  const { ctl, calls, setup } = make({ volumes: [vol('E')] });
+  const j = await setup();
+  assert.equal((await ctl.recover(j.id, { driveLetter: 'e' })).ok, true);
+  assert.equal((await ctl.browse(j.id, { driveLetter: 'e' })).ok, true);
+  assert.equal(calls.recoverFiles.length, 1);
+  assert.equal(calls.listDir.length, 1);
+});
+
+test('resolveVolumes rejecting fails closed for explicit-letter recover and browse, redacted', async () => {
+  const { ctl, calls, setup } = make({ failResolve: true });
+  const j = await setup();
+  for (const r of [await ctl.recover(j.id, { driveLetter: 'E' }), await ctl.browse(j.id, { driveLetter: 'E' })]) {
+    assert.equal(r.ok, false);
+    assert.equal(r.reason.includes(FAKE_KEY), false);
+  }
+  assert.equal(calls.recoverFiles.length, 0);
+  assert.equal(calls.listDir.length, 0);
+});
+
+test('the returned manifest is sanitized: no contents field reaches the caller', async () => {
+  const { ctl, setup } = make({
+    recoverFiles: async (l) => ({ entries: [{ ...entry(`${l}/a`), contents: 'SECRET', bytes: [1] }], skipped: [], complete: true, stopReason: null }),
+  });
+  const j = await setup();
+  const r = await ctl.recover(j.id);
+  assert.deepEqual(Object.keys(r.manifest[0]).sort(), ['checksum', 'path', 'size', 'sourceType', 'stagedRef']);
 });
