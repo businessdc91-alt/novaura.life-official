@@ -3,7 +3,7 @@
 // TTL, plus — once the expired ones are set aside — the oldest jobs beyond the cap. The result
 // is oldest-first with no duplicates, so the caller cascades a delete over each.
 
-const TEN_DAYS_MS = 864e5 * 10;
+export const TEN_DAYS_MS = 864e5 * 10;
 
 /**
  * jobsToPurge(jobs, { now = Date.now, maxJobs = 3, ttlMs = 10 days }) -> jobId[]

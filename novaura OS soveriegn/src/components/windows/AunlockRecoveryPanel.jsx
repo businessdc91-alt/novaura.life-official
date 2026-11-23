@@ -277,8 +277,8 @@ export default function AunlockRecoveryPanel({ controller, jobId, setNotice, onC
             <details className="mt-1">
               <summary className="cursor-pointer">Links not followed ({outcome.links.length})</summary>
               <p className="mt-1 opacity-70">
-                Junctions and symlinks are never followed (they can point outside the selection). Their
-                targets are recovered where they are reached directly.
+                Junctions and symlinks are never followed (they can point outside the selection or the
+                drive). Whatever they point to is recovered only if it is also inside what you selected.
               </p>
               <ul className="mt-1 max-h-40 overflow-auto">
                 {outcome.links.map((s, i) => (

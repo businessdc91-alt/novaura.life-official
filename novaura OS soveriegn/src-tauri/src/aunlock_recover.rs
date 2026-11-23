@@ -40,6 +40,16 @@ pub struct DirEntryLite {
     pub note: Option<String>,
 }
 
+/// One job folder under staging and how long ago it was created (`None` when unreadable). The
+/// caller only purges an unknown folder once it is past the retention window: another Sovereign
+/// build sharing this staging root may still own a younger one.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedJob {
+    pub id: String,
+    pub age_secs: Option<u64>,
+}
+
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverSelection {
@@ -56,7 +66,7 @@ fn off_platform<T>() -> Result<T, String> {
 
 #[cfg(windows)]
 mod imp {
-    use super::{DirEntryLite, RecoverOutcome, RecoverSelection, RecoveredEntry, SkippedEntry};
+    use super::{DirEntryLite, RecoverOutcome, RecoverSelection, RecoveredEntry, SkippedEntry, StagedJob};
     use crate::aunlock_recover_rules::{
         bind_volume, build_outcome, can_stage_next, classify_entry, decrypt_chunks, encode_record, encrypt_chunks,
         entry_skip_reason, job_key, normalize_health_for, onedrive_roots, path_is_contained, record_lengths_ok,
@@ -592,24 +602,37 @@ mod imp {
         Ok(!dir.exists())
     }
 
-    /// The job folders currently under staging (used to purge any the catalog no longer knows).
-    pub fn list_staged_jobs() -> Result<Vec<String>, String> {
+    /// The job folders currently under staging, each with its age (used to purge any the catalog
+    /// no longer knows, once they are past retention).
+    pub fn list_staged_jobs() -> Result<Vec<StagedJob>, String> {
         let dir = crate::get_app_data_dir().join("aunlock_recovered");
         let rd = match fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(format!("could not list staging: {e}")),
         };
-        let names: Vec<String> = rd
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                fs::symlink_metadata(e.path())
-                    .map(|m| m.is_dir() && !m.file_type().is_symlink())
-                    .unwrap_or(false)
-            })
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        Ok(staged_job_ids(&names))
+        let mut ages: Vec<(String, Option<u64>)> = Vec::new();
+        for entry in rd.filter_map(|e| e.ok()) {
+            let Ok(md) = fs::symlink_metadata(entry.path()) else { continue };
+            if !md.is_dir() || md.file_type().is_symlink() {
+                continue;
+            }
+            // A future or unreadable timestamp gives no age, so the folder is kept.
+            let age = md
+                .created()
+                .or_else(|_| md.modified())
+                .ok()
+                .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+                .map(|d| d.as_secs());
+            ages.push((entry.file_name().to_string_lossy().into_owned(), age));
+        }
+        let names: Vec<String> = ages.iter().map(|(n, _)| n.clone()).collect();
+        let valid = staged_job_ids(&names);
+        Ok(ages
+            .into_iter()
+            .filter(|(n, _)| valid.contains(n))
+            .map(|(id, age_secs)| StagedJob { id, age_secs })
+            .collect())
     }
 }
 
@@ -700,7 +723,7 @@ pub async fn aunlock_verify_recovered(job_id: String, staged_ref: String, size: 
 }
 
 #[tauri::command]
-pub async fn aunlock_list_staged_jobs() -> Result<Vec<String>, String> {
+pub async fn aunlock_list_staged_jobs() -> Result<Vec<StagedJob>, String> {
     #[cfg(windows)]
     {
         tauri::async_runtime::spawn_blocking(imp::list_staged_jobs)

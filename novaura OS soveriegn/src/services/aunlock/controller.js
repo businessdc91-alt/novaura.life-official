@@ -6,7 +6,7 @@
 // The hardware layer is injected as `native` ({ enumerate, readHealth, resolveVolumes, listDir,
 // recoverFiles, purgeRecovered, wipe }) — the fake in tests, the real Tauri bridge in the app.
 
-import { jobsToPurge } from './retention.js';
+import { jobsToPurge, TEN_DAYS_MS } from './retention.js';
 import { deviceRecord } from './deviceModel.js';
 import { provenanceRecord, canProceed } from './authorization.js';
 import { sanitizationMethodFor, buildCert } from './sanitizationCert.js';
@@ -68,8 +68,28 @@ export function createController({ catalog, native, now = Date.now, operator = '
     const v = want
       ? (Array.isArray(volumes) ? volumes : []).find((x) => String(x?.driveLetter ?? '').trim().toUpperCase() === want)
       : null;
-    if (!v || !isRecoverableVolume(v)) return { ok: false, reason: NO_RECOVERABLE };
+    if (!v || !isRecoverableVolume(v)) {
+      const unverified = v && v.encrypted !== true && v.encryptionKnown === false;
+      return { ok: false, reason: unverified ? UNVERIFIED : NO_RECOVERABLE };
+    }
     return { ok: true, letter: v.driveLetter };
+  };
+  // A job deleted mid-run (a discard or a sweep landed while rows were being written): drop
+  // anything this run wrote for it, and delete its staged bytes again.
+  const abandon = async (jobId) => {
+    await catalog.deleteJobCascade(jobId);
+    try {
+      await native.purgeRecovered(jobId);
+    } catch {
+      /* the sweep's orphan reconciliation retries */
+    }
+    return { ok: false, reason: DISCARDED_DURING };
+  };
+  // Is the job still there and not queued for deletion?
+  const stillLive = async (jobId) => {
+    const job = await catalog.getJob(jobId);
+    if (!job) return 'gone';
+    return job.status === 'purge-pending' ? 'pending' : 'live';
   };
   // Staged files are deleted BEFORE the rows that point at them. If the files cannot be confirmed
   // deleted, the job is kept (status 'purge-pending', rows intact) so the next sweep retries —
@@ -105,9 +125,16 @@ export function createController({ catalog, native, now = Date.now, operator = '
       staged = [];
     }
     if (!Array.isArray(staged) || staged.length === 0) return;
+    // Every Sovereign build under one Windows user shares the staging folder but keeps its own
+    // catalog (e.g. a dev build and the installed app), so an unknown folder may be ANOTHER build's
+    // live job. Only folders past the 10-day retention window are purged — no build keeps data
+    // that long, so nothing live can be lost. A folder of unknown age is kept.
     const known = new Set((await catalog.listJobs()).map((j) => stagingKey(j.id)));
-    for (const id of staged) {
+    for (const s of staged) {
+      const id = s && typeof s === 'object' ? s.id : null;
+      const age = s && typeof s === 'object' ? s.ageSecs : undefined;
       if (typeof id !== 'string' || id === '' || known.has(id)) continue;
+      if (!(Number.isFinite(age) && age * 1000 > TEN_DAYS_MS)) continue;
       try {
         await native.purgeRecovered(id);
       } catch {
@@ -247,6 +274,12 @@ export function createController({ catalog, native, now = Date.now, operator = '
       let stopReason = null;
       let failures = 0;
       for (const letter of letters) {
+        // The job may be discarded or swept at any point while this loop runs. It is re-checked
+        // before each volume's native run, after it, and after its rows are written; a deleted job
+        // keeps no rows and its staged bytes are deleted again — never left behind unrecorded.
+        const pre = await stillLive(jobId);
+        if (pre === 'gone') return abandon(jobId);
+        if (pre === 'pending') return { ok: false, reason: DISCARDED_DURING };
         let outcome;
         try {
           outcome = await native.recoverFiles(jobId, device, letter, selection);
@@ -256,18 +289,9 @@ export function createController({ catalog, native, now = Date.now, operator = '
           skipped.push({ path: `${letter}:\\`, reason: safeReason(e) });
           continue;
         }
-        // The job may have been discarded (or swept) while this run was going. Its rows are not
-        // written, and its staged bytes are deleted again — never left behind unrecorded.
-        const live = await catalog.getJob(jobId);
-        if (!live) {
-          try {
-            await native.purgeRecovered(jobId);
-          } catch {
-            /* the sweep's orphan reconciliation retries */
-          }
-          return { ok: false, reason: DISCARDED_DURING };
-        }
-        if (live.status === 'purge-pending') return { ok: false, reason: DISCARDED_DURING };
+        const post = await stillLive(jobId);
+        if (post === 'gone') return abandon(jobId);
+        if (post === 'pending') return { ok: false, reason: DISCARDED_DURING };
 
         for (const entry of outcome?.entries ?? []) {
           // Only metadata leaves this loop — the same five fields go to the catalog and the caller.
@@ -276,6 +300,9 @@ export function createController({ catalog, native, now = Date.now, operator = '
           await catalog.putRecovered({ jobId, ...row });
           manifest.push(row);
         }
+        const written = await stillLive(jobId);
+        if (written === 'gone') return abandon(jobId);
+        if (written === 'pending') return { ok: false, reason: DISCARDED_DURING };
         const outSkipped = Array.isArray(outcome?.skipped) ? outcome.skipped : [];
         const outLinks = Array.isArray(outcome?.links) ? outcome.links : [];
         const reasons = redactAll([

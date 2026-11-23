@@ -312,22 +312,83 @@ test('a purge-pending job refuses browse and recover (a discard is never quietly
   assert.equal(calls.listDir.length, 0);
 });
 
-test('the sweep purges staged folders the catalog no longer knows (crash, lost database, a delete that raced a run)', async () => {
-  const { ctl, calls, setup } = make({ listStagedJobs: async () => ['job_gone_1', 'job_gone_2'] });
+const DAY_SECS = 86400;
+
+test('the sweep purges unknown staged folders only once they are past the 10-day retention window', async () => {
+  const { ctl, calls, setup } = make({
+    listStagedJobs: async () => [
+      { id: 'job_gone_old', ageSecs: 11 * DAY_SECS }, // crash / lost database: past retention ⇒ purged
+      { id: 'job_other_build', ageSecs: 3600 }, // could be another Sovereign build's live job ⇒ kept
+      { id: 'job_no_age' }, // age unknown ⇒ kept (never delete client data on a guess)
+      'job_legacy_string',
+    ],
+  });
   await setup();
   calls.purged.length = 0;
   await ctl.sweepRetention();
-  assert.deepEqual(calls.purged.sort(), ['job_gone_1', 'job_gone_2']);
+  assert.deepEqual(calls.purged, ['job_gone_old']);
 });
 
-test('the sweep never purges a staged folder whose job is still in the catalog', async () => {
+test('the sweep never purges a staged folder whose job is still in the catalog, however old', async () => {
   let id = null;
-  const { ctl, calls, setup } = make({ listStagedJobs: async () => [id, 'job_orphan_9'] });
+  const { ctl, calls, setup } = make({
+    listStagedJobs: async () => [{ id, ageSecs: 30 * DAY_SECS }, { id: 'job_orphan_9', ageSecs: 30 * DAY_SECS }],
+  });
   const j = await setup();
   id = j.id;
   calls.purged.length = 0;
   await ctl.sweepRetention();
   assert.deepEqual(calls.purged, ['job_orphan_9']);
+});
+
+test('a discard landing while rows are being written leaves no rows behind', async () => {
+  const { ctl, catalog, setup } = make({
+    recoverFiles: async (l) => ({
+      entries: [entry(`${l}/1`), entry(`${l}/2`), entry(`${l}/3`)],
+      skipped: [],
+      links: [],
+      complete: true,
+      stopReason: null,
+    }),
+  });
+  const j = await setup();
+  const put = catalog.putRecovered;
+  let discarded = false;
+  catalog.putRecovered = async (row) => {
+    await put(row);
+    if (!discarded) {
+      discarded = true;
+      assert.equal((await ctl.discardJob(j.id)).ok, true); // the native run is over, so the purge succeeds
+    }
+  };
+  const r = await ctl.recover(j.id);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /discard/i);
+  assert.equal(await catalog.getJob(j.id), null);
+  assert.deepEqual(await catalog.listRecovered(j.id), []);
+});
+
+test('a job deleted between volumes is not recovered any further', async () => {
+  const { ctl, catalog, calls, setup } = make({ volumes: [vol('E'), vol('F')] });
+  const j = await setup();
+  const put = catalog.putRecovered;
+  catalog.putRecovered = async (row) => {
+    await put(row);
+    await catalog.deleteJobCascade(j.id); // deleted after E's rows, before F's native run
+  };
+  const r = await ctl.recover(j.id);
+  assert.equal(r.ok, false);
+  assert.deepEqual(calls.recoverFiles.map((c) => c[1]), ['E']);
+  assert.deepEqual(await catalog.listRecovered(j.id), []);
+});
+
+test('an explicit letter whose encryption could not be verified says run as administrator, not reclaim', async () => {
+  const { ctl, setup } = make({ volumes: [vol('E', { readable: false, encryptionKnown: false })] });
+  const j = await setup();
+  const r = await ctl.recover(j.id, { driveLetter: 'E' });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /administrator/i);
+  assert.doesNotMatch(r.reason, /reclaim the device instead/i);
 });
 
 test('the sweep tolerates the staged-folder listing failing or being absent', async () => {

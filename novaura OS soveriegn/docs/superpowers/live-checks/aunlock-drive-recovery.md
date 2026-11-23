@@ -22,9 +22,12 @@ DevTools port + CDP script (see project_sovereign_live_testing). Never use real 
 2. [ ] `aunlock_read_health` returns a status (and does not modify the drive).
 3. [ ] `aunlock_list_dir(serial, sizeBytes, letter, "")` and `("Users")` list entries; the junction
        IS listed with the note "link (junction/symlink) — not followed" and cannot be descended into.
-4. [ ] `aunlock_list_dir(letter, "..\\..")` and an absolute subpath are rejected (escape).
-5. [ ] `aunlock_recover_files(job, letter, {preset:true, paths:[]})` returns entries with
-       `sourceType:"live"`; preset folders only; the junction target is not copied.
+4. [ ] `aunlock_list_dir(serial, sizeBytes, letter, "..\\..")` and an absolute subpath are
+       rejected with "path escapes the volume root" — using Drive A's REAL serial and letter, so
+       the call gets past device binding and the escape guard is what refuses it.
+5. [ ] `aunlock_recover_files(job, serial, sizeBytes, letter, {preset:true, paths:[]})` returns
+       entries with `sourceType:"live"`; preset folders only; the junction is in `links`, and its
+       target is not copied through it.
 6. [ ] Every staged file under `%APPDATA%\novaura-sovereign\aunlock_recovered\<job>\` verifies:
        `aunlock_verify_recovered(job, stagedRef, size, checksum)` (the Verify button) returns `true`
        for every row, including the >16 MiB file (multiple records) and the 0-byte file (one
@@ -93,8 +96,12 @@ DevTools port + CDP script (see project_sovereign_live_testing). Never use real 
         data" mid-run → the job shows `purge-pending` ("will be retried"), the run stops at the next
         file, and when the window refreshes the job and `aunlock_recovered\<job>` are both gone. No
         rows remain for it. Start a second recovery on the same job while one runs → refused.
-29. [ ] Orphan reconciliation: with the app closed, create an empty folder
-        `aunlock_recovered\job_999_orphan`; open the Aunlock window → the folder is deleted.
+29. [ ] Orphan reconciliation is age-gated (every build shares the staging folder but has its own
+        catalog): with the app closed create `aunlock_recovered\job_999_young` and
+        `aunlock_recovered\job_999_old`, and backdate the second
+        (`(Get-Item job_999_old).CreationTime = (Get-Date).AddDays(-11)`). Open the Aunlock window
+        → `job_999_old` is deleted and `job_999_young` is KEPT. Then stage a job in the dev build and
+        open the Aunlock window in the installed build → the dev build's job folder is untouched.
 30. [ ] Device binding: two drives in a dual-bay dock that report the same serial → neither is
         recoverable under one job unless their sizes differ (then only the matching one).
         Calling `aunlock_list_dir` / `aunlock_recover_files` directly (DevTools) with the intaken
