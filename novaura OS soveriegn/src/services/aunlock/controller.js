@@ -261,6 +261,11 @@ export function createController({ catalog, native, now = Date.now, operator = '
     listJobs() {
       return catalog.listJobs();
     },
+
+    /** The staged-file rows for a job — metadata only (path, size, stagedRef, sourceType, checksum). */
+    listRecovered(jobId) {
+      return catalog.listRecovered(jobId);
+    },
   };
 }
 

@@ -55,5 +55,35 @@ DevTools port + CDP script (see project_sovereign_live_testing). Never use real 
         a hardware write-blocker, which is out of Plan 1 scope.
 17. [ ] Pull Drive A mid-copy: command returns an error/skips, app stays responsive, purge still works.
 
+## UI walkthrough (Aunlock window → job tab → Recovery)
+18. [ ] Intake Drive A into a job. The Recovery section shows Drive A's health (not the bench PC's
+        system disk) and lists A's volume as recoverable (Browse / Recover user files enabled).
+19. [ ] Before recording authorization: Browse and Recover are refused with the authorization
+        message; drive health and the volume list still show (hardware metadata only).
+20. [ ] After recording authorization: Browse lists folders first, then files; clicking a folder
+        descends, Up climbs. Tick one folder and one file → "Recover selected" → the outcome banner
+        reads "Recovered N files (size)"; the Staged list shows those rows with size and a checksum
+        prefix — never file contents.
+21. [ ] "Recover user files (all volumes)" pulls only the preset folders (Desktop, Documents,
+        Downloads, Pictures, Videos, Music, Favorites, Links) from every recoverable volume.
+22. [ ] Drive B (BitLocker) volume row shows the encrypted reason with Browse/Recover disabled.
+        A suspended/unlocked BitLocker volume on an otherwise-clear disk is also refused when
+        Browse or Recover is aimed at it directly (controller explicit-letter check).
+23. [ ] "Discard job + data": the job tab disappears and `aunlock_recovered\<job>` is gone. Then
+        repeat with a staged file held open by another program: discard reports the files could
+        not be deleted yet and will be retried, the tab shows `purge-pending`; release the file,
+        reopen the Aunlock window → the job is gone and its folder deleted.
+24. [ ] Low disk (check 12) from the UI: the banner warns "Partial recovery … stopped — disk full"
+        and the Skipped list names every omitted file.
+
+## Not in Plan 1 (follow-ups)
+- On-demand verify of a staged file from the UI — needs a native streaming verify command
+  (`verify_staged` is a live-check helper that reads a whole file into RAM).
+- Live progress during a long copy — needs a native progress channel (Tauri event); today the UI
+  shows a busy state until the run returns.
+
 ## Result
-Date / build / tester / outcome: _(fill in at Task 10)_
+Status: NOT YET RUN. Needs the owner's hardware — a known unencrypted USB drive and a BitLocker
+drive — attached to a freshly built and installed app. All Sovereign builds carry version 1.0.0,
+so compare the `app.exe` date to confirm the new binary, not a stale installer.
+Date / build / tester / outcome: _(fill in when run)_

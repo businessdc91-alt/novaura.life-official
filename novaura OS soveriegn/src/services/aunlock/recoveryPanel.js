@@ -24,6 +24,28 @@ export function humanSize(bytes) {
 
 const sizeOf = (n) => (typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : 0);
 
+// A folder name from list_dir is one path component; anything that could climb or nest is dropped
+// (the native layer also refuses escapes — this keeps the UI from ever building one).
+const safeSegments = (segments) =>
+  (Array.isArray(segments) ? segments : []).filter(
+    (s) => typeof s === 'string' && s !== '' && s !== '.' && s !== '..' && !/[\\/]/.test(s),
+  );
+
+/** The volume-relative folder path `list_dir` expects ("Users\\sam"; "" for the volume root). */
+export function subpathOf(segments) {
+  return safeSegments(segments).join('\\');
+}
+
+/**
+ * The absolute, drive-prefixed path `recover_files` expects ("E:\\Users\\sam"), or null when the
+ * drive letter is missing or malformed.
+ */
+export function volumePath(driveLetter, segments) {
+  const t = String(driveLetter ?? '').trim().replace(/[\\/]+$/, '').replace(/:$/, '');
+  if (!/^[A-Za-z]$/.test(t)) return null;
+  return `${t.toUpperCase()}:\\${subpathOf(segments)}`;
+}
+
 const HEALTH_LABEL = {
   ok: 'Healthy',
   warn: 'Warning — consider imaging before recovery',

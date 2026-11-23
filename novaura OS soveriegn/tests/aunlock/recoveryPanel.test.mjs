@@ -7,6 +7,8 @@ import {
   describeStaged,
   describeOutcome,
   humanSize,
+  subpathOf,
+  volumePath,
 } from '../../src/services/aunlock/recoveryPanel.js';
 
 const vol = (over = {}) => ({ driveLetter: 'E', fsType: 'NTFS', label: 'DATA', sizeBytes: 500e9, encrypted: false, readable: true, ...over });
@@ -117,6 +119,30 @@ test('describeOutcome: a refused or failed recovery is fail-toned with its reaso
   assert.equal(o.tone, 'fail');
   assert.match(o.label, /reclaim/);
   assert.equal(describeOutcome(null).tone, 'fail');
+});
+
+test('subpathOf builds the volume-relative folder path list_dir expects', () => {
+  assert.equal(subpathOf([]), '');
+  assert.equal(subpathOf(['Users', 'sam']), 'Users\\sam');
+  assert.equal(subpathOf(undefined), '');
+});
+
+test('subpathOf drops empty, dot and dot-dot segments so a path can never climb out', () => {
+  assert.equal(subpathOf(['Users', '..', '.', '', 'sam']), 'Users\\sam');
+  assert.equal(subpathOf(['a\\b', 'c/d']), '');
+});
+
+test('volumePath builds the absolute drive-prefixed path recover_files expects', () => {
+  assert.equal(volumePath('e', ['Users', 'sam', 'Documents']), 'E:\\Users\\sam\\Documents');
+  assert.equal(volumePath('F:', ['a.txt']), 'F:\\a.txt');
+  assert.equal(volumePath('E', ['..', 'Windows']), 'E:\\Windows');
+});
+
+test('volumePath refuses a missing or malformed drive letter', () => {
+  assert.equal(volumePath('', ['a']), null);
+  assert.equal(volumePath('EF', ['a']), null);
+  assert.equal(volumePath('1', ['a']), null);
+  assert.equal(volumePath(undefined, ['a']), null);
 });
 
 test('humanSize formats binary units and rejects junk', () => {

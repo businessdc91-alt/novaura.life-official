@@ -1,13 +1,14 @@
-// AunlockWindow — the refurbisher suite's tabbed panel, a thin view over the aunlock controller.
-// Phase 1a: create jobs, record provenance/authorization, and walk the lifecycle. Device
-// detection, recovery and sanitization connect in the hardware phase (Phase 1b); until then they
-// report that. No lock is ever bypassed — a job with no recorded authorization cannot be
-// recovered or sanitized (enforced in the controller).
+// AunlockWindow — the refurbisher suite's tabbed panel, a thin view over the aunlock controller:
+// create jobs, record provenance/authorization, scan + intake a device, recover the owner's files
+// (AunlockRecoveryPanel), sanitize, discard. No lock is ever bypassed — a job with no recorded
+// authorization cannot be browsed, recovered or sanitized, and encrypted storage is refused
+// (all enforced in the controller).
 
 import { useEffect, useState } from 'react';
 import { getController } from '../../services/aunlock/controller.js';
 import { describeJobs } from '../../services/aunlock/panelModel.js';
 import { describeConnectedDevices } from '../../services/aunlock/connectedPanel.js';
+import AunlockRecoveryPanel from './AunlockRecoveryPanel.jsx';
 
 export default function AunlockWindow() {
   const controller = getController();
@@ -57,8 +58,10 @@ export default function AunlockWindow() {
       {notice && <p className="mt-3 text-amber-300">{notice}</p>}
 
       <p className="mt-6 text-xs opacity-50">
-        Device detection, recovery and sanitization connect in the hardware phase. A device with
-        no recorded authorization cannot be recovered or sanitized — this tool never bypasses a lock.
+        Recovery reads the owner's unencrypted drives only and never writes to them; encrypted
+        storage is refused and routed to reclaim. A device with no recorded authorization cannot be
+        browsed, recovered or sanitized — this tool never bypasses a lock. Sanitization connects in
+        its own slice.
       </p>
     </div>
   );
@@ -67,6 +70,7 @@ export default function AunlockWindow() {
 function JobPanel({ controller, jobId, onChange, setNotice }) {
   const [auth, setAuth] = useState('');
   const [devices, setDevices] = useState(null); // null = not scanned yet
+  const [rev, setRev] = useState(0); // bumps after any action so the recovery view reloads
 
   async function act(fn, label) {
     try {
@@ -76,6 +80,7 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
       setNotice(e.message);
     }
     await onChange();
+    setRev((n) => n + 1);
   }
 
   async function scan() {
@@ -105,8 +110,6 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
         <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
           onClick={scan}>Scan for devices</button>
         <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
-          onClick={() => act(() => controller.recover(jobId), 'Recovered')}>Recover files</button>
-        <button className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
           onClick={() => act(() => controller.sanitize(jobId), 'Sanitized')}>Sanitize + certificate</button>
         <button className="px-3 py-1 rounded bg-red-900/60 hover:bg-red-800/60"
           onClick={() => act(() => controller.discardJob(jobId), 'Job data discarded')}>Discard job + data</button>
@@ -134,6 +137,9 @@ function JobPanel({ controller, jobId, onChange, setNotice }) {
           ))}
         </ul>
       )}
+
+      <AunlockRecoveryPanel controller={controller} jobId={jobId} setNotice={setNotice}
+        onChange={onChange} refreshKey={rev} />
     </div>
   );
 }

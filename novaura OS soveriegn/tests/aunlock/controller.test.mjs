@@ -67,6 +67,18 @@ test('an authorized job recovers and stores a manifest', async () => {
   assert.equal((await catalog.getJob(j.id)).status, 'recovered');
 });
 
+test('listRecovered returns the staged rows for a job (metadata only)', async () => {
+  const { ctl } = make();
+  const j = await ctl.newJob();
+  await ctl.intakeDevice(j.id);
+  await ctl.authorize(j.id, { authorization: 'owner present' });
+  await ctl.recover(j.id);
+  const rows = await ctl.listRecovered(j.id);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r.path).sort(), ['docs/b.pdf', 'photos/a.jpg']);
+  assert.equal(rows.every((r) => !('contents' in r)), true);
+});
+
 test('sanitize is refused without authorization', async () => {
   const { ctl, catalog } = make();
   const j = await ctl.newJob();
