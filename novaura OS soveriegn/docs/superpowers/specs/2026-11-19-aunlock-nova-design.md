@@ -142,7 +142,9 @@ Status:
 - **Drive recovery module (forensic tier)** — beats R-Studio, UFS Explorer, PhotoRec, TestDisk,
   ddrescue, CrystalDiskInfo, into X-Ways/EnCase territory. Plans:
   - [ ] P1 — read-only access + live-file recovery (browse+select + presets) + encrypted
-    staging + SMART health.
+    staging + SMART health. **Built 2026-11-22** on branch `aunlock-drive-recovery-p1`
+    (whole-branch reviewed, fix wave applied); **gated live check pending** on real drives
+    (`docs/superpowers/live-checks/aunlock-drive-recovery.md`). Tick when the live check passes.
   - [ ] P2 — bad-sector-tolerant imaging + recover-from-image.
   - [ ] P3 — non-Windows filesystems (ext4, HFS+, APFS), read-only.
   - [ ] P4 — deleted-file recovery (signature carving + FS-aware undelete).
